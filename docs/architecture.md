@@ -23,15 +23,19 @@ Handy is built with Tauri (Rust backend + React UI) and runs a broad catalog of 
 
 ## Models
 
-| | Nemotron Streaming 3.5 | Parakeet Unified EN |
+| | Nemotron Streaming 3.5 | Parakeet TDT 0.6B v2 |
 | --- | --- | --- |
-| Source | [`nvidia/nemotron-3.5-asr-streaming-0.6b`](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b) | [`nvidia/parakeet-unified-en-0.6b`](https://huggingface.co/nvidia/parakeet-unified-en-0.6b) |
-| Architecture | Cache-aware FastConformer-RNNT with language-ID prompts | FastConformer-RNNT trained for both offline and chunked streaming |
-| Languages | 40+ locales, or `auto` | English |
+| Source | [`nvidia/nemotron-3.5-asr-streaming-0.6b`](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b) | [`nvidia/parakeet-tdt-0.6b-v2`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2) |
+| Architecture | Cache-aware FastConformer-RNNT with language-ID prompts | FastConformer-TDT (token-and-duration transducer), full attention |
+| Languages | 40+ locales, or `auto` | English, with punctuation and capitalisation |
+| Decoding | Streaming with interim results | Offline only (NeMo-Speech.cpp rejects streaming for TDT); up to 24 minutes in one pass |
 | GGUF | Published by NVIDIA (`*.q8_0.gguf`, ~742 MB) | Converted by us with NeMo-Speech.cpp's `convert_model.py`, then hosted with a pinned revision |
-| Used for | Default model; live transcription | English-first accuracy; streaming once validated |
+| License | NVIDIA Open Model License | CC-BY-4.0 |
+| Live text | Interim results in the overlay | Optional chunked decode at pauses while recording |
 
 Handy's own GGUFs (`handy-computer/*-gguf`) target `transcribe.cpp`, not NeMo-Speech.cpp, so Goscriber does not reuse them.
+
+**No model is bundled.** The app, its release artifacts and the repository contain no weights. Settings start with no selected model; the user chooses one in onboarding or on the Models page and downloads it, and the Silero VAD companion comes with that first download. Until then the shortcut and tray point to the download step instead of recording.
 
 ## Package layout
 
@@ -107,7 +111,7 @@ shortcut down ─► Capture.Start()
                  │                └► [streaming] Stream.Push ─► Next ─► interim text ─► overlay
 shortcut up   ─► Capture.Stop()
                  └► [streaming] Stream.Finish ─► drain finals
-                    [batch]     Recognize(whole clip)
+                    [batch]     Recognize(whole clip, or the last chunk when chunking)
                     └► text cleanup ─► [LLM post-processing] ─► [hook] ─► paste / type ─► history
 ```
 

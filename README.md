@@ -13,14 +13,16 @@ Goscriber is a Go re-implementation of [Handy](https://github.com/cjpais/Handy) 
 | Model | Hugging Face | Languages | Mode | Notes |
 | --- | --- | --- | --- | --- |
 | **Nemotron Streaming 3.5** (0.6B) | [`nvidia/nemotron-3.5-asr-streaming-0.6b`](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b) | 40+ locales, `auto` detection | Cache-aware streaming RNNT | Default model. NVIDIA publishes the Q8_0 GGUF for NeMo-Speech.cpp. |
-| **Parakeet Unified EN** (0.6B) | [`nvidia/parakeet-unified-en-0.6b`](https://huggingface.co/nvidia/parakeet-unified-en-0.6b) | English | Unified offline + streaming RNNT | Best English accuracy. Only a `.nemo` checkpoint is published; Goscriber converts it to GGUF with NeMo-Speech.cpp's converter. |
+| **Parakeet TDT 0.6B v2** | [`nvidia/parakeet-tdt-0.6b-v2`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2) | English | Offline TDT (batch) | Fast, accurate English with punctuation and timestamps. Only a `.nemo` checkpoint is published; Goscriber converts it to GGUF with NeMo-Speech.cpp's converter (the runtime officially supports its v3 sibling). |
+
+Goscriber ships **without any model**. On first run you choose one and download it (about 700 MB at the default Q8_0 quantisation); nothing is bundled or downloaded automatically.
 
 No other models or engines are planned. Whisper, Canary, Moonshine and the rest of Handy's catalog are out of scope.
 
 ## How it will work
 
 1. **Press** a global shortcut: hold to record and release to stop (push-to-talk), or tap to toggle.
-2. **Speak**. A small overlay shows that Goscriber is listening and, with a streaming model, the words as they are recognised.
+2. **Speak**. A small overlay shows that Goscriber is listening and, with Nemotron Streaming 3.5, the words as they are recognised.
 3. **Release**. NeMo-Speech.cpp finishes the utterance locally on Metal (Apple Silicon) or the CPU.
 4. **Get** the text pasted into the focused text field.
 
@@ -47,7 +49,7 @@ See [docs/architecture.md](docs/architecture.md) for the package layout, the CGo
 Work is split into five milestones, tracked as GitHub issues:
 
 1. **M0 · Foundation**: Go module, CI, settings, logging, and a Fyne app shell with a tray icon.
-2. **M1 · Speech engine**: NeMo-Speech.cpp SDK build, the CGo binding (offline and streaming), Parakeet Unified EN conversion, the two-model catalog and downloader. At the end of M1, `goscriber transcribe file.wav` works with both models.
+2. **M1 · Speech engine**: NeMo-Speech.cpp SDK build, the CGo binding (offline and streaming), Parakeet TDT 0.6B v2 conversion, the two-model catalog and downloader. At the end of M1, `goscriber transcribe file.wav` works with both models.
 3. **M2 · MVP dictation**: microphone, VAD, global shortcut, paste, coordinator, overlay and macOS permissions. At the end of M2 you can dictate into any app.
 4. **M3 · Live streaming & usable app**: live transcription in the overlay, language selection, custom vocabulary, engine process isolation, settings window, onboarding, history and the CLI.
 5. **M4 · Distribution & platforms**: a signed macOS app bundle and releases, Linux and Windows, launch at login, transcription hook, LLM post-processing.
@@ -62,7 +64,7 @@ Setup instructions will land with the scaffolding issue. Building needs Go, a C/
 
 - Goscriber's design follows [Handy](https://github.com/cjpais/Handy) (MIT, © CJ Pais). No Handy source code is copied; this is an independent implementation in Go.
 - Speech recognition runs on [NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) (Apache-2.0, © NVIDIA).
-- The models are released by NVIDIA under the NVIDIA Open Model License; see each model card for terms.
+- The models are released by NVIDIA: Nemotron Streaming 3.5 under the NVIDIA Open Model License, Parakeet TDT 0.6B v2 under CC-BY-4.0. See each model card for terms.
 
 ## License
 
