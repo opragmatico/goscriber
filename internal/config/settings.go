@@ -149,8 +149,10 @@ type Settings struct {
 	HistoryLimit       int                `json:"history_limit"`
 	RecordingRetention RecordingRetention `json:"recording_retention"`
 
-	// App
+	// App. DebugMode reveals debug-only UI such as the Debug settings page;
+	// --debug turns it on for one session without saving it.
 	LogLevel     LogLevel `json:"log_level"`
+	DebugMode    bool     `json:"debug_mode"`
 	StartHidden  bool     `json:"start_hidden"`
 	ShowTrayIcon bool     `json:"show_tray_icon"`
 	Autostart    bool     `json:"autostart"`

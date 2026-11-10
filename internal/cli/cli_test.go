@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -59,12 +60,45 @@ func TestBadUsage(t *testing.T) {
 	}
 }
 
-func TestNoArgsIsPlaceholder(t *testing.T) {
+func TestNoAppInBuild(t *testing.T) {
 	code, _, stderr := run(t, "")
 	if code != 0 {
 		t.Fatalf("exit code %d, want 0", code)
 	}
-	if !strings.Contains(stderr, "not implemented yet") {
+	if !strings.Contains(stderr, "not available") {
 		t.Errorf("unexpected stderr %q", stderr)
+	}
+}
+
+func TestRunsAppWithFlags(t *testing.T) {
+	for _, tt := range []struct {
+		args  []string
+		debug bool
+	}{
+		{nil, false},
+		{[]string{"--debug"}, true},
+	} {
+		var got *AppOptions
+		var out, errOut bytes.Buffer
+		code := Run(tt.args, Env{Stdout: &out, Stderr: &errOut, Version: "v1.0.0", RunApp: func(o AppOptions) error {
+			got = &o
+			return nil
+		}})
+		if code != 0 || got == nil {
+			t.Fatalf("%v: exit %d, app started: %v", tt.args, code, got != nil)
+		}
+		if got.Debug != tt.debug || got.Version != "v1.0.0" {
+			t.Errorf("%v: app options %+v", tt.args, *got)
+		}
+	}
+}
+
+func TestAppErrorExitsNonZero(t *testing.T) {
+	var errOut bytes.Buffer
+	code := Run(nil, Env{Stdout: &bytes.Buffer{}, Stderr: &errOut, RunApp: func(AppOptions) error {
+		return errors.New("no settings for you")
+	}})
+	if code != 1 || !strings.Contains(errOut.String(), "no settings for you") {
+		t.Errorf("exit %d, stderr %q", code, errOut.String())
 	}
 }
