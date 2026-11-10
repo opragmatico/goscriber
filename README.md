@@ -58,7 +58,29 @@ macOS on Apple Silicon is the first target. Linux and Windows follow in M4.
 
 ## Development
 
-Setup instructions will land with the scaffolding issue. Building needs Go, a C/C++ toolchain, CMake and Ninja (for NeMo-Speech.cpp), and on macOS the Xcode Command Line Tools.
+### Prerequisites
+
+- Go 1.27 or newer, Git and Make.
+- macOS: the Xcode Command Line Tools (`xcode-select --install`).
+- Linux: a C compiler and Fyne's system packages, for example on Debian/Ubuntu `sudo apt-get install gcc libgl1-mesa-dev xorg-dev libxkbcommon-dev`.
+- The NeMo-Speech.cpp engine will also need CMake 3.26+, Ninja and SentencePiece; `make deps` will build it once [#7](https://github.com/opragmatico/goscriber/issues/7) lands.
+
+### Common tasks
+
+```bash
+make deps                 # download Go modules
+make run ARGS=--version   # build ./goscriber and run it
+make test                 # go test -race ./..., then the CGo-free check
+make lint                 # golangci-lint, pinned and installed into ./bin on first use
+make fmt                  # gofumpt + goimports
+make help                 # every target
+```
+
+### Where CGo is allowed
+
+Only `internal/app`, `internal/ui`, `internal/platform` and `internal/engine/nemo` may use CGo (Fyne, native OS code and the NeMo-Speech.cpp binding). Everything else must build and test with `CGO_ENABLED=0`, which keeps most tests fast and portable; `make test-nocgo` enforces it, and CI runs it on macOS and Linux.
+
+Shared test fixtures live in [`testdata/`](testdata/README.md).
 
 ## Acknowledgements
 
