@@ -1,0 +1,131 @@
+# Architecture
+
+Goscriber is a Go re-implementation of [Handy](https://github.com/cjpais/Handy): press a shortcut, speak, and the transcription is pasted into whatever app has focus, fully offline.
+
+Handy is built with Tauri (Rust backend + React UI) and runs a broad catalog of GGUF models through `transcribe.cpp`. Goscriber keeps the same product behaviour, swaps the stack for Go + Fyne, and narrows speech recognition to two NVIDIA models served by [NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) through CGo.
+
+| Concern | Handy | Goscriber |
+| --- | --- | --- |
+| UI | Tauri webview + React | Fyne v2 widgets |
+| Tray / overlay | Tauri tray, NSPanel / webview overlay | Fyne `desktop.App` tray menu; borderless Fyne window, made non-activating and always-on-top through native window handles |
+| Speech-to-text | `transcribe-cpp` (many families) | NeMo-Speech.cpp C ABI (`nemo_speech/asr.h`) via CGo, two models only |
+| Engine isolation | `engine_supervisor`: worker child process | Same idea: the `goscriber` binary re-launched as an engine worker |
+| Model download | Catalog + downloader with mirrors | Embedded two-model catalog, resumable HTTP download, SHA-256 verification |
+| Voice activity detection | Silero VAD v6 (GGUF) | Silero VAD GGUF loaded by NeMo-Speech.cpp (feature masking, endpointing) |
+| Audio capture | `handy-recorder` (cpal) | `malgo` (miniaudio); NeMo-Speech.cpp resamples 8–96 kHz input itself |
+| Global shortcuts | `handy-keys` (CGEventTap) / `rdev` | `golang.design/x/hotkey`; native event tap where needed |
+| Paste / typing | `enigo`, platform paste code | `golang.design/x/clipboard` + platform key events (CGo on macOS) |
+| Settings | `tauri-plugin-store` (JSON) | Go structs persisted as JSON under `os.UserConfigDir()` |
+| History | SQLite (`rusqlite`) | SQLite (`modernc.org/sqlite`, pure Go) + WAV files |
+| LLM post-processing | OpenAI-compatible HTTP clients | `net/http` OpenAI-compatible client |
+| Single instance / CLI | `tauri-plugin-single-instance`, `clap` | Unix socket / named pipe, stdlib `flag` |
+| Sound effects | `rodio` | `malgo` playback |
+
+## Models
+
+| | Nemotron Streaming 3.5 | Parakeet Unified EN |
+| --- | --- | --- |
+| Source | [`nvidia/nemotron-3.5-asr-streaming-0.6b`](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b) | [`nvidia/parakeet-unified-en-0.6b`](https://huggingface.co/nvidia/parakeet-unified-en-0.6b) |
+| Architecture | Cache-aware FastConformer-RNNT with language-ID prompts | FastConformer-RNNT trained for both offline and chunked streaming |
+| Languages | 40+ locales, or `auto` | English |
+| GGUF | Published by NVIDIA (`*.q8_0.gguf`, ~742 MB) | Converted by us with NeMo-Speech.cpp's `convert_model.py`, then hosted with a pinned revision |
+| Used for | Default model; live transcription | English-first accuracy; streaming once validated |
+
+Handy's own GGUFs (`handy-computer/*-gguf`) target `transcribe.cpp`, not NeMo-Speech.cpp, so Goscriber does not reuse them.
+
+## Package layout
+
+```text
+cmd/goscriber/             # main: GUI by default; subcommands `transcribe`, `engine-worker`
+internal/
+├── app/                   # Fyne app bootstrap and object wiring
+├── cli/                   # flags, subcommands, remote-control client
+├── instance/              # single-instance socket server
+├── config/                # paths and settings (JSON, defaults, migrations)
+├── logging/               # slog setup, file sink, in-memory ring for the log viewer
+├── notice/                # one place to report background errors to the UI
+├── audio/
+│   ├── capture.go         # microphone capture with malgo, levels
+│   ├── devices.go         # input / output device enumeration
+│   ├── feedback.go        # start / stop sounds
+│   └── wav.go             # WAV read / write for history and the CLI
+├── engine/
+│   ├── engine.go          # Engine / Stream interfaces, Result, Word, options
+│   ├── nemo/              # CGo binding to nemo_speech/asr.h (built with cgo only)
+│   ├── worker/            # supervisor (parent) + worker (child) and their protocol
+│   └── fake/              # scripted engine for tests and CGo-free builds
+├── models/
+│   ├── catalog.json       # the two models (+ Silero VAD), pinned revisions and checksums
+│   ├── catalog.go
+│   └── download.go        # resumable download, verify, delete
+├── pipeline/
+│   └── coordinator.go     # recording → transcription → output state machine
+├── text/                  # cleanup, filler words, custom-word correction, hook
+├── llm/                   # optional post-processing
+├── output/                # clipboard paste with restore, direct typing
+├── hotkey/                # global shortcuts, push-to-talk and toggle
+├── history/               # SQLite history + saved recordings
+├── platform/              # permissions and native window tweaks (per-OS, CGo)
+└── ui/
+    ├── tray.go
+    ├── overlay.go
+    ├── onboarding.go
+    └── settings/          # one file per settings page
+scripts/
+└── build-nemo-speech.sh   # builds and installs the pinned NeMo-Speech.cpp SDK into .deps/
+```
+
+## The CGo engine
+
+NeMo-Speech.cpp exposes a stable C ABI: opaque handles, size-prefixed POD config structs, explicit ownership and status codes. `internal/engine/nemo` wraps it:
+
+- **Recognizer**: `nemo_speech_asr_create` / `_destroy`. One recognizer per loaded model. Backend `gpu = 0` uses Metal (or CUDA / Vulkan where built), `gpu = -1` forces the CPU.
+- **Offline**: `nemo_speech_asr_recognize_f32` for a whole utterance.
+- **Streaming**: `nemo_speech_asr_streaming_recognize`, then `_stream_push_f32` / `_stream_next` while recording, `_stream_finish` and a final drain on release, `_stream_close`. With `interim_results` the stream yields partial hypotheses for the overlay and finals for output.
+- **Options**: `language_code` (Nemotron locale or `auto`), word time offsets, and `speech_contexts` for custom-vocabulary boosting.
+
+Rules the binding follows:
+
+- Every config struct is zeroed and its `size` set to `C.sizeof_…`; `*_default()` helpers are used where they exist.
+- `nemo_speech_asr_last_error()` is thread-local, so each fallible call is made through a small C shim that copies the error message in the same C call. Go may move a goroutine between OS threads between two CGo calls.
+- Result strings are copied with `C.GoString` before `nemo_speech_asr_result_destroy`.
+- Audio is passed as a pointer to a `[]float32` for the duration of the call only.
+- Handles live in Go structs with explicit `Close()` methods. Finalizers are only a safety net.
+- A stream is driven by one goroutine at a time. The recognizer may be shared.
+
+The binding needs `cgo` and the NeMo-Speech.cpp SDK (headers and libraries) installed by `scripts/build-nemo-speech.sh`. Packages that do not need the engine build and test without CGo by using `engine/fake`.
+
+### Process isolation
+
+A `GGML_ASSERT`, a GPU driver fault or an `abort()` inside C++ takes the whole Go process with it. Following Handy's `engine_supervisor`, the native engine runs in a child process: the same `goscriber` binary started with a hidden `engine-worker` subcommand. The parent's `engine/worker` supervisor implements the same `Engine` interface over a framed stdin/stdout protocol (load, unload, recognize, stream push / next / finish, cancel), restarts a crashed worker, and retries on the CPU when the GPU backend was at fault. A worker lives exactly as long as its loaded model, so unloading returns all native memory to the OS.
+
+## Dictation pipeline
+
+```text
+shortcut down ─► Capture.Start()
+                 │  float32 frames ─► level meter ─► overlay
+                 │                └► [streaming] Stream.Push ─► Next ─► interim text ─► overlay
+shortcut up   ─► Capture.Stop()
+                 └► [streaming] Stream.Finish ─► drain finals
+                    [batch]     Recognize(whole clip)
+                    └► text cleanup ─► [LLM post-processing] ─► [hook] ─► paste / type ─► history
+```
+
+The `Coordinator` owns a single state machine: `idle → recording → transcribing → post_processing → outputting → idle`. A cancel from any state returns to `idle` and discards the session. Only one session is active at a time.
+
+## Threading model
+
+- **Fyne main thread**: all widgets, tray, overlay. Other goroutines update the UI only through `fyne.Do` / `fyne.DoAndWait`.
+- **Audio callback (miniaudio thread)**: copies frames into a ring buffer and returns; never blocks or calls into the engine.
+- **Hotkey goroutine**: turns key-down / key-up events into coordinator actions.
+- **Engine goroutine**: one goroutine owns the engine client and serialises load, unload and recognition; a streaming session pumps audio from the ring buffer to `Push` / `Next`.
+- **Background goroutines**: model downloads, history I/O, LLM requests.
+
+Goroutines talk through channels and the coordinator; nothing outside the main thread touches a widget directly.
+
+## Data locations
+
+- **Settings**: `os.UserConfigDir()/goscriber/settings.json`
+- **Models**: `os.UserCacheDir()/goscriber/models/` (GGUF files, named by catalog id and quantisation)
+- **History**: `os.UserConfigDir()/goscriber/history.sqlite3` and `…/recordings/*.wav`
+- **Logs**: `os.UserCacheDir()/goscriber/logs/goscriber.log`

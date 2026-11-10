@@ -1,0 +1,30 @@
+# Go
+/goscriber
+/bin/
+/dist/
+*.test
+*.out
+coverage.*
+go.work
+go.work.sum
+
+# Native dependencies (NeMo-Speech.cpp SDK build and install)
+/.deps/
+/third_party/*/build/
+
+# Local models and recordings
+/models/
+/recordings/
+*.gguf
+*.nemo
+*.wav
+!testdata/**/*.wav
+
+# Packaging
+*.app/
+*.dmg
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
