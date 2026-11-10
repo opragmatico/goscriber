@@ -1,0 +1,8 @@
+{
+  "transcribe_shortcut": "ctrl+shift+space",
+  "activation_mode": "push_to_talk",
+  "selected_model": "nemotron-3.5-asr-streaming-0.6b",
+  "language": "pt-BR",
+  "history_limit": 20,
+  "custom_words": ["Goscriber", "NeMo"]
+}

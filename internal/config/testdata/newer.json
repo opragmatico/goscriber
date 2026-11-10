@@ -1,0 +1,5 @@
+{
+  "schema_version": 99,
+  "history_limit": 7,
+  "some_future_field": {"nested": true}
+}
