@@ -12,11 +12,20 @@ import (
 )
 
 // Env carries everything Run needs from the process, so tests can supply their
-// own writers and version.
+// own writers, version and app.
 type Env struct {
 	Stdout  io.Writer
 	Stderr  io.Writer
 	Version string // set by main through -ldflags; empty means "use build info"
+	// RunApp starts the desktop app. main wires it to internal/app, which keeps
+	// this package free of the app's CGo dependencies. Nil prints a notice.
+	RunApp func(AppOptions) error
+}
+
+// AppOptions are the startup flags handed to the desktop app.
+type AppOptions struct {
+	Debug   bool
+	Version string
 }
 
 const usage = `Goscriber: offline push-to-talk speech-to-text.
@@ -25,8 +34,13 @@ Usage:
   goscriber [flags]
 
 Flags:
+      --debug     verbose logging and debug mode for this session
   -h, --help      show this help and exit
       --version   print the version and exit
+
+Environment:
+  GOSCRIBER_LOG   log level override: debug, info, warn or error
+  GOSCRIBER_HOME  keep settings, models, history and logs in this directory
 `
 
 // Run parses args (without the program name) and returns the process exit code.
@@ -35,6 +49,7 @@ func Run(args []string, env Env) int {
 	fs.SetOutput(io.Discard)
 	fs.Usage = func() {}
 	showVersion := fs.Bool("version", false, "print the version and exit")
+	debug := fs.Bool("debug", false, "verbose logging and debug mode for this session")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -55,7 +70,13 @@ func Run(args []string, env Env) int {
 		return 0
 	}
 
-	fmt.Fprintln(env.Stderr, "goscriber: the desktop app is not implemented yet "+
-		"(https://github.com/opragmatico/goscriber/issues/6); run 'goscriber --help'")
+	if env.RunApp == nil {
+		fmt.Fprintln(env.Stderr, "goscriber: the desktop app is not available in this build; run 'goscriber --help'")
+		return 0
+	}
+	if err := env.RunApp(AppOptions{Debug: *debug, Version: ResolveVersion(env.Version)}); err != nil {
+		fmt.Fprintf(env.Stderr, "goscriber: %v\n", err)
+		return 1
+	}
 	return 0
 }

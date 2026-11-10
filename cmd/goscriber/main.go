@@ -4,6 +4,7 @@ package main
 import (
 	"os"
 
+	"github.com/opragmatico/goscriber/internal/app"
 	"github.com/opragmatico/goscriber/internal/cli"
 )
 
@@ -15,5 +16,8 @@ func main() {
 		Stdout:  os.Stdout,
 		Stderr:  os.Stderr,
 		Version: version,
+		RunApp: func(o cli.AppOptions) error {
+			return app.Run(app.Options{Debug: o.Debug, Version: o.Version})
+		},
 	}))
 }
