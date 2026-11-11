@@ -79,6 +79,8 @@ packaging/
 └── macos/Info.plist       # bundle metadata (LSUIElement: menu bar app, no Dock icon)
 scripts/
 └── build-nemo-speech.sh   # builds and installs the pinned NeMo-Speech.cpp SDK into .deps/
+third_party/
+└── nemo-speech/           # NeMo-Speech.cpp v0.3.0 (git submodule)
 ```
 
 ## App shell
@@ -109,7 +111,7 @@ Rules the binding follows:
 - Handles live in Go structs with explicit `Close()` methods. Finalizers are only a safety net.
 - A stream is driven by one goroutine at a time. The recognizer may be shared.
 
-The binding needs `cgo` and the NeMo-Speech.cpp SDK (headers and libraries) installed by `scripts/build-nemo-speech.sh`. Packages that do not need the engine build and test without CGo by using `engine/fake`.
+The binding needs `cgo` and the NeMo-Speech.cpp SDK (headers and shared libraries), which `make deps` builds into `.deps/nemo-speech` and Go finds through pkg-config. [The SDK guide](engine-sdk.md) covers the build, why the libraries are shared rather than static, and what that means for packaging. Packages that do not need the engine build and test without CGo by using `engine/fake`.
 
 ### Process isolation
 

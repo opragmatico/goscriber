@@ -16,11 +16,19 @@ GOLANGCI_LINT         := $(TOOLS_BIN)/golangci-lint-$(GOLANGCI_LINT_VERSION)
 # CGO_ENABLED=0 (see test-nocgo).
 CGO_EDGE := /internal/(app|ui|platform|engine/nemo)(/|$$)
 
+# The NeMo-Speech.cpp SDK that `make deps` builds (scripts/build-nemo-speech.sh).
+# Its pkg-config directory goes first on PKG_CONFIG_PATH, so the binding's
+# `#cgo pkg-config: nemo-speech-asr` finds it. Outside make, export it yourself.
+NEMO_SPEECH_PREFIX := $(CURDIR)/.deps/nemo-speech
+export PKG_CONFIG_PATH := $(NEMO_SPEECH_PREFIX)/lib/pkgconfig$(if $(PKG_CONFIG_PATH),:$(PKG_CONFIG_PATH))
+# The binding's CGo files need this tag until it is wired in (docs/engine-sdk.md).
+NEMO_TAGS := nemo
+
 .DEFAULT_GOAL := build
-.PHONY: help build run app test test-race test-nocgo vet lint fmt deps tidy clean
+.PHONY: help build run app test test-race test-nocgo test-engine engine-version vet lint fmt deps tidy clean clean-deps
 
 help: ## Show this help
-	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  %-11s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 build: ## Build ./goscriber with the version stamped in
 	$(GO) build -ldflags '$(LDFLAGS)' -o $(BIN) ./cmd/goscriber
@@ -50,6 +58,13 @@ test-race: ## go test -race ./...
 test-nocgo: ## Test the packages outside the CGo edge with CGO_ENABLED=0
 	CGO_ENABLED=0 $(GO) test $$($(GO) list ./... | grep -vE '$(CGO_EDGE)')
 
+test-engine: ## Vet and test the NeMo-Speech.cpp binding against the SDK (needs make deps)
+	$(GO) vet -tags $(NEMO_TAGS) ./internal/engine/nemo/...
+	$(GO) test -race -tags $(NEMO_TAGS) ./internal/engine/nemo/...
+
+engine-version: ## Print the NeMo-Speech.cpp version through CGo (needs make deps)
+	@$(GO) run -tags $(NEMO_TAGS) ./internal/engine/nemo/cmd/nemo-version
+
 vet: ## go vet ./...
 	$(GO) vet ./...
 
@@ -59,8 +74,9 @@ lint: $(GOLANGCI_LINT) ## Run golangci-lint (linters and format check)
 fmt: $(GOLANGCI_LINT) ## Format the code with gofumpt and goimports
 	$(GOLANGCI_LINT) fmt
 
-deps: ## Download Go modules (the NeMo-Speech.cpp SDK build joins with issue #7)
+deps: ## Download Go modules and build the pinned NeMo-Speech.cpp SDK into .deps/
 	$(GO) mod download
+	scripts/build-nemo-speech.sh
 
 tidy: ## go mod tidy
 	$(GO) mod tidy
@@ -68,6 +84,9 @@ tidy: ## go mod tidy
 clean: ## Remove the binary, the app bundle and the pinned tools
 	rm -f $(BIN)
 	rm -rf $(TOOLS_BIN) $(APP_BUNDLE)
+
+clean-deps: ## Remove the NeMo-Speech.cpp SDK and its build tree (.deps/)
+	rm -rf .deps
 
 $(GOLANGCI_LINT):
 	GOBIN=$(TOOLS_BIN) $(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)

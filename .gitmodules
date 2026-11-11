@@ -1,0 +1,4 @@
+[submodule "nemo-speech"]
+	path = third_party/nemo-speech
+	url = https://github.com/NVIDIA/NeMo-Speech.cpp.git
+	shallow = true
