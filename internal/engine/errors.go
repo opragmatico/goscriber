@@ -6,8 +6,8 @@ import (
 )
 
 // Kinds of engine failure. Engines return them inside an *Error; test for
-// them with errors.Is. All but ErrNotLoaded match a NeMo-Speech.cpp status
-// code (nemo_speech_asr_status).
+// them with errors.Is. All but ErrNotLoaded and ErrModelNotFound match a
+// NeMo-Speech.cpp status code (nemo_speech_asr_status).
 var (
 	// ErrInvalidArgument: the request cannot be served as asked, such as
 	// empty audio, an unsupported sample rate, or a stream on a model that
@@ -30,6 +30,9 @@ var (
 	ErrUnavailable = errors.New("unavailable")
 	// ErrNotLoaded: the call needs a model and none is loaded.
 	ErrNotLoaded = errors.New("no model loaded")
+	// ErrModelNotFound: a file Load needs does not exist, typically because
+	// the model has not been downloaded. Engines never download anything.
+	ErrModelNotFound = errors.New("model not downloaded")
 )
 
 // Error is an engine failure.
