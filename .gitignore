@@ -10,7 +10,6 @@ go.work.sum
 
 # Native dependencies (NeMo-Speech.cpp SDK build and install)
 /.deps/
-/third_party/*/build/
 
 # Local models and recordings
 /models/
