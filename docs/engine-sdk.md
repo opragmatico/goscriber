@@ -71,9 +71,9 @@ The rpath lets development binaries and `go test` run straight from the tree, wi
 - `make` targets export `PKG_CONFIG_PATH` with `.deps/nemo-speech/lib/pkgconfig` first.
 - Plain `go` commands need it exported: `export PKG_CONFIG_PATH="$PWD/.deps/nemo-speech/lib/pkgconfig"`.
 
-**Build tag.** The files that need the SDK also carry the `nemo` build tag (`//go:build cgo && nemo`), so `go build ./...`, `go test ./...` and the `check` CI job keep working on machines without the SDK. Build or test them with `-tags nemo`, as `make test-engine` does. The recognizer binding ([#9](https://github.com/opragmatico/goscriber/issues/9)) decides whether the tag stays once every CGo build has the SDK.
+**Build tag.** The files that need the SDK also carry the `nemo` build tag (`//go:build cgo && nemo`), so `go build ./...`, `go test ./...` and the `check` CI job keep working on machines without the SDK. Build or test them with `-tags nemo`, as `make test-engine` does. The tag stays until the engine is wired into the app: until then nothing outside `internal/engine/nemo` links the SDK, and dropping the tag would make every `go test ./...` need `make deps` first.
 
-**Version.** `nemo_speech_asr_version()` returns `"nemo-speech-asr 0.3.0"`; `nemo.Version()` returns `"0.3.0"`. `make engine-version` prints it, and `TestVersionMatchesSDK` checks that the library the test binary loads is the one the pkg-config file describes.
+**Version.** `nemo_speech_asr_version()` returns `"nemo-speech-asr 0.3.0"`; `nemo.Version()` returns `"0.3.0"`. `make engine-version` prints it, and `TestVersionMatchesSDK` checks that the library the test binary loads is the one the pkg-config file describes. `Engine.Load` refuses a runtime that is not compatible with the version the binding was written for (`sdkVersion` in `internal/engine/nemo/version.go`): the same major version and, while that is 0, the same minor version.
 
 ## Decision: shared libraries, not static linking
 
@@ -118,7 +118,23 @@ make deps          # the stamp names the commit, so this rebuilds
 make test-engine
 ```
 
-Then update the version this page and the README mention. The CI cache key follows the new commit on its own.
+Then update `sdkVersion` in `internal/engine/nemo/version.go` and the version this page and the README mention, and run the model tests below. The binding also reads a few GGUF metadata keys the converter writes (`internal/engine/nemo/model.go`); they are not part of the C ABI, so check they still exist. The CI cache key follows the new commit on its own.
+
+## Model tests
+
+Most of the binding's tests need only the SDK. The ones that need a real model run when `GOSCRIBER_TEST_MODELS` names a directory holding NVIDIA's GGUF, and skip otherwise:
+
+| File | Source | Size |
+| --- | --- | --- |
+| `nemotron-3.5-asr-streaming-0.6b.q8_0.gguf` | [`nvidia/nemotron-3.5-asr-streaming-0.6b`](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b) | 742 MB |
+
+```bash
+GOSCRIBER_TEST_MODELS=~/Library/Caches/goscriber/models make test-engine
+```
+
+They transcribe `testdata/audio/jfk.wav` on Metal and on the CPU and keep the word error rate under 10%, check that transcripts keep the model's punctuation and casing, run recognitions concurrently and across `Unload`, and load, recognize and unload the model 100 times (`GOSCRIBER_TEST_CYCLES` changes the count; `-short` skips it).
+
+That last test watches the process's memory. `Unload` destroys the recognizer and then asks the C allocator to hand its free memory back to the OS (`malloc_zone_pressure_relief` on macOS, `malloc_trim` with glibc). On macOS the test measures the physical footprint, which is what the system charges the process and Activity Monitor shows; RSS still drifts up by about a hundred megabytes over the cycles because the malloc zones keep clean, reusable pages mapped, which the system reclaims when it needs them. Elsewhere it measures RSS.
 
 ## CI
 

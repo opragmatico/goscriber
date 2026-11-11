@@ -20,5 +20,6 @@
 //
 // Failures are *Error values whose Kind is one of the Err* sentinels, so
 // callers test them with errors.Is. The sentinels mirror NeMo-Speech.cpp's
-// status codes, plus ErrNotLoaded for calls made before Load.
+// status codes, plus ErrNotLoaded for calls made before Load and
+// ErrModelNotFound for a model that has not been downloaded.
 package engine

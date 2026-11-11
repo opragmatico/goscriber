@@ -162,7 +162,8 @@ type Options struct {
 
 // Result is a transcript, interim or final.
 type Result struct {
-	// Text is the transcript.
+	// Text is the transcript, with the punctuation and capitalization the
+	// model writes.
 	Text string
 	// Final reports whether Text is settled. Interim results are replaced by
 	// later ones; finals are not. Recognize always returns a final.
