@@ -41,6 +41,32 @@ static inline nemo_speech_asr_status gs_recognize_f32(
         err);
 }
 
+static inline nemo_speech_asr_status gs_streaming_recognize(
+    nemo_speech_asr_recognizer* recognizer, const nemo_speech_asr_recognition_options* options,
+    nemo_speech_asr_stream** out, char** err) {
+    return gs_status(nemo_speech_asr_streaming_recognize(recognizer, options, out), err);
+}
+
+static inline nemo_speech_asr_status gs_stream_push_f32(
+    nemo_speech_asr_stream* stream, const float* samples, size_t n_samples, int32_t sample_rate,
+    char** err) {
+    return gs_status(nemo_speech_asr_stream_push_f32(stream, samples, n_samples, sample_rate), err);
+}
+
+static inline nemo_speech_asr_status gs_stream_next(
+    nemo_speech_asr_stream* stream, nemo_speech_asr_result** out, char** err) {
+    return gs_status(nemo_speech_asr_stream_next(stream, out), err);
+}
+
+static inline nemo_speech_asr_status gs_stream_force_endpoint(
+    nemo_speech_asr_stream* stream, char** err) {
+    return gs_status(nemo_speech_asr_stream_force_endpoint(stream), err);
+}
+
+static inline nemo_speech_asr_status gs_stream_finish(nemo_speech_asr_stream* stream, char** err) {
+    return gs_status(nemo_speech_asr_stream_finish(stream), err);
+}
+
 // gs_release_free_memory hands memory the C allocator holds but no longer
 // uses back to the OS. A recognizer frees hundreds of megabytes when it is
 // destroyed; without this the allocator keeps much of it resident for reuse.

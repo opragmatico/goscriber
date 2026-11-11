@@ -94,7 +94,26 @@ type LoadSpec struct {
 	// CPU runs the model on the CPU even when the build has a GPU backend
 	// (Metal on macOS).
 	CPU bool
+	// Latency is how far a streaming model looks ahead. Empty means
+	// LatencyBalanced; offline models ignore it.
+	Latency Latency
 }
+
+// Latency trades how soon a streaming model commits to text against how
+// accurate that text is: the model looks further ahead in the audio before
+// deciding on each word.
+type Latency string
+
+// Latency presets.
+const (
+	// LatencyLow shows words soonest, at some cost in accuracy.
+	LatencyLow Latency = "low"
+	// LatencyBalanced is the model's own trade-off.
+	LatencyBalanced Latency = "balanced"
+	// LatencyAccurate looks furthest ahead: the most accurate text, shown
+	// latest.
+	LatencyAccurate Latency = "accurate"
+)
 
 // ModelInfo is what a loaded model can do.
 type ModelInfo struct {

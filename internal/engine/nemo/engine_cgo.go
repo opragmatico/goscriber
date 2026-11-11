@@ -11,6 +11,7 @@ import "C"
 import (
 	"context"
 	"fmt"
+	"math"
 	"runtime"
 	"slices"
 	"sync"
@@ -28,22 +29,27 @@ type Engine struct {
 	h *handles
 }
 
-// handles owns the native recognizer. It lives apart from Engine so that a
-// cleanup can release it when an Engine is dropped without Unload. That is a
-// safety net only: call Unload.
+// handles owns the native recognizer and its open streams. It lives apart
+// from Engine so that a cleanup can release them when an Engine is dropped
+// without Unload. That is a safety net only: call Unload.
 type handles struct {
-	// mu is held for reading by every call into the recognizer and for
-	// writing by Load and Unload, so these wait for calls in flight.
+	// mu is held for reading by every call into the recognizer or one of its
+	// streams, and for writing by Load and Unload, so these wait for calls
+	// in flight. The library requires streams to close before their
+	// recognizer is destroyed.
 	mu   sync.RWMutex
 	rec  *C.nemo_speech_asr_recognizer
 	info engine.ModelInfo
+
+	streamsMu sync.Mutex // guards streams for readers of mu
+	streams   map[*stream]struct{}
 }
 
 var _ engine.Engine = (*Engine)(nil)
 
 // New returns an Engine with no model loaded.
 func New() *Engine {
-	e := &Engine{h: &handles{}}
+	e := &Engine{h: &handles{streams: map[*stream]struct{}{}}}
 	runtime.AddCleanup(e, func(h *handles) {
 		h.mu.Lock()
 		defer h.mu.Unlock()
@@ -86,8 +92,17 @@ var checkSDK = sync.OnceValue(func() error { return checkVersion(Version()) })
 // Load implements engine.Engine. It loads the GGUF at spec.Path on Metal,
 // or on the CPU when spec.CPU is set, after checking that the file exists
 // (engine.ErrModelNotFound otherwise) and reading what the model can do from
-// its metadata.
+// its metadata. A streaming model looks ahead as far as spec.Latency says.
 func (e *Engine) Load(ctx context.Context, spec engine.LoadSpec) (engine.ModelInfo, error) {
+	rc, err := rightContext("load", spec.Latency)
+	if err != nil {
+		return engine.ModelInfo{}, err
+	}
+	return e.load(ctx, spec, rc)
+}
+
+// load is Load with the encoder right context given in frames.
+func (e *Engine) load(ctx context.Context, spec engine.LoadSpec, rightContext int) (engine.ModelInfo, error) {
 	const op = "load"
 	if err := checkSDK(); err != nil {
 		return engine.ModelInfo{}, err
@@ -127,6 +142,17 @@ func (e *Engine) Load(ctx context.Context, spec engine.LoadSpec) (engine.ModelIn
 	cfg.size = C.sizeof_nemo_speech_asr_recognizer_config
 	cfg.backend = backend
 	cfg.model = model
+	if meta.streaming {
+		st := cnew[C.nemo_speech_asr_streaming_config](&mem)
+		st.size = C.sizeof_nemo_speech_asr_streaming_config
+		// The library's defaults for buffered CTC streaming, which it
+		// validates for every model; cache-aware RNNT models ignore them.
+		st.chunk_size = 0.16
+		st.ctc_left_padding = 1.92
+		st.ctc_right_padding = 1.92
+		st.rnnt_right_context = C.int32_t(rightContext)
+		cfg.streaming = st
+	}
 	if spec.VADPath != "" {
 		vad := cnew[C.nemo_speech_asr_vad_config](&mem)
 		vad.size = C.sizeof_nemo_speech_asr_vad_config
@@ -157,12 +183,20 @@ func (e *Engine) Unload() error {
 	return nil
 }
 
-// releaseLocked destroys the recognizer and returns the memory it freed to
-// the OS. h.mu must be held for writing.
+// releaseLocked closes the open streams, destroys the recognizer and returns
+// the memory it freed to the OS. h.mu must be held for writing.
 func (h *handles) releaseLocked() {
 	if h.rec == nil {
 		return
 	}
+	h.streamsMu.Lock()
+	for s := range h.streams {
+		s.mu.Lock()
+		s.closeLocked()
+		s.mu.Unlock()
+	}
+	clear(h.streams)
+	h.streamsMu.Unlock()
 	C.nemo_speech_asr_destroy(h.rec)
 	h.rec, h.info = nil, engine.ModelInfo{}
 	C.gs_release_free_memory()
@@ -211,17 +245,45 @@ func (e *Engine) Recognize(ctx context.Context, samples []float32, sampleRate in
 	return r, nil
 }
 
-// StartStream implements engine.Engine. Streaming is not wired up yet, so
-// every model is treated as batch-only.
-func (e *Engine) StartStream(context.Context, engine.Options) (engine.Stream, error) {
-	return nil, invalid("start stream", "streaming recognition is not implemented yet")
+// StartStream implements engine.Engine. Endpointing is off: a stream is one
+// utterance, which ends with Finish or ForceEndpoint.
+func (e *Engine) StartStream(ctx context.Context, opts engine.Options) (engine.Stream, error) {
+	const op = "start stream"
+	h := e.h
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	if err := ctx.Err(); err != nil {
+		return nil, cancelled(op, err)
+	}
+	if h.rec == nil {
+		return nil, &engine.Error{Op: op, Kind: engine.ErrNotLoaded}
+	}
+	// The library rejects offline-only models with a runtime error; report
+	// the request itself as the problem, so callers fall back to Recognize.
+	if !h.info.Streaming {
+		return nil, invalid(op, "the model cannot stream; decode whole clips with Recognize")
+	}
+
+	var mem cmem
+	defer mem.free()
+	var cs *C.nemo_speech_asr_stream
+	var msg *C.char
+	if status := C.gs_streaming_recognize(h.rec, mem.options(opts), &cs, &msg); status != C.NEMO_SPEECH_ASR_OK {
+		return nil, statusError(op, status, msg)
+	}
+	s := &stream{h: h, c: cs, interims: opts.InterimResults}
+	h.streamsMu.Lock()
+	h.streams[s] = struct{}{}
+	h.streamsMu.Unlock()
+	return s, nil
 }
 
 // copyResult copies the top alternative of res into Go memory.
 func copyResult(res *C.nemo_speech_asr_result) engine.Result {
 	r := engine.Result{
 		Final:          bool(C.nemo_speech_asr_result_is_final(res)),
-		AudioProcessed: time.Duration(float64(C.nemo_speech_asr_result_audio_processed(res)) * float64(time.Second)),
+		AudioProcessed: seconds(C.nemo_speech_asr_result_audio_processed(res)),
 	}
 	if C.nemo_speech_asr_result_alternative_count(res) == 0 {
 		return r
@@ -244,6 +306,11 @@ func copyResult(res *C.nemo_speech_asr_result) engine.Result {
 		r.Languages = append(r.Languages, C.GoString(C.nemo_speech_asr_result_language_code(res, 0, C.size_t(i))))
 	}
 	return r
+}
+
+// seconds converts a duration in seconds, as a C float, to the microsecond.
+func seconds(s C.float) time.Duration {
+	return time.Duration(math.Round(float64(s)*1e6)) * time.Microsecond
 }
 
 // cmem tracks C allocations made for one call and frees them together.
