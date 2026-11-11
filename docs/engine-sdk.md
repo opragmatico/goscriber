@@ -120,6 +120,25 @@ make test-engine
 
 Then update `sdkVersion` in `internal/engine/nemo/version.go` and the version this page and the README mention, and run the model tests below. The binding also reads a few GGUF metadata keys the converter writes (`internal/engine/nemo/model.go`); they are not part of the C ABI, so check they still exist. The CI cache key follows the new commit on its own.
 
+## Streaming
+
+`Engine.StartStream` drives `nemo_speech_asr_streaming_recognize` and its `stream_*` calls, with endpointing off: a stream is one utterance, which ends with `Finish` (or `ForceEndpoint`). What the binding relies on, as of v0.3.0:
+
+- **Push copies.** `stream_push_f32` copies the samples into the stream's buffer (or the resampler's) before it returns, so callers may reuse their slice at once. The rate is fixed by the first push; the library resamples 8–96 kHz.
+- **Next decodes.** Push only buffers; each `stream_next` decodes what it can and returns one result, or none. `stream_finish` decodes the remaining audio itself and leaves the end-of-stream final for the next `stream_next`.
+- **Interims always come.** The C ABI does not read `interim_results`, so the binding drops interim results itself when a stream was started without `InterimResults`.
+- **Offline models fail with a runtime error.** `streaming_recognize` on Parakeet TDT reports `NEMO_SPEECH_ASR_ERROR_RUNTIME`; the binding checks the GGUF's `cache_supported` first and returns `ErrInvalidArgument`, which callers treat as "batch only".
+
+The latency presets set `rnnt_right_context`, the encoder frames (80 ms each) the model looks ahead of each chunk. Nemotron 3.5 is trained for 0, 1, 3, 6 and 13, and its GGUF records 3 as the default. `-1` keeps that default: despite upstream's "model max" wording, the library replaces `-1` with the GGUF's value, not the largest the model supports.
+
+| Preset | Right context | Chunk | Metal: Finish → final | CPU: Finish → final | Interims over the 11 s fixture |
+| --- | --- | --- | --- | --- | --- |
+| `low` | 1 | 160 ms | 17 ms | 26 ms | 63 |
+| `balanced` (default) | -1 (3) | 320 ms | 22 ms | 37 ms | 31 |
+| `accurate` | 13 | 1.12 s | 46 ms | 94 ms | 9 |
+
+Measured on an M4 Max, best of three, streaming `testdata/audio/jfk.wav` in 20 ms chunks; every preset transcribes it without error.
+
 ## Model tests
 
 Most of the binding's tests need only the SDK. The ones that need a real model run when `GOSCRIBER_TEST_MODELS` names a directory holding NVIDIA's GGUF, and skip otherwise:
@@ -132,7 +151,7 @@ Most of the binding's tests need only the SDK. The ones that need a real model r
 GOSCRIBER_TEST_MODELS=~/Library/Caches/goscriber/models make test-engine
 ```
 
-They transcribe `testdata/audio/jfk.wav` on Metal and on the CPU and keep the word error rate under 10%, check that transcripts keep the model's punctuation and casing, run recognitions concurrently and across `Unload`, and load, recognize and unload the model 100 times (`GOSCRIBER_TEST_CYCLES` changes the count; `-short` skips it).
+They transcribe `testdata/audio/jfk.wav` on Metal and on the CPU and keep the word error rate under 10%, check that transcripts keep the model's punctuation and casing, run recognitions concurrently and across `Unload`, and load, recognize and unload the model 100 times (`GOSCRIBER_TEST_CYCLES` changes the count; `-short` skips it). The streaming tests feed the fixture in 20 ms chunks, check that interims arrive and that the final matches the offline result, measure each latency preset, and hold Finish → final under 300 ms on Apple Silicon (without `-race`, whose timings mean nothing). A Parakeet TDT GGUF (`parakeet-tdt-0.6b-v2.q8_0.gguf`, or NVIDIA's `parakeet-tdt-0.6b-v3.q8_0.gguf`) in the same directory adds the check that offline models refuse to stream.
 
 That last test watches the process's memory. `Unload` destroys the recognizer and then asks the C allocator to hand its free memory back to the OS (`malloc_zone_pressure_relief` on macOS, `malloc_trim` with glibc). On macOS the test measures the physical footprint, which is what the system charges the process and Activity Monitor shows; RSS still drifts up by about a hundred megabytes over the cycles because the malloc zones keep clean, reusable pages mapped, which the system reclaims when it needs them. Elsewhere it measures RSS.
 

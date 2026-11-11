@@ -210,10 +210,6 @@ func TestNemotronRecognizeErrors(t *testing.T) {
 	time.AfterFunc(time.Millisecond, cancel)
 	_, err = e.Recognize(ctx, samples, 0, engine.Options{})
 	wantKind(t, err, engine.ErrCancelled)
-
-	if _, err := e.StartStream(context.Background(), engine.Options{}); !errors.Is(err, engine.ErrInvalidArgument) {
-		t.Errorf("StartStream = %v, want ErrInvalidArgument until streaming lands", err)
-	}
 }
 
 // Run with -race: one recognizer serves several goroutines at once.
