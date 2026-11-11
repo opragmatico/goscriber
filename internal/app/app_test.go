@@ -140,14 +140,3 @@ func TestCloseRestoresDefaultLoggerAndIsIdempotent(t *testing.T) {
 		t.Error("Close did not restore the previous default logger")
 	}
 }
-
-func TestRun(t *testing.T) {
-	isolate(t)
-	var stderr bytes.Buffer
-	if err := Run(Options{Stderr: &stderr}); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(stderr.String(), "not implemented yet") {
-		t.Errorf("stderr = %q", stderr.String())
-	}
-}

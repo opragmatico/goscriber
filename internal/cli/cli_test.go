@@ -20,7 +20,8 @@ func TestHelp(t *testing.T) {
 		if code != 0 {
 			t.Errorf("%s: exit code %d, want 0", flag, code)
 		}
-		if !strings.Contains(stdout, "Usage:") || !strings.Contains(stdout, "--version") {
+		if !strings.Contains(stdout, "Usage:") || !strings.Contains(stdout, "--version") ||
+			!strings.Contains(stdout, "--start-hidden") || !strings.Contains(stdout, "--no-tray") {
 			t.Errorf("%s: usage not printed to stdout: %q", flag, stdout)
 		}
 		if stderr != "" {
@@ -72,11 +73,14 @@ func TestNoAppInBuild(t *testing.T) {
 
 func TestRunsAppWithFlags(t *testing.T) {
 	for _, tt := range []struct {
-		args  []string
-		debug bool
+		args []string
+		want AppOptions
 	}{
-		{nil, false},
-		{[]string{"--debug"}, true},
+		{nil, AppOptions{}},
+		{[]string{"--debug"}, AppOptions{Debug: true}},
+		{[]string{"--start-hidden"}, AppOptions{StartHidden: true}},
+		{[]string{"--no-tray"}, AppOptions{NoTray: true}},
+		{[]string{"--no-tray", "--start-hidden", "--debug"}, AppOptions{Debug: true, StartHidden: true, NoTray: true}},
 	} {
 		var got *AppOptions
 		var out, errOut bytes.Buffer
@@ -87,8 +91,9 @@ func TestRunsAppWithFlags(t *testing.T) {
 		if code != 0 || got == nil {
 			t.Fatalf("%v: exit %d, app started: %v", tt.args, code, got != nil)
 		}
-		if got.Debug != tt.debug || got.Version != "v1.0.0" {
-			t.Errorf("%v: app options %+v", tt.args, *got)
+		tt.want.Version = "v1.0.0"
+		if *got != tt.want {
+			t.Errorf("%v: app options %+v, want %+v", tt.args, *got, tt.want)
 		}
 	}
 }

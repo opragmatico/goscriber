@@ -6,7 +6,7 @@ Press a shortcut, speak, release, and your words are pasted into whatever app yo
 
 Goscriber is a Go re-implementation of [Handy](https://github.com/cjpais/Handy) by CJ Pais. Handy is a Tauri (Rust + React) app that runs many model families through `transcribe.cpp`. Goscriber keeps Handy's dictation behaviour but deliberately narrows the speech stack to **two NVIDIA models running in-process through [NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) via CGo**, and ships a single native binary with a [Fyne](https://fyne.io) UI.
 
-> **Status: early development.** Nothing is runnable yet. See the [roadmap](#roadmap) and the [issue tracker](https://github.com/opragmatico/goscriber/issues).
+> **Status: early development.** `goscriber` starts as a menu bar / tray icon with a placeholder settings window; dictation is not wired up yet. See the [roadmap](#roadmap) and the [issue tracker](https://github.com/opragmatico/goscriber/issues).
 
 ## Supported models
 
@@ -62,7 +62,7 @@ macOS on Apple Silicon is the first target. Linux and Windows follow in M4.
 
 - Go 1.27 or newer, Git and Make.
 - macOS: the Xcode Command Line Tools (`xcode-select --install`).
-- Linux: a C compiler and Fyne's system packages, for example on Debian/Ubuntu `sudo apt-get install gcc libgl1-mesa-dev xorg-dev libxkbcommon-dev`.
+- Linux: a C compiler and Fyne's system packages, for example on Debian/Ubuntu `sudo apt-get install gcc libgl1-mesa-dev xorg-dev libxkbcommon-dev`. The tray icon needs a StatusNotifierItem host; on GNOME that means the AppIndicator extension.
 - The NeMo-Speech.cpp engine will also need CMake 3.26+, Ninja and SentencePiece; `make deps` will build it once [#7](https://github.com/opragmatico/goscriber/issues/7) lands.
 
 ### Common tasks
@@ -70,6 +70,8 @@ macOS on Apple Silicon is the first target. Linux and Windows follow in M4.
 ```bash
 make deps                 # download Go modules
 make run ARGS=--version   # build ./goscriber and run it
+make run ARGS=--debug     # run the app with debug logging and the tray's Debug menu
+make app                  # macOS: assemble dist/Goscriber.app (unsigned development bundle)
 make test                 # go test -race ./..., then the CGo-free check
 make lint                 # golangci-lint, pinned and installed into ./bin on first use
 make fmt                  # gofumpt + goimports
@@ -78,7 +80,7 @@ make help                 # every target
 
 ### Where CGo is allowed
 
-Only `internal/app`, `internal/ui`, `internal/platform` and `internal/engine/nemo` may use CGo (Fyne, native OS code and the NeMo-Speech.cpp binding). Everything else must build and test with `CGO_ENABLED=0`, which keeps most tests fast and portable; `make test-nocgo` enforces it, and CI runs it on macOS and Linux.
+Only `internal/app`, `internal/ui`, `internal/platform` and `internal/engine/nemo` may use CGo (Fyne, native OS code and the NeMo-Speech.cpp binding). Everything else must build and test with `CGO_ENABLED=0`, which keeps most tests fast and portable; `make test-nocgo` enforces it, and CI runs it on macOS and Linux. `cmd/goscriber` links the desktop app only when CGo is on, so a `CGO_ENABLED=0` build is a command-line-only binary.
 
 Shared test fixtures live in [`testdata/`](testdata/README.md).
 

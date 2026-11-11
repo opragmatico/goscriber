@@ -4,20 +4,21 @@ package main
 import (
 	"os"
 
-	"github.com/opragmatico/goscriber/internal/app"
 	"github.com/opragmatico/goscriber/internal/cli"
 )
 
 // version is stamped at link time: go build -ldflags "-X main.version=v1.2.3".
 var version string
 
+// runApp starts the desktop app. It is set in app.go for CGo builds; a
+// CGO_ENABLED=0 build has no desktop app and leaves it nil.
+var runApp func(cli.AppOptions) error
+
 func main() {
 	os.Exit(cli.Run(os.Args[1:], cli.Env{
 		Stdout:  os.Stdout,
 		Stderr:  os.Stderr,
 		Version: version,
-		RunApp: func(o cli.AppOptions) error {
-			return app.Run(app.Options{Debug: o.Debug, Version: o.Version})
-		},
+		RunApp:  runApp,
 	}))
 }

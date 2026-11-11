@@ -75,9 +75,21 @@ internal/
     ├── overlay.go
     ├── onboarding.go
     └── settings/          # one file per settings page
+packaging/
+└── macos/Info.plist       # bundle metadata (LSUIElement: menu bar app, no Dock icon)
 scripts/
 └── build-nemo-speech.sh   # builds and installs the pinned NeMo-Speech.cpp SDK into .deps/
 ```
+
+## App shell
+
+`goscriber` with no subcommand starts the Fyne app (`io.github.opragmatico.goscriber`) as a menu bar / tray icon:
+
+- **Tray menu**: Start / Stop Dictation, Cancel, the current model (or "No model: Download…", which opens the Models page, with the dictation items disabled), Settings… and Quit. With debug mode on, a Debug submenu forces the icon state.
+- **Icon per state**: idle and transcribing are template icons that follow the menu bar's colour; recording is red. The coordinator drives the state.
+- **No window at launch** while the tray is shown; windows open from the menu. Without a tray (`--no-tray`, the `show_tray_icon` setting, or a desktop with no tray) the settings window opens at launch, even with `--start-hidden`, and closing it quits, as in Handy.
+- **macOS**: with a tray the app is an accessory app with no Dock icon. The bundle's Info.plist sets `LSUIElement`, and the app also sets the activation policy at startup, because GLFW makes every app a regular one and plain `go run` builds have no Info.plist. Without a tray the Dock icon stays as the way back in.
+- **Shutdown**: Quit, SIGINT and SIGTERM all end Fyne's main loop; the app then stops following settings and closes the log.
 
 ## The CGo engine
 
