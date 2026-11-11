@@ -17,7 +17,7 @@ GOLANGCI_LINT         := $(TOOLS_BIN)/golangci-lint-$(GOLANGCI_LINT_VERSION)
 CGO_EDGE := /internal/(app|ui|platform|engine/nemo)(/|$$)
 
 .DEFAULT_GOAL := build
-.PHONY: help build run test test-race test-nocgo vet lint fmt deps tidy clean
+.PHONY: help build run app test test-race test-nocgo vet lint fmt deps tidy clean
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  %-11s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -27,6 +27,20 @@ build: ## Build ./goscriber with the version stamped in
 
 run: build ## Build and run; pass flags with ARGS="--version"
 	./$(BIN) $(ARGS)
+
+# A development bundle for macOS: unsigned, no icon, no NeMo-Speech.cpp
+# libraries yet (the release bundle comes with issue #34). Its Info.plist sets
+# LSUIElement, so the app lives in the menu bar with no Dock icon.
+APP_BUNDLE := dist/Goscriber.app
+# CFBundleVersion only takes dotted numbers: a vX.Y[.Z] tag loses its "v" and
+# any "-commits-gHASH" suffix, and anything else (an untagged build) is 0.0.0.
+BUNDLE_VERSION := $(shell echo '$(VERSION)' | sed -nE 's/^v?([0-9]+\.[0-9]+(\.[0-9]+)?)(-.*)?$$/\1/p')
+
+app: build ## Assemble dist/Goscriber.app (macOS development bundle)
+	rm -rf $(APP_BUNDLE)
+	mkdir -p $(APP_BUNDLE)/Contents/MacOS
+	sed 's/@VERSION@/$(or $(BUNDLE_VERSION),0.0.0)/g' packaging/macos/Info.plist > $(APP_BUNDLE)/Contents/Info.plist
+	cp $(BIN) $(APP_BUNDLE)/Contents/MacOS/goscriber
 
 test: test-race test-nocgo ## Run every test with the race detector, then the CGo-free check
 
@@ -51,9 +65,9 @@ deps: ## Download Go modules (the NeMo-Speech.cpp SDK build joins with issue #7)
 tidy: ## go mod tidy
 	$(GO) mod tidy
 
-clean: ## Remove the binary and the pinned tools
+clean: ## Remove the binary, the app bundle and the pinned tools
 	rm -f $(BIN)
-	rm -rf $(TOOLS_BIN)
+	rm -rf $(TOOLS_BIN) $(APP_BUNDLE)
 
 $(GOLANGCI_LINT):
 	GOBIN=$(TOOLS_BIN) $(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)

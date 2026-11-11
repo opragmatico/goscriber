@@ -24,8 +24,10 @@ type Env struct {
 
 // AppOptions are the startup flags handed to the desktop app.
 type AppOptions struct {
-	Debug   bool
-	Version string
+	Debug       bool
+	StartHidden bool // open no window at launch, whatever the start_hidden setting says
+	NoTray      bool // run without the tray icon, whatever the show_tray_icon setting says
+	Version     string
 }
 
 const usage = `Goscriber: offline push-to-talk speech-to-text.
@@ -34,9 +36,11 @@ Usage:
   goscriber [flags]
 
 Flags:
-      --debug     verbose logging and debug mode for this session
-  -h, --help      show this help and exit
-      --version   print the version and exit
+      --debug          verbose logging and debug mode for this session
+  -h, --help           show this help and exit
+      --no-tray        run without the tray icon; the settings window opens instead
+      --start-hidden   open no window at launch
+      --version        print the version and exit
 
 Environment:
   GOSCRIBER_LOG   log level override: debug, info, warn or error
@@ -50,6 +54,8 @@ func Run(args []string, env Env) int {
 	fs.Usage = func() {}
 	showVersion := fs.Bool("version", false, "print the version and exit")
 	debug := fs.Bool("debug", false, "verbose logging and debug mode for this session")
+	startHidden := fs.Bool("start-hidden", false, "open no window at launch")
+	noTray := fs.Bool("no-tray", false, "run without the tray icon")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -74,7 +80,13 @@ func Run(args []string, env Env) int {
 		fmt.Fprintln(env.Stderr, "goscriber: the desktop app is not available in this build; run 'goscriber --help'")
 		return 0
 	}
-	if err := env.RunApp(AppOptions{Debug: *debug, Version: ResolveVersion(env.Version)}); err != nil {
+	opts := AppOptions{
+		Debug:       *debug,
+		StartHidden: *startHidden,
+		NoTray:      *noTray,
+		Version:     ResolveVersion(env.Version),
+	}
+	if err := env.RunApp(opts); err != nil {
 		fmt.Fprintf(env.Stderr, "goscriber: %v\n", err)
 		return 1
 	}

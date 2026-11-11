@@ -36,13 +36,14 @@ jobs:
             go.mod
             go.sum
 
-      # Fyne's GLFW driver needs these to compile on Linux; UI tests run with
-      # Fyne's headless test driver, so no display server is needed.
+      # Fyne's GLFW driver needs these to compile on Linux (GLFW 3.4 builds
+      # both its X11 and Wayland backends); UI tests run with Fyne's headless
+      # test driver, so no display server is needed.
       - name: Install Fyne system packages
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc libgl1-mesa-dev xorg-dev libxkbcommon-dev
+          sudo apt-get install -y --no-install-recommends gcc libgl1-mesa-dev xorg-dev libxkbcommon-dev libwayland-dev
 
       - name: Lint
         uses: golangci/golangci-lint-action@v9

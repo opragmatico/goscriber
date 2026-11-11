@@ -1,7 +1,6 @@
 package app
 
 import (
-	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -13,9 +12,11 @@ import (
 
 // Options are the startup choices made on the command line.
 type Options struct {
-	Debug   bool      // --debug: debug logging and debug mode for this session
-	Version string    // shown in the startup log line
-	Stderr  io.Writer // nil means os.Stderr
+	Debug       bool      // --debug: debug logging and debug mode for this session
+	StartHidden bool      // --start-hidden: open no window at launch
+	NoTray      bool      // --no-tray: no tray icon; the settings window opens instead
+	Version     string    // shown in the startup log line
+	Stderr      io.Writer // nil means os.Stderr
 }
 
 // Runtime is what every part of the app shares: where files live, the
@@ -95,23 +96,6 @@ func (rt *Runtime) Close() error {
 		err = rt.Log.Close()
 	})
 	return err
-}
-
-// Run starts the app. Until the Fyne shell lands (issue #6) it only starts
-// the runtime, logs, and explains that there is no UI yet.
-func Run(opts Options) error {
-	rt, err := Start(opts)
-	if err != nil {
-		return err
-	}
-	defer rt.Close()
-	stderr := opts.Stderr
-	if stderr == nil {
-		stderr = os.Stderr
-	}
-	fmt.Fprintln(stderr, "goscriber: the desktop app is not implemented yet "+
-		"(https://github.com/opragmatico/goscriber/issues/6); logs are in "+rt.Paths.LogsDir())
-	return nil
 }
 
 func logSettingsReport(log *logging.Logger, r config.LoadReport) {
