@@ -62,7 +62,7 @@ macOS on Apple Silicon is the first target. Linux and Windows follow in M4.
 
 - Go 1.27 or newer, Git and Make.
 - macOS: the Xcode Command Line Tools (`xcode-select --install`).
-- Linux: a C compiler and Fyne's system packages, for example on Debian/Ubuntu `sudo apt-get install gcc libgl1-mesa-dev xorg-dev libxkbcommon-dev`. The tray icon needs a StatusNotifierItem host; on GNOME that means the AppIndicator extension.
+- Linux: a C compiler and Fyne's system packages, for example on Debian/Ubuntu `sudo apt-get install gcc libgl1-mesa-dev xorg-dev libxkbcommon-dev libwayland-dev`. The tray icon needs a StatusNotifierItem host; on GNOME that means the AppIndicator extension.
 - The NeMo-Speech.cpp engine will also need CMake 3.26+, Ninja and SentencePiece; `make deps` will build it once [#7](https://github.com/opragmatico/goscriber/issues/7) lands.
 
 ### Common tasks
