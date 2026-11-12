@@ -206,13 +206,14 @@ func TestTranscribeNotDownloadedHint(t *testing.T) {
 	}
 }
 
-func TestTranscribeLanguageFromSettings(t *testing.T) {
+func TestTranscribeDefaultsFromSettings(t *testing.T) {
 	s := newTranscribe(t, fake.Script{})
 	paths, _ := config.ResolvePaths()
 	settings := config.Defaults()
 	settings.Language = "de-DE"
 	settings.SelectedModel = "batch"
 	settings.VADEnabled = false
+	settings.Accelerator = config.AcceleratorCPU
 	if err := config.Save(paths.SettingsFile(), settings); err != nil {
 		t.Fatal(err)
 	}
@@ -221,8 +222,8 @@ func TestTranscribeLanguageFromSettings(t *testing.T) {
 		t.Fatalf("exit %d, stderr %q", code, stderr)
 	}
 	spec := s.eng.Loads()[0]
-	if spec.ID != "batch" || spec.VADPath != "" {
-		t.Errorf("load spec %+v: want the selected model without VAD", spec)
+	if spec.ID != "batch" || spec.VADPath != "" || !spec.CPU {
+		t.Errorf("load spec %+v: want the selected model without VAD, on the CPU", spec)
 	}
 	if code, _, stderr := runWith(t, s.env, "transcribe", "--model", "asr", fixture); code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, stderr)
