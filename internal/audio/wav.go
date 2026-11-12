@@ -181,3 +181,53 @@ func (f *wavFormat) sampleFunc() func([]byte) float32 {
 		return func(b []byte) float32 { return float32(int32(binary.LittleEndian.Uint32(b))) / (1 << 31) }
 	}
 }
+
+// WriteWAVFile writes samples to a new file at path; see WriteWAV. The file
+// is readable only by the user, as recordings are private.
+func WriteWAVFile(path string, samples []float32, rate int) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if err := WriteWAV(f, samples, rate); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+// WriteWAV writes mono samples in [-1, 1] as a 16-bit PCM WAV stream,
+// rounding and clipping each sample.
+func WriteWAV(w io.Writer, samples []float32, rate int) error {
+	const maxData = 1<<32 - 1 - 36
+	size := 2 * len(samples)
+	if rate < 1 || size > maxData {
+		return fmt.Errorf("audio: cannot write %d samples at %d Hz as WAV", len(samples), rate)
+	}
+	bw := bufio.NewWriterSize(w, 64<<10)
+	var hdr [44]byte
+	copy(hdr[0:], "RIFF")
+	binary.LittleEndian.PutUint32(hdr[4:], uint32(36+size))
+	copy(hdr[8:], "WAVEfmt ")
+	binary.LittleEndian.PutUint32(hdr[16:], 16)
+	binary.LittleEndian.PutUint16(hdr[20:], wavPCM)
+	binary.LittleEndian.PutUint16(hdr[22:], 1)
+	binary.LittleEndian.PutUint32(hdr[24:], uint32(rate))
+	binary.LittleEndian.PutUint32(hdr[28:], uint32(rate*2))
+	binary.LittleEndian.PutUint16(hdr[32:], 2)
+	binary.LittleEndian.PutUint16(hdr[34:], 16)
+	copy(hdr[36:], "data")
+	binary.LittleEndian.PutUint32(hdr[40:], uint32(size))
+	if _, err := bw.Write(hdr[:]); err != nil {
+		return err
+	}
+	var b [2]byte
+	for _, s := range samples {
+		v := math.Round(float64(s) * (1 << 15))
+		binary.LittleEndian.PutUint16(b[:], uint16(int16(max(-(1<<15), min(1<<15-1, v)))))
+		if _, err := bw.Write(b[:]); err != nil {
+			return err
+		}
+	}
+	return bw.Flush()
+}

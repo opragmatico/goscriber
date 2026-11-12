@@ -181,3 +181,30 @@ func TestReadWAVFileErrors(t *testing.T) {
 		t.Errorf("bad file: %v", err)
 	}
 }
+
+func TestWriteWAVRoundTrip(t *testing.T) {
+	in := []float32{0, 0.5, -0.5, 1, -1, 1.5, -2, 0.25}
+	var buf bytes.Buffer
+	if err := WriteWAV(&buf, in, 48000); err != nil {
+		t.Fatal(err)
+	}
+	if buf.Len() != 44+2*len(in) {
+		t.Errorf("%d bytes", buf.Len())
+	}
+	got, rate, err := ReadWAV(&buf)
+	if err != nil || rate != 48000 {
+		t.Fatalf("rate %d, %v", rate, err)
+	}
+	checkSamples(t, got, 0, 0.5, -0.5, 32767.0/32768, -1, 32767.0/32768, -1, 0.25)
+
+	p := filepath.Join(t.TempDir(), "rec.wav")
+	if err := WriteWAVFile(p, in, 16000); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Stat(p); fi.Mode().Perm() != 0o600 {
+		t.Errorf("mode %v", fi.Mode().Perm())
+	}
+	if err := WriteWAV(&buf, in, 0); err == nil {
+		t.Error("rate 0 accepted")
+	}
+}

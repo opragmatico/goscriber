@@ -1,5 +1,5 @@
 // Package cli parses Goscriber's command line: the desktop app's flags, the
-// transcribe and models subcommands, and later engine-worker and the
+// transcribe, models and debug subcommands, and later engine-worker and the
 // remote-control flags that are forwarded to a running instance.
 package cli
 
@@ -71,6 +71,8 @@ Commands:
   models list                  show each model and whether it is downloaded
   models pull MODEL            download a model, with the voice activity detector
   models rm MODEL              delete a model's files
+  debug devices                list the audio devices
+  debug record FILE.wav        record the microphone to a file, and check it
 
 Run 'goscriber COMMAND --help' for a command's flags.
 
@@ -97,6 +99,8 @@ func Run(args []string, env Env) int {
 			return runModels(args[1:], env)
 		case "transcribe":
 			return runTranscribe(args[1:], env)
+		case "debug":
+			return runDebug(args[1:], env)
 		case "help":
 			fmt.Fprint(env.Stdout, usage)
 			return 0

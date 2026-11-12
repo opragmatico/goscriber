@@ -13,7 +13,8 @@ GOLANGCI_LINT         := $(TOOLS_BIN)/golangci-lint-$(GOLANGCI_LINT_VERSION)
 
 # Packages allowed to use CGo: app wiring and the Fyne UI, native platform code,
 # and the NeMo-Speech.cpp binding. Everything else must build and test with
-# CGO_ENABLED=0 (see test-nocgo).
+# CGO_ENABLED=0 (see test-nocgo); internal/audio does, with its malgo backend
+# left out.
 CGO_EDGE := /internal/(app|ui|platform|engine/nemo)(/|$$)
 
 # The NeMo-Speech.cpp SDK that `make deps` builds (scripts/build-nemo-speech.sh).

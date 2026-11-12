@@ -4,6 +4,7 @@ go 1.27.0
 
 require (
 	fyne.io/fyne/v2 v2.8.2
+	github.com/gen2brain/malgo v0.11.27
 	golang.org/x/sys v0.30.0
 )
 

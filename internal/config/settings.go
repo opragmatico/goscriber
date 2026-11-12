@@ -120,8 +120,11 @@ type Settings struct {
 	ModelUnloadTimeout UnloadTimeout `json:"model_unload_timeout"`
 	VADEnabled         bool          `json:"vad_enabled"`
 
-	// Audio. Empty device names mean the system default.
+	// Audio. Empty device names mean the system default. An always-on
+	// microphone stays open between recordings and keeps ~200 ms of audio
+	// from before the shortcut, so the first syllable is not lost.
 	Microphone          string  `json:"microphone"`
+	AlwaysOnMicrophone  bool    `json:"always_on_microphone"`
 	OutputDevice        string  `json:"output_device"`
 	AudioFeedback       bool    `json:"audio_feedback"`
 	AudioFeedbackVolume float64 `json:"audio_feedback_volume"`
