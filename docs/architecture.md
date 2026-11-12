@@ -28,7 +28,7 @@ Handy is built with Tauri (Rust backend + React UI) and runs a broad catalog of 
 | Source | [`nvidia/nemotron-3.5-asr-streaming-0.6b`](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b) | [`nvidia/parakeet-tdt-0.6b-v2`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2) |
 | Architecture | Cache-aware FastConformer-RNNT with language-ID prompts | FastConformer-TDT (token-and-duration transducer), full attention |
 | Languages | 40+ locales, or `auto` | English, with punctuation and capitalisation |
-| Decoding | Streaming with interim results | Offline only (NeMo-Speech.cpp rejects streaming for TDT); up to 24 minutes in one pass |
+| Decoding | Streaming with interim results | Offline only (NeMo-Speech.cpp rejects streaming for TDT); decoded in chunks of up to about 30 s split at pauses, because some longer inputs come back with stretches missing ([spike](models/parakeet-tdt-0.6b-v2.md#long-audio)) |
 | GGUF | Published by NVIDIA (`*.q8_0.gguf`, ~742 MB) | Converted by us with NeMo-Speech.cpp's `convert_model.py`, then hosted with a pinned revision |
 | License | NVIDIA Open Model License | CC-BY-4.0 |
 | Live text | Interim results in the overlay | Optional chunked decode at pauses while recording |
