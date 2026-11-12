@@ -13,7 +13,7 @@ Goscriber is a Go re-implementation of [Handy](https://github.com/cjpais/Handy) 
 | Model | Hugging Face | Languages | Mode | Notes |
 | --- | --- | --- | --- | --- |
 | **Nemotron Streaming 3.5** (0.6B) | [`nvidia/nemotron-3.5-asr-streaming-0.6b`](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b) | 40+ locales, `auto` detection | Cache-aware streaming RNNT | Default model. NVIDIA publishes the Q8_0 GGUF for NeMo-Speech.cpp. |
-| **Parakeet TDT 0.6B v2** | [`nvidia/parakeet-tdt-0.6b-v2`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2) | English | Offline TDT (batch) | Fast, accurate English with punctuation and timestamps. Only a `.nemo` checkpoint is published; Goscriber converts it to GGUF with NeMo-Speech.cpp's converter. The runtime officially supports only its v3 sibling, but v2 [converts and runs with the model card's accuracy](docs/models/parakeet-tdt-0.6b-v2.md). |
+| **Parakeet TDT 0.6B v2** | [`nvidia/parakeet-tdt-0.6b-v2`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2) | English | Offline TDT (batch) | Fast, accurate English with punctuation and timestamps. Only a `.nemo` checkpoint is published; Goscriber converts it to GGUF with NeMo-Speech.cpp's converter and [hosts the result](docs/models/gguf.md) on Hugging Face. The runtime officially supports only its v3 sibling, but v2 [converts and runs with the model card's accuracy](docs/models/parakeet-tdt-0.6b-v2.md). |
 
 Goscriber ships **without any model**. On first run you choose one and download it (about 700 MB at the default Q8_0 quantisation); nothing is bundled or downloaded automatically.
 
@@ -88,11 +88,16 @@ The NeMo-Speech.cpp binding also needs the SDK from `make deps` and, until it is
 
 Shared test fixtures live in [`testdata/`](testdata/README.md).
 
+### Model files
+
+No model file is committed here. [`scripts/convert-models.sh`](scripts/convert-models.sh) reproduces the Parakeet TDT 0.6B v2 and Silero VAD GGUFs that Goscriber downloads, from NVIDIA's checkpoint and the Silero package, in an isolated Python environment (it needs [uv](https://docs.astral.sh/uv/)), and checks them against the pinned SHA-256. Nemotron Streaming 3.5 comes from NVIDIA as a GGUF. See [docs/models/gguf.md](docs/models/gguf.md).
+
 ## Acknowledgements
 
 - Goscriber's design follows [Handy](https://github.com/cjpais/Handy) (MIT, © CJ Pais). No Handy source code is copied; this is an independent implementation in Go.
 - Speech recognition runs on [NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) (Apache-2.0, © NVIDIA).
 - The models are released by NVIDIA: Nemotron Streaming 3.5 under the NVIDIA Open Model License, Parakeet TDT 0.6B v2 under CC-BY-4.0. See each model card for terms.
+- Voice activity detection uses [Silero VAD](https://github.com/snakers4/silero-vad) (MIT, © Silero Team).
 
 ## License
 
