@@ -9,7 +9,7 @@ Goscriber runs three GGUF files through NeMo-Speech.cpp. None of them is in this
 | | | | `parakeet-tdt-0.6b-v2.f16.gguf` | 1,278,057,440 | `894ee6efa3a35bee3654171b85bb473e07479c420678997c6e63523fe571c2a3` |
 | Silero VAD v6.2.0 | VAD companion | [`opragmatico/silero-vad-nemo-speech-gguf`](https://huggingface.co/opragmatico/silero-vad-nemo-speech-gguf/tree/9ae6d95f3640eb5a730eb6fbf2567542fec2d964) `9ae6d95f3640eb5a730eb6fbf2567542fec2d964` | `silero-vad-v6.2.0.gguf` | 1,240,224 | `83d702b11378ced4b1bbfcb53394bd00994f7382ff0b9a11b87605dd0898369d` |
 
-The catalog ([#13](https://github.com/opragmatico/goscriber/issues/13)) copies these values. Q8_0 is the default quantisation for both speech models.
+The catalog, [`internal/models/catalog.json`](../../internal/models/catalog.json), copies these values, and a test checks that the two agree. Q8_0 is the default quantisation for both speech models.
 
 ## Nemotron Streaming 3.5: NVIDIA's own file
 

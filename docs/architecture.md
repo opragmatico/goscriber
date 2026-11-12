@@ -30,7 +30,7 @@ Handy is built with Tauri (Rust backend + React UI) and runs a broad catalog of 
 | Languages | 40+ locales, or `auto` | English, with punctuation and capitalisation |
 | Decoding | Streaming with interim results | Offline only (NeMo-Speech.cpp rejects streaming for TDT); decoded in chunks of up to about 30 s split at pauses, because some longer inputs come back with stretches missing ([spike](models/parakeet-tdt-0.6b-v2.md#long-audio)) |
 | GGUF | Published by NVIDIA (`*.q8_0.gguf`, ~742 MB) | Converted by us with NeMo-Speech.cpp's `convert_model.py`, then hosted with a pinned revision |
-| License | NVIDIA Open Model License | CC-BY-4.0 |
+| License | OpenMDW 1.1 (at the pinned revision) | CC-BY-4.0 |
 | Live text | Interim results in the overlay | Optional chunked decode at pauses while recording |
 
 Handy's own GGUFs (`handy-computer/*-gguf`) target `transcribe.cpp`, not NeMo-Speech.cpp, so Goscriber does not reuse them.
@@ -61,7 +61,9 @@ internal/
 ├── models/
 │   ├── catalog.json       # the two models (+ Silero VAD), pinned revisions and checksums
 │   ├── catalog.go
-│   └── download.go        # resumable download, verify, delete
+│   ├── download.go        # resumable download and verification of one file
+│   ├── hfcache.go         # finds files already in the Hugging Face cache
+│   └── manager.go         # list, download, delete; status per model and quantisation
 ├── pipeline/
 │   └── coordinator.go     # recording → transcription → output state machine
 ├── text/                  # cleanup, filler words, custom-word correction, hook
@@ -147,6 +149,6 @@ Goroutines talk through channels and the coordinator; nothing outside the main t
 ## Data locations
 
 - **Settings**: `os.UserConfigDir()/goscriber/settings.json`
-- **Models**: `os.UserCacheDir()/goscriber/models/` (GGUF files, named by catalog id and quantisation)
+- **Models**: `os.UserCacheDir()/goscriber/models/` (GGUF files under their Hugging Face names, `*.part` while downloading, and `verified.json`, which remembers the files already hashed). Files already in the Hugging Face cache (`HF_HUB_CACHE`, `HF_HOME`, default `~/.cache/huggingface/hub`) are used from there.
 - **History**: `os.UserConfigDir()/goscriber/history.sqlite3` and `…/recordings/*.wav`
 - **Logs**: `os.UserCacheDir()/goscriber/logs/goscriber.log`

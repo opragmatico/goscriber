@@ -20,7 +20,7 @@ func TestHelp(t *testing.T) {
 		if code != 0 {
 			t.Errorf("%s: exit code %d, want 0", flag, code)
 		}
-		if !strings.Contains(stdout, "Usage:") || !strings.Contains(stdout, "--version") ||
+		if !strings.Contains(stdout, "Usage:") || !strings.Contains(stdout, "--version") || !strings.Contains(stdout, "models pull") ||
 			!strings.Contains(stdout, "--start-hidden") || !strings.Contains(stdout, "--no-tray") {
 			t.Errorf("%s: usage not printed to stdout: %q", flag, stdout)
 		}

@@ -1,6 +1,6 @@
-// Package cli parses Goscriber's command line: global flags today, and later
-// subcommands (transcribe, models, engine-worker) and the remote-control flags
-// that are forwarded to a running instance.
+// Package cli parses Goscriber's command line: the desktop app's flags, the
+// models subcommand, and later transcribe, engine-worker and the
+// remote-control flags that are forwarded to a running instance.
 package cli
 
 import (
@@ -8,7 +8,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"runtime"
+
+	"github.com/opragmatico/goscriber/internal/config"
+	"github.com/opragmatico/goscriber/internal/models"
 )
 
 // Env carries everything Run needs from the process, so tests can supply their
@@ -20,6 +24,27 @@ type Env struct {
 	// RunApp starts the desktop app. main wires it to internal/app, which keeps
 	// this package free of the app's CGo dependencies. Nil prints a notice.
 	RunApp func(AppOptions) error
+	// Models manages the model files for the subcommands. Nil means one for
+	// the user's models directory, which also looks in the Hugging Face
+	// cache; tests supply their own.
+	Models *models.Manager
+}
+
+// modelManager returns env.Models, or a Manager for the user's models
+// directory.
+func (env Env) modelManager() (*models.Manager, error) {
+	if env.Models != nil {
+		return env.Models, nil
+	}
+	paths, err := config.ResolvePaths()
+	if err != nil {
+		return nil, err
+	}
+	return models.NewManager(paths.ModelsDir(), models.Options{
+		HFCache:    models.HFCacheDir(os.Getenv),
+		Endpoint:   models.EndpointFromEnv(os.Getenv),
+		Downloader: &models.Downloader{UserAgent: "goscriber/" + ResolveVersion(env.Version)},
+	}), nil
 }
 
 // AppOptions are the startup flags handed to the desktop app.
@@ -33,7 +58,15 @@ type AppOptions struct {
 const usage = `Goscriber: offline push-to-talk speech-to-text.
 
 Usage:
-  goscriber [flags]
+  goscriber [flags]            start the desktop app
+  goscriber models COMMAND     list, download and delete speech models
+
+Commands:
+  models list                  show each model and whether it is downloaded
+  models pull MODEL            download a model, with the voice activity detector
+  models rm MODEL              delete a model's files
+
+Run 'goscriber COMMAND --help' for a command's flags.
 
 Flags:
       --debug          verbose logging and debug mode for this session
@@ -45,10 +78,23 @@ Flags:
 Environment:
   GOSCRIBER_LOG   log level override: debug, info, warn or error
   GOSCRIBER_HOME  keep settings, models, history and logs in this directory
+  HF_HOME, HF_HUB_CACHE
+                  the Hugging Face cache, where existing model files are reused
+  HF_ENDPOINT     download from this Hugging Face mirror
 `
 
 // Run parses args (without the program name) and returns the process exit code.
 func Run(args []string, env Env) int {
+	if len(args) > 0 {
+		switch args[0] {
+		case "models":
+			return runModels(args[1:], env)
+		case "help":
+			fmt.Fprint(env.Stdout, usage)
+			return 0
+		}
+	}
+
 	fs := flag.NewFlagSet("goscriber", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.Usage = func() {}
