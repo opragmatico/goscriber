@@ -1,0 +1,86 @@
+{
+  "default_model": "nemotron-3.5-asr-streaming-0.6b",
+  "models": [
+    {
+      "id": "nemotron-3.5-asr-streaming-0.6b",
+      "kind": "asr",
+      "name": "Nemotron Streaming 3.5",
+      "description": "NVIDIA's multilingual streaming model: shows words while you speak, in 32 locales or with automatic language detection.",
+      "repo": "nvidia/nemotron-3.5-asr-streaming-0.6b",
+      "revision": "ea30d66debe3740a08b573244286791d423d6b3e",
+      "license": "OpenMDW-1.1",
+      "license_url": "https://openmdw.ai/license/1-1/",
+      "languages": [
+        "en-US", "en-GB", "es-US", "es-ES", "fr-FR", "fr-CA", "it-IT", "pt-BR", "pt-PT", "nl-NL",
+        "de-DE", "tr-TR", "ru-RU", "ar-AR", "hi-IN", "ja-JP", "ko-KR", "vi-VN", "uk-UA",
+        "pl-PL", "sv-SE", "cs-CZ", "nb-NO", "da-DK", "bg-BG", "fi-FI", "hr-HR", "sk-SK", "zh-CN",
+        "hu-HU", "ro-RO", "et-EE"
+      ],
+      "capabilities": {
+        "streaming": true,
+        "language_detection": true,
+        "timestamps": true
+      },
+      "default_quant": "Q8_0",
+      "files": [
+        {
+          "quant": "Q8_0",
+          "filename": "nemotron-3.5-asr-streaming-0.6b.q8_0.gguf",
+          "size": 742090464,
+          "sha256": "3fc991d3badad7277c11030a7519832cddaf2057aafed6d4b25147e953a070b1"
+        }
+      ]
+    },
+    {
+      "id": "parakeet-tdt-0.6b-v2",
+      "kind": "asr",
+      "name": "Parakeet TDT 0.6B v2",
+      "description": "NVIDIA's fast, accurate English model with punctuation and timestamps. Transcribes once you stop speaking.",
+      "repo": "opragmatico/parakeet-tdt-0.6b-v2-nemo-speech-gguf",
+      "revision": "da0de3b9ff0f0b219b71bee25e9ef296f0d9cf8c",
+      "license": "CC-BY-4.0",
+      "license_url": "https://creativecommons.org/licenses/by/4.0/",
+      "languages": ["en"],
+      "capabilities": {
+        "streaming": false,
+        "language_detection": false,
+        "timestamps": true
+      },
+      "default_quant": "Q8_0",
+      "files": [
+        {
+          "quant": "Q8_0",
+          "filename": "parakeet-tdt-0.6b-v2.q8_0.gguf",
+          "size": 700133856,
+          "sha256": "ad2c2e6ccd12c0f0a23ccd4f3a7d1145978d59a7172a10f3ba23db117909d0cd"
+        },
+        {
+          "quant": "F16",
+          "filename": "parakeet-tdt-0.6b-v2.f16.gguf",
+          "size": 1278057440,
+          "sha256": "894ee6efa3a35bee3654171b85bb473e07479c420678997c6e63523fe571c2a3"
+        }
+      ]
+    },
+    {
+      "id": "silero-vad",
+      "kind": "vad",
+      "name": "Silero VAD v6.2.0",
+      "description": "Voice activity detection that masks silence before the speech model sees it. Downloaded with the first speech model.",
+      "repo": "opragmatico/silero-vad-nemo-speech-gguf",
+      "revision": "9ae6d95f3640eb5a730eb6fbf2567542fec2d964",
+      "license": "MIT",
+      "license_url": "https://github.com/snakers4/silero-vad/blob/master/LICENSE",
+      "capabilities": {},
+      "default_quant": "F32",
+      "files": [
+        {
+          "quant": "F32",
+          "filename": "silero-vad-v6.2.0.gguf",
+          "size": 1240224,
+          "sha256": "83d702b11378ced4b1bbfcb53394bd00994f7382ff0b9a11b87605dd0898369d"
+        }
+      ]
+    }
+  ]
+}
