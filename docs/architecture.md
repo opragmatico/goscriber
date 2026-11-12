@@ -76,9 +76,12 @@ internal/
     ├── onboarding.go
     └── settings/          # one file per settings page
 packaging/
-└── macos/Info.plist       # bundle metadata (LSUIElement: menu bar app, no Dock icon)
+├── macos/Info.plist       # bundle metadata (LSUIElement: menu bar app, no Dock icon)
+└── huggingface/           # model cards of the GGUF repositories Goscriber publishes
 scripts/
-└── build-nemo-speech.sh   # builds and installs the pinned NeMo-Speech.cpp SDK into .deps/
+├── build-nemo-speech.sh   # builds and installs the pinned NeMo-Speech.cpp SDK into .deps/
+├── convert-models.sh      # reproduces (and publishes) the Parakeet TDT v2 and Silero VAD GGUFs
+└── wer.py                 # scores model evaluations (docs/models/)
 third_party/
 └── nemo-speech/           # NeMo-Speech.cpp v0.3.0 (git submodule)
 ```
