@@ -36,7 +36,8 @@ Flags:
                       the settings' one, auto); English-only models ignore it
       --stream        decode through the streaming path, in 20 ms chunks, and
                       print interim text to stderr (streaming models only)
-      --cpu           run on the CPU instead of the GPU (Metal on macOS)
+      --cpu           run on the CPU instead of the GPU (Metal on macOS); the
+                      default when the accelerator setting is "cpu"
       --json          print one JSON object per file: text, words with their
                       timings, language and durations
       --bench         print load time, real-time factor and finalisation
@@ -169,6 +170,9 @@ func newTranscriber(env Env, fl transcribeFlags) (*transcriber, error) {
 		return nil, fmt.Errorf("%s does not stream: it transcribes whole recordings; drop --stream", id)
 	}
 
+	if settings.Accelerator == config.AcceleratorCPU {
+		fl.cpu = true
+	}
 	lang := settings.Language
 	if fl.languageSet {
 		lang = fl.language
