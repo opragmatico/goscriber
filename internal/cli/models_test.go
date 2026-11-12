@@ -31,6 +31,7 @@ func newFakeModels(t *testing.T) *fakeModels {
 	f := &fakeModels{files: map[string][]byte{
 		"asr.q8_0.gguf": bytes.Repeat([]byte("asr-q8 "), 3000),
 		"asr.f16.gguf":  bytes.Repeat([]byte("asr-f16 "), 5000),
+		"batch.gguf":    bytes.Repeat([]byte("batch "), 2000),
 		"vad.gguf":      bytes.Repeat([]byte("vad "), 100),
 	}}
 	file := func(quant, name string) string {
@@ -40,8 +41,11 @@ func newFakeModels(t *testing.T) *fakeModels {
 	rev := strings.Repeat("c", 40)
 	cat, err := models.Parse([]byte(`{"default_model": "asr", "models": [
 		{"id": "asr", "kind": "asr", "name": "ASR", "repo": "org/asr", "revision": "` + rev + `", "license": "MIT",
-		 "capabilities": {"streaming": true}, "default_quant": "Q8_0",
+		 "languages": ["en-US", "de-DE"], "capabilities": {"streaming": true, "language_detection": true}, "default_quant": "Q8_0",
 		 "files": [` + file("Q8_0", "asr.q8_0.gguf") + `, ` + file("F16", "asr.f16.gguf") + `]},
+		{"id": "batch", "kind": "asr", "name": "Batch", "repo": "org/batch", "revision": "` + rev + `", "license": "MIT",
+		 "languages": ["en"], "capabilities": {"timestamps": true}, "default_quant": "Q8_0",
+		 "files": [` + file("Q8_0", "batch.gguf") + `]},
 		{"id": "vad", "kind": "vad", "name": "VAD", "repo": "org/vad", "revision": "` + rev + `", "license": "MIT",
 		 "capabilities": {}, "default_quant": "F32", "files": [` + file("F32", "vad.gguf") + `]}
 	]}`))
@@ -63,6 +67,19 @@ func newFakeModels(t *testing.T) *fakeModels {
 	f.hfCache = filepath.Join(root, "hf")
 	f.m = models.NewManager(f.dir, models.Options{Catalog: cat, HFCache: f.hfCache, Endpoint: srv.URL})
 	return f
+}
+
+// place puts catalog files into the models directory, as a download would.
+func (f *fakeModels) place(t *testing.T, names ...string) {
+	t.Helper()
+	if err := os.MkdirAll(f.dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		if err := os.WriteFile(filepath.Join(f.dir, name), f.files[name], 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func runWith(t *testing.T, env Env, args ...string) (code int, stdout, stderr string) {
@@ -115,7 +132,7 @@ func TestModelsPullListRemove(t *testing.T) {
 	}
 
 	_, stdout, _ = runWith(t, env, "models", "list")
-	if strings.Count(stdout, "ready") != 3 {
+	if strings.Count(stdout, "ready") != 3 || strings.Count(stdout, "not downloaded") != 1 {
 		t.Errorf("after pulls:\n%s", stdout)
 	}
 

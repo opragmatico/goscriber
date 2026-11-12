@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/opragmatico/goscriber/internal/cli"
+	"github.com/opragmatico/goscriber/internal/engine"
 )
 
 // version is stamped at link time: go build -ldflags "-X main.version=v1.2.3".
@@ -14,11 +15,16 @@ var version string
 // CGO_ENABLED=0 build has no desktop app and leaves it nil.
 var runApp func(cli.AppOptions) error
 
+// newEngine returns the speech engine for `goscriber transcribe`. It is set in
+// engine.go for builds with the NeMo-Speech.cpp SDK; other builds leave it nil.
+var newEngine func() engine.Engine
+
 func main() {
 	os.Exit(cli.Run(os.Args[1:], cli.Env{
-		Stdout:  os.Stdout,
-		Stderr:  os.Stderr,
-		Version: version,
-		RunApp:  runApp,
+		Stdout:    os.Stdout,
+		Stderr:    os.Stderr,
+		Version:   version,
+		RunApp:    runApp,
+		NewEngine: newEngine,
 	}))
 }

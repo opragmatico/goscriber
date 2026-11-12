@@ -1,5 +1,5 @@
 // Package cli parses Goscriber's command line: the desktop app's flags, the
-// models subcommand, and later transcribe, engine-worker and the
+// transcribe and models subcommands, and later engine-worker and the
 // remote-control flags that are forwarded to a running instance.
 package cli
 
@@ -12,6 +12,7 @@ import (
 	"runtime"
 
 	"github.com/opragmatico/goscriber/internal/config"
+	"github.com/opragmatico/goscriber/internal/engine"
 	"github.com/opragmatico/goscriber/internal/models"
 )
 
@@ -24,6 +25,10 @@ type Env struct {
 	// RunApp starts the desktop app. main wires it to internal/app, which keeps
 	// this package free of the app's CGo dependencies. Nil prints a notice.
 	RunApp func(AppOptions) error
+	// NewEngine returns the speech engine transcribe loads models into. main
+	// wires it to the NeMo-Speech.cpp binding in builds that have it; nil
+	// means this build has no engine.
+	NewEngine func() engine.Engine
 	// Models manages the model files for the subcommands. Nil means one for
 	// the user's models directory, which also looks in the Hugging Face
 	// cache; tests supply their own.
@@ -59,6 +64,7 @@ const usage = `Goscriber: offline push-to-talk speech-to-text.
 
 Usage:
   goscriber [flags]            start the desktop app
+  goscriber transcribe FILE... transcribe WAV files and print the text
   goscriber models COMMAND     list, download and delete speech models
 
 Commands:
@@ -89,6 +95,8 @@ func Run(args []string, env Env) int {
 		switch args[0] {
 		case "models":
 			return runModels(args[1:], env)
+		case "transcribe":
+			return runTranscribe(args[1:], env)
 		case "help":
 			fmt.Fprint(env.Stdout, usage)
 			return 0
