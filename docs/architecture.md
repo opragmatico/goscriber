@@ -49,7 +49,10 @@ internal/
 ├── logging/               # slog setup, file sink, in-memory ring for the log viewer
 ├── notice/                # one place to report background errors to the UI
 ├── audio/
-│   ├── capture.go         # microphone capture with malgo, levels
+│   ├── capture.go         # Recorder: start / stop, Frames, levels, pre-roll, device fallback
+│   ├── backend_malgo.go   # malgo (miniaudio) devices; cgo builds only
+│   ├── ring.go            # lock-free ring buffer the audio callback writes into
+│   ├── level.go           # RMS / peak levels for the overlay
 │   ├── devices.go         # input / output device enumeration
 │   ├── feedback.go        # start / stop sounds
 │   └── wav.go             # WAV read / write for history and the CLI
