@@ -23,15 +23,18 @@ NEMO_SPEECH_PREFIX := $(CURDIR)/.deps/nemo-speech
 export PKG_CONFIG_PATH := $(NEMO_SPEECH_PREFIX)/lib/pkgconfig$(if $(PKG_CONFIG_PATH),:$(PKG_CONFIG_PATH))
 # The binding's CGo files need this tag until it is wired in (docs/engine-sdk.md).
 NEMO_TAGS := nemo
+# `make build` links the engine into ./goscriber, for `goscriber transcribe`,
+# once `make deps` has built the SDK; without the SDK it builds without one.
+BUILD_TAGS ?= $(if $(wildcard $(NEMO_SPEECH_PREFIX)/lib/pkgconfig/nemo-speech-asr.pc),$(NEMO_TAGS))
 
 .DEFAULT_GOAL := build
-.PHONY: help build run app test test-race test-nocgo test-engine engine-version vet lint fmt deps tidy clean clean-deps
+.PHONY: help build run app test test-race test-nocgo test-engine engine-version bench vet lint fmt deps tidy clean clean-deps
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-build: ## Build ./goscriber with the version stamped in
-	$(GO) build -ldflags '$(LDFLAGS)' -o $(BIN) ./cmd/goscriber
+build: ## Build ./goscriber with the version stamped in (and the engine, after make deps)
+	$(GO) build -tags '$(BUILD_TAGS)' -ldflags '$(LDFLAGS)' -o $(BIN) ./cmd/goscriber
 
 run: build ## Build and run; pass flags with ARGS="--version"
 	./$(BIN) $(ARGS)
@@ -61,6 +64,9 @@ test-nocgo: ## Test the packages outside the CGo edge with CGO_ENABLED=0
 test-engine: ## Vet and test the NeMo-Speech.cpp binding (needs make deps; GOSCRIBER_TEST_MODELS adds model tests)
 	$(GO) vet -tags $(NEMO_TAGS) ./internal/engine/nemo/...
 	$(GO) test -race -tags $(NEMO_TAGS) ./internal/engine/nemo/...
+
+bench: build ## Benchmark both models on Metal and the CPU over testdata/audio (needs make deps and the models)
+	scripts/bench.sh
 
 engine-version: ## Print the NeMo-Speech.cpp version through CGo (needs make deps)
 	@$(GO) run -tags $(NEMO_TAGS) ./internal/engine/nemo/cmd/nemo-version
