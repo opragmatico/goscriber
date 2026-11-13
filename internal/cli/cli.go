@@ -14,6 +14,7 @@ import (
 	"github.com/opragmatico/goscriber/internal/config"
 	"github.com/opragmatico/goscriber/internal/engine"
 	"github.com/opragmatico/goscriber/internal/models"
+	"github.com/opragmatico/goscriber/internal/output"
 )
 
 // Env carries everything Run needs from the process, so tests can supply their
@@ -29,10 +30,38 @@ type Env struct {
 	// wires it to the NeMo-Speech.cpp binding in builds that have it; nil
 	// means this build has no engine.
 	NewEngine func() engine.Engine
+	// Output reaches the clipboard and keyboard for `goscriber debug paste`.
+	// main wires it to internal/platform in CGo builds; nil means this build
+	// cannot paste.
+	Output func() OutputEnv
 	// Models manages the model files for the subcommands. Nil means one for
 	// the user's models directory, which also looks in the Hugging Face
 	// cache; tests supply their own.
 	Models *models.Manager
+}
+
+// OutputEnv is the system clipboard and keyboard, as `goscriber debug paste`
+// uses them.
+type OutputEnv struct {
+	Clipboard output.Clipboard
+	Keyboard  output.Keyboard
+	// Text reads the clipboard's plain text, to tell whether a paste put it
+	// back. Its content is never printed.
+	Text func() (string, bool)
+	// PasteKey describes the paste shortcut in the active keyboard layout,
+	// such as "Cmd+V (key code 9)".
+	PasteKey func() string
+}
+
+// userSettings returns the saved settings, or the defaults when there are
+// none or they cannot be read.
+func userSettings() config.Settings {
+	if paths, err := config.ResolvePaths(); err == nil {
+		if s, _, err := config.Load(paths.SettingsFile()); err == nil {
+			return s
+		}
+	}
+	return config.Defaults()
 }
 
 // modelManager returns env.Models, or a Manager for the user's models

@@ -14,7 +14,7 @@ Handy is built with Tauri (Rust backend + React UI) and runs a broad catalog of 
 | Voice activity detection | Silero VAD v6 (GGUF) | Silero VAD GGUF loaded by NeMo-Speech.cpp (feature masking, endpointing) |
 | Audio capture | `handy-recorder` (cpal) | `malgo` (miniaudio); NeMo-Speech.cpp resamples 8–96 kHz input itself |
 | Global shortcuts | `handy-keys` (CGEventTap) / `rdev` | `golang.design/x/hotkey` (a CGEventTap on macOS, XGrabKey on X11) |
-| Paste / typing | `enigo`, platform paste code | `golang.design/x/clipboard` + platform key events (CGo on macOS) |
+| Paste / typing | `enigo`, platform paste code | `NSPasteboard` and `CGEventPost` through CGo on macOS |
 | Settings | `tauri-plugin-store` (JSON) | Go structs persisted as JSON under `os.UserConfigDir()` |
 | History | SQLite (`rusqlite`) | SQLite (`modernc.org/sqlite`, pure Go) + WAV files |
 | LLM post-processing | OpenAI-compatible HTTP clients | `net/http` OpenAI-compatible client |
@@ -110,6 +110,20 @@ Key-downs and key-ups of the transcribe shortcut drive the activation mode: **to
 On macOS, `golang.design/x/hotkey` hears shortcuts through a keyboard event tap, which consumes the key and needs the **Accessibility** permission (the same one pasting needs). Registration dispatches onto the main thread, which Fyne's loop services; the manager never makes the main thread wait for it. An event tap hears no key presses while any process holds **Secure Event Input** (a focused password field, Terminal's Secure Keyboard Entry), so the app polls `IsSecureEventInputEnabled()` and logs a warning naming the holder when it stays on for 3 s, as Handy does.
 
 **Modifier-only shortcuts** (the right Option key, Fn) are not supported: the library matches a key with modifiers, not a modifier on its own, and the parser refuses them with a clear message. Supporting them needs our own CGEventTap watching `flagsChanged` in `internal/platform`; since the library's tap already needs Accessibility, that adds no new permission. Handy also shadows keyed shortcuts with Carbon hotkeys while Secure Event Input is on, which Carbon is immune to; that is a possible follow-up.
+
+## Output
+
+`internal/output` puts the final transcript into the focused app, in one of three ways (`paste_method`):
+
+- **paste** (default): save the clipboard, write the transcript, wait `paste_delay_ms` (60 ms), send Cmd+V (Ctrl+V elsewhere), wait `paste_delay_after_ms` (60 ms) so the app reads it, then put the clipboard back. With `clipboard_handling: keep` the transcript stays on the clipboard instead. The clipboard is restored even when the keystroke fails, and not at all if something else wrote to it in the meantime (the user copied during the paste), so a newer copy is never overwritten.
+- **direct**: type the transcript; the clipboard is not touched.
+- **none**: copy the transcript to the clipboard and leave it there.
+
+`append_trailing_space` adds a space after the transcript and `auto_submit` presses Return after it (paste and direct only). Deliveries are serialised, so two pastes never restore each other's transcript as the user's clipboard. `goscriber debug paste` runs a delivery from the command line, after a few seconds to switch apps.
+
+On macOS the clipboard is `NSPasteboard` itself rather than `golang.design/x/clipboard`, which only reads text and PNG: saving copies every item in every type it offers (rich text, images, file URLs, app-private types) into Go memory, and restoring writes them all back, or leaves the clipboard empty if it was. The transcript is marked with the [nspasteboard.org](http://nspasteboard.org) transient and auto-generated types while it is there only to be pasted, so clipboard managers leave it out of their history. Key presses go through `CGEventPost` from a private event source with explicit flags, so the Option still held from Option+Space does not turn Cmd+V into another shortcut. The paste key is the one that types "v" with Command held in the active keyboard layout (`UCKeyTranslate`, read on the main thread), so Cmd+V works on Dvorak; direct typing attaches the text to key events with `CGEventKeyboardSetUnicodeString`, 20 UTF-16 units at a time. Posting needs the **Accessibility** permission: without it macOS drops the events silently, so the keyboard checks `AXIsProcessTrusted()` first and fails with `output.ErrNoPermission`. Linux and Windows are issues #35 and #36.
+
+Handy's "reliable paste" (restore only once the target app has read the pasteboard) is a later improvement; Goscriber starts with the delays.
 
 ## The CGo engine
 
