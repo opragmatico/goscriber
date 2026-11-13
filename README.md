@@ -4,7 +4,7 @@
 
 Press a shortcut, speak, release, and your words are pasted into whatever app you are using. Audio never leaves your computer.
 
-Goscriber is a Go re-implementation of [Handy](https://github.com/cjpais/Handy) by CJ Pais. Handy is a Tauri (Rust + React) app that runs many model families through `transcribe.cpp`. Goscriber keeps Handy's dictation behaviour but deliberately narrows the speech stack to **two NVIDIA models running in-process through [NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) via CGo**, and ships a single native binary with a [Fyne](https://fyne.io) UI.
+Goscriber is a Go re-implementation of [Handy](https://github.com/cjpais/Handy) by CJ Pais. Handy is a Tauri (Rust + React) app that runs many model families through `transcribe.cpp`. Goscriber keeps Handy's dictation behaviour but deliberately narrows the speech stack to **three NVIDIA models running in-process through [NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) via CGo**, and ships a single native binary with a [Fyne](https://fyne.io) UI.
 
 > **Status: early development.** `goscriber` starts as a menu bar / tray icon with a placeholder settings window; dictation is not wired up yet. `goscriber transcribe` already transcribes WAV files from the command line. See the [roadmap](#roadmap) and the [issue tracker](https://github.com/opragmatico/goscriber/issues).
 
@@ -14,6 +14,7 @@ Goscriber is a Go re-implementation of [Handy](https://github.com/cjpais/Handy) 
 | --- | --- | --- | --- | --- |
 | **Nemotron Streaming 3.5** (0.6B) | [`nvidia/nemotron-3.5-asr-streaming-0.6b`](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b) | 40+ locales, `auto` detection | Cache-aware streaming RNNT | Default model. NVIDIA publishes the Q8_0 GGUF for NeMo-Speech.cpp. |
 | **Parakeet TDT 0.6B v2** | [`nvidia/parakeet-tdt-0.6b-v2`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2) | English | Offline TDT (batch) | Fast, accurate English with punctuation and timestamps. Only a `.nemo` checkpoint is published; Goscriber converts it to GGUF with NeMo-Speech.cpp's converter and [hosts the result](docs/models/gguf.md) on Hugging Face. The runtime officially supports only its v3 sibling, but v2 [converts and runs with the model card's accuracy](docs/models/parakeet-tdt-0.6b-v2.md). |
+| **Parakeet TDT 0.6B v3** | [`nvidia/parakeet-tdt-0.6b-v3`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) | 25 European languages, detected by the model | Offline TDT (batch) | v2's multilingual sibling, with punctuation and timestamps. NVIDIA publishes the Q8_0 GGUF for NeMo-Speech.cpp. Slightly less accurate than v2 in English; see [the checks](docs/models/parakeet-tdt-0.6b-v3.md). |
 
 Goscriber ships **without any model**. On first run you choose one and download it (about 700 MB at the default Q8_0 quantisation); nothing is bundled or downloaded automatically. From the command line:
 

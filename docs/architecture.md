@@ -2,15 +2,15 @@
 
 Goscriber is a Go re-implementation of [Handy](https://github.com/cjpais/Handy): press a shortcut, speak, and the transcription is pasted into whatever app has focus, fully offline.
 
-Handy is built with Tauri (Rust backend + React UI) and runs a broad catalog of GGUF models through `transcribe.cpp`. Goscriber keeps the same product behaviour, swaps the stack for Go + Fyne, and narrows speech recognition to two NVIDIA models served by [NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) through CGo.
+Handy is built with Tauri (Rust backend + React UI) and runs a broad catalog of GGUF models through `transcribe.cpp`. Goscriber keeps the same product behaviour, swaps the stack for Go + Fyne, and narrows speech recognition to three NVIDIA models served by [NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) through CGo.
 
 | Concern | Handy | Goscriber |
 | --- | --- | --- |
 | UI | Tauri webview + React | Fyne v2 widgets |
 | Tray / overlay | Tauri tray, NSPanel / webview overlay | Fyne `desktop.App` tray menu; borderless Fyne window, made non-activating and always-on-top through native window handles |
-| Speech-to-text | `transcribe-cpp` (many families) | NeMo-Speech.cpp C ABI (`nemo_speech/asr.h`) via CGo, two models only |
+| Speech-to-text | `transcribe-cpp` (many families) | NeMo-Speech.cpp C ABI (`nemo_speech/asr.h`) via CGo, three models only |
 | Engine isolation | `engine_supervisor`: worker child process | Same idea: the `goscriber` binary re-launched as an engine worker |
-| Model download | Catalog + downloader with mirrors | Embedded two-model catalog, resumable HTTP download, SHA-256 verification |
+| Model download | Catalog + downloader with mirrors | Embedded three-model catalog, resumable HTTP download, SHA-256 verification |
 | Voice activity detection | Silero VAD v6 (GGUF) | Silero VAD GGUF loaded by NeMo-Speech.cpp (feature masking, endpointing) |
 | Audio capture | `handy-recorder` (cpal) | `malgo` (miniaudio); NeMo-Speech.cpp resamples 8–96 kHz input itself |
 | Global shortcuts | `handy-keys` (CGEventTap) / `rdev` | `golang.design/x/hotkey` (a CGEventTap on macOS, XGrabKey on X11) |
@@ -23,15 +23,15 @@ Handy is built with Tauri (Rust backend + React UI) and runs a broad catalog of 
 
 ## Models
 
-| | Nemotron Streaming 3.5 | Parakeet TDT 0.6B v2 |
-| --- | --- | --- |
-| Source | [`nvidia/nemotron-3.5-asr-streaming-0.6b`](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b) | [`nvidia/parakeet-tdt-0.6b-v2`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2) |
-| Architecture | Cache-aware FastConformer-RNNT with language-ID prompts | FastConformer-TDT (token-and-duration transducer), full attention |
-| Languages | 40+ locales, or `auto` | English, with punctuation and capitalisation |
-| Decoding | Streaming with interim results | Offline only (NeMo-Speech.cpp rejects streaming for TDT); decoded in chunks of up to about 30 s split at pauses, because some longer inputs come back with stretches missing ([spike](models/parakeet-tdt-0.6b-v2.md#long-audio)) |
-| GGUF | Published by NVIDIA (`*.q8_0.gguf`, ~742 MB) | Converted by us with NeMo-Speech.cpp's `convert_model.py`, then hosted with a pinned revision |
-| License | OpenMDW 1.1 (at the pinned revision) | CC-BY-4.0 |
-| Live text | Interim results in the overlay | Optional chunked decode at pauses while recording |
+| | Nemotron Streaming 3.5 | Parakeet TDT 0.6B v2 | Parakeet TDT 0.6B v3 |
+| --- | --- | --- | --- |
+| Source | [`nvidia/nemotron-3.5-asr-streaming-0.6b`](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b) | [`nvidia/parakeet-tdt-0.6b-v2`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2) | [`nvidia/parakeet-tdt-0.6b-v3`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) |
+| Architecture | Cache-aware FastConformer-RNNT with language-ID prompts | FastConformer-TDT (token-and-duration transducer), full attention | As v2, with an 8,192-token multilingual vocabulary |
+| Languages | 40+ locales, or `auto` | English, with punctuation and capitalisation | 25 European languages, with punctuation and capitalisation. The model detects the language; a chosen language is accepted but not enforced, and the detected one is not reported ([checks](models/parakeet-tdt-0.6b-v3.md)) |
+| Decoding | Streaming with interim results | Offline only (NeMo-Speech.cpp rejects streaming for TDT); decoded in chunks of up to about 30 s split at pauses, because some longer inputs come back with stretches missing ([spike](models/parakeet-tdt-0.6b-v2.md#long-audio)) | As v2 |
+| GGUF | Published by NVIDIA (`*.q8_0.gguf`, ~742 MB) | Converted by us with NeMo-Speech.cpp's `convert_model.py`, then hosted with a pinned revision | Published by NVIDIA (`*.q8_0.gguf`, ~714 MB), without the embedded tokenizer word boosting needs |
+| License | OpenMDW 1.1 (at the pinned revision) | CC-BY-4.0 | CC-BY-4.0 |
+| Live text | Interim results in the overlay | Optional chunked decode at pauses while recording | As v2 |
 
 Handy's own GGUFs (`handy-computer/*-gguf`) target `transcribe.cpp`, not NeMo-Speech.cpp, so Goscriber does not reuse them.
 
@@ -63,7 +63,7 @@ internal/
 │   ├── autounload/        # unloads an idle model, reloads it on next use
 │   └── fake/              # scripted engine for tests and CGo-free builds
 ├── models/
-│   ├── catalog.json       # the two models (+ Silero VAD), pinned revisions and checksums
+│   ├── catalog.json       # the three models (+ Silero VAD), pinned revisions and checksums
 │   ├── catalog.go
 │   ├── download.go        # resumable download and verification of one file
 │   ├── hfcache.go         # finds files already in the Hugging Face cache

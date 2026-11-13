@@ -63,6 +63,34 @@
       ]
     },
     {
+      "id": "parakeet-tdt-0.6b-v3",
+      "kind": "asr",
+      "name": "Parakeet TDT 0.6B v3",
+      "description": "NVIDIA's multilingual model for 25 European languages, with punctuation and timestamps. Detects the language itself and transcribes once you stop speaking.",
+      "repo": "nvidia/parakeet-tdt-0.6b-v3",
+      "revision": "541d1f99c6b0c3cd0b11a95167540bb8edefd82b",
+      "license": "CC-BY-4.0",
+      "license_url": "https://creativecommons.org/licenses/by/4.0/",
+      "languages": [
+        "en", "es", "fr", "de", "bg", "hr", "cs", "da", "nl", "et", "fi", "el", "hu",
+        "it", "lv", "lt", "mt", "pl", "pt", "ro", "sk", "sl", "sv", "ru", "uk"
+      ],
+      "capabilities": {
+        "streaming": false,
+        "language_detection": true,
+        "timestamps": true
+      },
+      "default_quant": "Q8_0",
+      "files": [
+        {
+          "quant": "Q8_0",
+          "filename": "parakeet-tdt-0.6b-v3.q8_0.gguf",
+          "size": 713975456,
+          "sha256": "e3880d0aaaaf2c308ea2c35016b2b895c423eb3fda924c1b463d1c19b7f4d32e"
+        }
+      ]
+    },
+    {
       "id": "silero-vad",
       "kind": "vad",
       "name": "Silero VAD v6.2.0",

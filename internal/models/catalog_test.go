@@ -15,13 +15,13 @@ func TestDefaultCatalog(t *testing.T) {
 	for _, m := range c.Models {
 		ids = append(ids, m.ID)
 	}
-	if want := []string{"nemotron-3.5-asr-streaming-0.6b", "parakeet-tdt-0.6b-v2", "silero-vad"}; !slices.Equal(ids, want) {
+	if want := []string{"nemotron-3.5-asr-streaming-0.6b", "parakeet-tdt-0.6b-v2", "parakeet-tdt-0.6b-v3", "silero-vad"}; !slices.Equal(ids, want) {
 		t.Fatalf("models %v, want %v", ids, want)
 	}
 	if c.DefaultModel != "nemotron-3.5-asr-streaming-0.6b" {
 		t.Errorf("default model %q", c.DefaultModel)
 	}
-	if asr := c.ASR(); len(asr) != 2 || c.VAD().ID != "silero-vad" {
+	if asr := c.ASR(); len(asr) != 3 || c.VAD().ID != "silero-vad" {
 		t.Errorf("ASR %d models, VAD %q", len(asr), c.VAD().ID)
 	}
 
@@ -36,6 +36,17 @@ func TestDefaultCatalog(t *testing.T) {
 	tdt, _ := c.Model("parakeet-tdt-0.6b-v2")
 	if tdt.Capabilities.Streaming || tdt.Capabilities.LanguageDetection || !slices.Equal(tdt.Languages, []string{"en"}) {
 		t.Errorf("Parakeet TDT v2 must be English-only and batch-only: %+v %v", tdt.Capabilities, tdt.Languages)
+	}
+
+	v3, _ := c.Model("parakeet-tdt-0.6b-v3")
+	if v3.Capabilities.Streaming || !v3.Capabilities.LanguageDetection || !v3.Capabilities.Timestamps {
+		t.Errorf("Parakeet TDT v3 must be batch-only and detect the language: %+v", v3.Capabilities)
+	}
+	if len(v3.Languages) != 25 || !slices.Contains(v3.Languages, "en") || !slices.Contains(v3.Languages, "uk") {
+		t.Errorf("Parakeet TDT v3 languages %v, want its 25 European languages", v3.Languages)
+	}
+	if v3.Repo != "nvidia/parakeet-tdt-0.6b-v3" {
+		t.Errorf("Parakeet TDT v3 repo %q, want NVIDIA's own GGUF", v3.Repo)
 	}
 
 	for _, m := range c.ASR() {
@@ -108,6 +119,15 @@ func TestParseRejectsBadCatalogs(t *testing.T) {
 	file := func(v map[string]any, i int) map[string]any {
 		return model(v, i)["files"].([]any)[0].(map[string]any)
 	}
+	vad := func(v map[string]any) map[string]any {
+		for _, m := range v["models"].([]any) {
+			if m := m.(map[string]any); m["kind"] == "vad" {
+				return m
+			}
+		}
+		t.Fatal("the embedded catalog has no VAD")
+		return nil
+	}
 	for _, tt := range []struct {
 		name   string
 		mutate func(v map[string]any)
@@ -121,7 +141,7 @@ func TestParseRejectsBadCatalogs(t *testing.T) {
 		{"zero size", func(v map[string]any) { file(v, 0)["size"] = 0 }},
 		{"path in filename", func(v map[string]any) { file(v, 0)["filename"] = "../evil.gguf" }},
 		{"missing default quant", func(v map[string]any) { model(v, 0)["default_quant"] = "Q4_0" }},
-		{"no VAD", func(v map[string]any) { model(v, 2)["kind"] = "asr" }},
+		{"no VAD", func(v map[string]any) { vad(v)["kind"] = "asr" }},
 		{"default model is the VAD", func(v map[string]any) { v["default_model"] = "silero-vad" }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
