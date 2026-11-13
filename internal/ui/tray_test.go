@@ -278,3 +278,45 @@ func TestTrayStateString(t *testing.T) {
 		}
 	}
 }
+
+func TestTrayAlert(t *testing.T) {
+	h := &fakeHost{}
+	c := calls{}
+	tr := NewTray(h, TrayOptions{Actions: c.actions()})
+	opened := 0
+	tr.SetAlert(&TrayAlert{Label: "⚠ No model downloaded", Action: func() { opened++ }})
+	if h.icon != TrayAttentionIcon() {
+		t.Error("an alert while idle should turn the icon amber")
+	}
+	if got := labels(h.menu); got[0] != "⚠ No model downloaded" || got[1] != "---" {
+		t.Fatalf("menu %v, want the alert first", got)
+	}
+	click(t, h.menu.Items[0])
+	if opened != 1 {
+		t.Error("the alert item should run its action")
+	}
+
+	// Recording and transcribing keep their own icons; idle shows the alert
+	// again.
+	tr.SetState(TrayRecording)
+	if h.icon != TrayIcon(TrayRecording) {
+		t.Error("recording should show the recording icon even with an alert")
+	}
+	tr.SetState(TrayIdle)
+	if h.icon != TrayAttentionIcon() {
+		t.Error("back to idle, the alert icon should return")
+	}
+
+	menus := h.menus
+	tr.SetAlert(nil)
+	if h.icon != TrayIcon(TrayIdle) || hasItem(h.menu, "⚠ No model downloaded") || tr.Alert() != nil {
+		t.Errorf("clearing the alert: icon %v, menu %v", h.icon.Name(), labels(h.menu))
+	}
+	tr.SetAlert(nil)
+	if h.menus != menus+1 {
+		t.Error("clearing an absent alert should not rebuild the menu")
+	}
+	if !bytes.HasPrefix(trayAttentionSVG, []byte("<svg ")) {
+		t.Error("the attention icon is not an SVG")
+	}
+}

@@ -16,6 +16,8 @@ var (
 	trayRecordingSVG []byte
 	//go:embed assets/tray_transcribing.svg
 	trayTranscribingSVG []byte
+	//go:embed assets/tray_attention.svg
+	trayAttentionSVG []byte
 )
 
 var (
@@ -31,6 +33,14 @@ var (
 		TrayTranscribing: theme.NewThemedResource(fyne.NewStaticResource("tray_transcribing.svg", trayTranscribingSVG)),
 	}
 )
+
+// trayAttention replaces the idle icon while a persistent problem, such as a
+// missing permission or model, needs the user. It is amber everywhere, like
+// the red recording icon, so it stands out.
+var trayAttention = fyne.NewStaticResource("tray_attention.svg", trayAttentionSVG)
+
+// TrayAttentionIcon is the idle icon with a problem waiting.
+func TrayAttentionIcon() fyne.Resource { return trayAttention }
 
 // AppIcon is Goscriber's application icon, used for windows.
 func AppIcon() fyne.Resource { return appIcon }

@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,13 +20,19 @@ import (
 // counted and the icon kept.
 type plainApp struct {
 	fyne.App
-	quits int
-	icon  fyne.Resource
+	quits         int
+	icon          fyne.Resource
+	notifications []*fyne.Notification
+	opened        []string
 }
 
-func (a *plainApp) Quit()                   { a.quits++ }
-func (a *plainApp) SetIcon(r fyne.Resource) { a.icon = r }
-func (a *plainApp) Icon() fyne.Resource     { return a.icon }
+func (a *plainApp) Quit() { a.quits++ }
+func (a *plainApp) SendNotification(n *fyne.Notification) {
+	a.notifications = append(a.notifications, n)
+}
+func (a *plainApp) OpenURL(u *url.URL) error { a.opened = append(a.opened, u.String()); return nil }
+func (a *plainApp) SetIcon(r fyne.Resource)  { a.icon = r }
+func (a *plainApp) Icon() fyne.Resource      { return a.icon }
 
 // trayApp adds a fake system tray, so it satisfies desktop.App.
 type trayApp struct {
@@ -44,6 +51,8 @@ type uiQueue chan func()
 
 func (q uiQueue) do(f func()) { q <- f }
 
+// runNext waits for a UI update and runs it, together with any others that
+// arrive right after it (such as a notice raised at startup).
 func (q uiQueue) runNext(t *testing.T) {
 	t.Helper()
 	select {
@@ -52,13 +61,21 @@ func (q uiQueue) runNext(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("no UI update after the settings change")
 	}
+	for {
+		select {
+		case f := <-q:
+			f()
+		case <-time.After(50 * time.Millisecond):
+			return
+		}
+	}
 }
 
 func newTestShell(t *testing.T, a fyne.App, opts Options) (*shell, uiQueue) {
 	t.Helper()
 	rt := start(t, opts)
 	sh := newShell(rt, a, opts)
-	q := make(uiQueue, 8)
+	q := make(uiQueue, 32)
 	sh.do = q.do
 	sh.start()
 	t.Cleanup(sh.stop)

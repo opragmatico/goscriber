@@ -12,12 +12,18 @@ import (
 
 	"github.com/opragmatico/goscriber/internal/config"
 	"github.com/opragmatico/goscriber/internal/hotkey"
+	"github.com/opragmatico/goscriber/internal/notice"
 	"github.com/opragmatico/goscriber/internal/platform"
 	"github.com/opragmatico/goscriber/internal/ui"
 )
 
-// newHotkeyBackend registers global shortcuts with the OS; tests replace it.
-var newHotkeyBackend = hotkey.SystemBackend
+// newHotkeyBackend registers global shortcuts with the OS, and
+// accessibilityTrusted reports the macOS Accessibility permission; tests
+// replace them.
+var (
+	newHotkeyBackend     = hotkey.SystemBackend
+	accessibilityTrusted = platform.AccessibilityTrusted
+)
 
 // How often the shell checks for macOS Secure Event Input, and how long it
 // must stay on before a warning; tests shorten them.
@@ -91,6 +97,13 @@ type shell struct {
 
 	// secureInput reports macOS Secure Event Input; nil skips the check.
 	secureInput func() bool
+	// notices collects background problems and routes them to the user.
+	notices *notice.Hub
+	// trusted reports the macOS Accessibility permission.
+	trusted      func() bool
+	stopNotices  func()
+	hasModel     bool // the last settings named a model
+	modelChecked bool // followModel has run
 
 	unsubscribe func()
 	following   sync.WaitGroup
@@ -109,6 +122,8 @@ func newShell(rt *Runtime, a fyne.App, opts Options) *shell {
 		dictation: pendingDictation{log: rt.Log.Logger},
 		desk:      desk,
 		quit:      make(chan struct{}),
+		notices:   notice.NewHub(notice.Options{Log: rt.Log.Logger}),
+		trusted:   accessibilityTrusted,
 	}
 	if runtime.GOOS == "darwin" {
 		sh.secureInput = platform.SecureInputEnabled
@@ -148,11 +163,16 @@ func (sh *shell) start() {
 		sh.rt.Log.Warn("no system tray on this desktop; opening the settings window instead")
 	}
 
+	sh.routeNotices()
+	sh.followModel(s)
+
 	// The shortcuts register in the background: on macOS that waits for
 	// Fyne's main loop, which starts with the app.
 	sh.hotkeys = hotkey.NewManager(newHotkeyBackend(), hotkey.Options{
-		OnAction: func(a hotkey.Action) { sh.do(func() { sh.dictate(a) }) },
-		Log:      sh.rt.Log.Logger,
+		OnAction:     func(a hotkey.Action) { sh.do(func() { sh.dictate(a) }) },
+		OnError:      sh.shortcutFailed,
+		OnRegistered: sh.shortcutRegistered,
+		Log:          sh.rt.Log.Logger,
 	})
 	sh.hotkeys.Apply(hotkey.ConfigFrom(s))
 
@@ -179,6 +199,9 @@ func (sh *shell) started() {
 	}
 	if sh.secureInput != nil {
 		sh.following.Go(sh.watchSecureInput)
+	}
+	if runtime.GOOS == "darwin" {
+		sh.following.Go(sh.watchAccessibility)
 	}
 }
 
@@ -258,6 +281,9 @@ func (sh *shell) stopFollowing() {
 	}
 	sh.quitOnce.Do(func() {
 		close(sh.quit)
+		if sh.stopNotices != nil {
+			sh.stopNotices()
+		}
 		if sh.hotkeys != nil {
 			sh.hotkeys.Close() // returns at once: on macOS the main loop may be gone
 		}
@@ -275,6 +301,7 @@ func (sh *shell) applySettings(s config.Settings) {
 		sh.tray.SetDebug(sh.debugMode(s))
 	}
 	sh.hotkeys.Apply(hotkey.ConfigFrom(s))
+	sh.followModel(s)
 }
 
 func (sh *shell) debugMode(s config.Settings) bool { return s.DebugMode || sh.opts.Debug }

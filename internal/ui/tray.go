@@ -92,6 +92,13 @@ type TrayOptions struct {
 	Debug bool
 }
 
+// TrayAlert is a problem the tray shows until it is fixed: the idle icon
+// turns amber and the menu starts with Label, which runs Action.
+type TrayAlert struct {
+	Label  string
+	Action func()
+}
+
 // Tray owns the menu bar / system tray icon and its menu. Its methods must be
 // called on the Fyne main thread; other goroutines go through fyne.Do.
 type Tray struct {
@@ -100,6 +107,7 @@ type Tray struct {
 	state   TrayState
 	model   string
 	debug   bool
+	alert   *TrayAlert
 	menu    *fyne.Menu
 }
 
@@ -108,8 +116,29 @@ func NewTray(host TrayHost, opts TrayOptions) *Tray {
 	t := &Tray{host: host, actions: opts.Actions, model: opts.Model, debug: opts.Debug}
 	// Fyne starts the tray with the first menu, so the menu goes first.
 	t.refreshMenu()
-	t.host.SetSystemTrayIcon(TrayIcon(t.state))
+	t.host.SetSystemTrayIcon(t.icon())
 	return t
+}
+
+// icon is the icon for the current state: amber while idle with an alert.
+func (t *Tray) icon() fyne.Resource {
+	if t.state == TrayIdle && t.alert != nil {
+		return TrayAttentionIcon()
+	}
+	return TrayIcon(t.state)
+}
+
+// Alert is the alert shown, or nil.
+func (t *Tray) Alert() *TrayAlert { return t.alert }
+
+// SetAlert shows a problem in the tray, or clears it with nil.
+func (t *Tray) SetAlert(a *TrayAlert) {
+	if a == nil && t.alert == nil {
+		return
+	}
+	t.alert = a
+	t.host.SetSystemTrayIcon(t.icon())
+	t.refreshMenu()
 }
 
 // State is the state the icon shows.
@@ -124,7 +153,7 @@ func (t *Tray) SetState(s TrayState) {
 		return
 	}
 	t.state = s
-	t.host.SetSystemTrayIcon(TrayIcon(s))
+	t.host.SetSystemTrayIcon(t.icon())
 	t.refreshMenu()
 }
 
@@ -184,14 +213,18 @@ func (t *Tray) buildMenu() *fyne.Menu {
 	quit.IsQuit = true
 	quit.Shortcut = &desktop.CustomShortcut{KeyName: fyne.KeyQ, Modifier: fyne.KeyModifierShortcutDefault}
 
-	items := []*fyne.MenuItem{
+	var items []*fyne.MenuItem
+	if t.alert != nil {
+		items = append(items, fyne.NewMenuItem(t.alert.Label, t.alert.Action), fyne.NewMenuItemSeparator())
+	}
+	items = append(items,
 		dictate,
 		cancel,
 		fyne.NewMenuItemSeparator(),
 		model,
 		fyne.NewMenuItemSeparator(),
 		settings,
-	}
+	)
 	if t.debug {
 		items = append(items, t.debugMenu())
 	}

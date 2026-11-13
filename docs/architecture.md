@@ -47,7 +47,7 @@ internal/
 ├── instance/              # single-instance socket server
 ├── config/                # paths and settings (JSON, defaults, migrations)
 ├── logging/               # slog setup, file sink, in-memory ring for the log viewer
-├── notice/                # one place to report background errors to the UI
+├── notice/                # one place to report background errors: hub, de-duplication, fan-out
 ├── audio/
 │   ├── capture.go         # Recorder: start / stop, Frames, levels, pre-roll, device fallback
 │   ├── backend_malgo.go   # malgo (miniaudio) devices; cgo builds only
@@ -110,6 +110,29 @@ Key-downs and key-ups of the transcribe shortcut drive the activation mode: **to
 On macOS, `golang.design/x/hotkey` hears shortcuts through a keyboard event tap, which consumes the key and needs the **Accessibility** permission (the same one pasting needs). Registration dispatches onto the main thread, which Fyne's loop services; the manager never makes the main thread wait for it. An event tap hears no key presses while any process holds **Secure Event Input** (a focused password field, Terminal's Secure Keyboard Entry), so the app polls `IsSecureEventInputEnabled()` and logs a warning naming the holder when it stays on for 3 s, as Handy does.
 
 **Modifier-only shortcuts** (the right Option key, Fn) are not supported: the library matches a key with modifiers, not a modifier on its own, and the parser refuses them with a clear message. Supporting them needs our own CGEventTap watching `flagsChanged` in `internal/platform`; since the library's tap already needs Accessibility, that adds no new permission. Handy also shadows keyed shortcuts with Carbon hotkeys while Secure Event Input is on, which Carbon is immune to; that is a possible follow-up.
+
+## Notices
+
+Background problems reach the user through one place, `internal/notice`. A `Notice` has a code, a level (error: nothing came out or Goscriber cannot work; warning: a result, but not the one set up), a source, a message ready to show, and optionally an action (a button that fixes it). Callers publish it to the app's `Hub`, which keeps one active notice per code:
+
+- **De-duplication**: publishing a code that is already active updates its message and raises nothing, so unplugging the microphone mid-recording, which makes the recorder report several things in a row, shows one notice.
+- **Persistent problems** (no model downloaded, a missing permission) stay active until resolved: the model gets selected, the permission is granted, the shortcut registers. **Transient ones** (a failed paste, an engine crash) also end on their own after two minutes without a repeat, so the same failure much later is news again.
+- **Fan-out never blocks**: each subscriber has its own queue.
+
+The app shell routes each new notice once: an OS notification (`fyne.App.SendNotification`) when no window is open, otherwise a banner across the top of the settings window, which also shows the active notice whenever the window opens, with the action and a Dismiss button. Persistent problems also turn the idle tray icon amber, and a missing permission adds a menu item that opens System Settings at Accessibility. While that permission is missing the shell checks every two seconds whether it was granted, then clears the notice and registers the shortcut again.
+
+| Code | Level | Persistent | Action | Raised by |
+| --- | --- | --- | --- | --- |
+| `no_model` | error | yes | Download a model → Models page | the shell, at launch and when the selected model goes away |
+| `permission_missing` | error | yes | Open System Settings | a shortcut or paste refused for lack of Accessibility |
+| `shortcut_failed` | error | no | Open Settings | a shortcut that cannot register for another reason |
+| `paste_failed` | error | no | | a failed delivery (`notice.ForPasteError`) |
+| `microphone_unavailable` | error | no | | the recorder's notifications |
+| `model_corrupt` | error | no | Download again → Models page | a model that fails to load or verify |
+| `engine_crashed` | error | no | | the engine worker (#28) |
+| `engine_cpu_fallback` | warning | no | | the engine worker (#28) |
+
+The last five have constructors and tests but no producer until the coordinator (#20) and the engine worker (#28) exist.
 
 ## Output
 
