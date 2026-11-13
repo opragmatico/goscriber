@@ -16,6 +16,7 @@ type Page int
 const (
 	PageGeneral Page = iota
 	PageModels
+	PagePermissions
 	PageAbout
 )
 
@@ -41,10 +42,27 @@ type SettingsWindow struct {
 	banner  *Banner
 	visible bool
 
-	win        fyne.Window
-	tabs       *container.AppTabs
-	modelLabel *widget.Label
+	win         fyne.Window
+	tabs        *container.AppTabs
+	modelLabel  *widget.Label
+	permissions []PermissionRow
+	permBox     *fyne.Container
 }
+
+// PermissionRow is one permission on the Permissions page.
+type PermissionRow struct {
+	Title  string
+	Why    string
+	Status string // such as "granted" or "denied"
+	// OK is true when the permission lets Goscriber work.
+	OK bool
+	// OnOpen opens System Settings at the permission; nil shows no button.
+	OnOpen func()
+}
+
+// PermissionsNone is what the Permissions page says on a system without
+// permissions to grant.
+const PermissionsNone = "Goscriber needs no special permissions on this system."
 
 // Banner is a problem shown across the top of the settings window, with a
 // button that fixes it and one that dismisses it.
@@ -154,6 +172,7 @@ func (s *SettingsWindow) create() {
 			path(s.info.SettingsFile),
 		)),
 		container.NewTabItem("Models", page("Models", s.modelLabel)),
+		container.NewTabItem("Permissions", page("Permissions", s.permissionsView())),
 		container.NewTabItem("About", page("Goscriber",
 			paragraph("Offline push-to-talk speech-to-text."),
 			paragraph("Version "+s.info.Version),
@@ -169,6 +188,44 @@ func (s *SettingsWindow) create() {
 	s.win.Resize(fyne.NewSize(640, 420))
 	s.win.CenterOnScreen()
 	s.win.SetCloseIntercept(s.closeRequested)
+}
+
+// Permissions are the rows of the Permissions page.
+func (s *SettingsWindow) Permissions() []PermissionRow { return s.permissions }
+
+// SetPermissions shows rows on the Permissions page; none says no
+// permission is needed.
+func (s *SettingsWindow) SetPermissions(rows []PermissionRow) {
+	s.permissions = rows
+	if s.permBox != nil {
+		s.permBox.Objects = s.permissionRows()
+		s.permBox.Refresh()
+	}
+}
+
+func (s *SettingsWindow) permissionsView() fyne.CanvasObject {
+	s.permBox = container.NewVBox(s.permissionRows()...)
+	return s.permBox
+}
+
+func (s *SettingsWindow) permissionRows() []fyne.CanvasObject {
+	if len(s.permissions) == 0 {
+		return []fyne.CanvasObject{paragraph(PermissionsNone)}
+	}
+	var out []fyne.CanvasObject
+	for _, r := range s.permissions {
+		mark := "✓"
+		if !r.OK {
+			mark = "✗"
+		}
+		head := widget.NewLabelWithStyle(mark+" "+r.Title+": "+r.Status, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+		row := container.NewVBox(head, paragraph(r.Why))
+		if r.OnOpen != nil {
+			row.Add(container.NewHBox(widget.NewButton("Open System Settings", r.OnOpen)))
+		}
+		out = append(out, row)
+	}
+	return out
 }
 
 // closeRequested runs when the user closes the window.

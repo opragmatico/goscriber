@@ -123,6 +123,10 @@ The start cue plays to its end, plus the device's buffers, before the microphone
 
 With `mute_while_recording` on, the system's default output is muted through CoreAudio after the start cue and put back as it was when the recording stops, is cancelled, fails to start or the app quits; a device that was already muted stays muted, and the device muted is the one restored even if the default changes meanwhile. Outputs without a mute switch (some HDMI and Bluetooth devices) are left alone with a warning. Muting is macOS-only for now. `goscriber debug sounds [--device D] [--volume V]` plays both cues.
 
+## Permissions
+
+On macOS Goscriber needs the **Microphone** permission to record and **Accessibility** for the shortcut's event tap and for posting the paste; **Input Monitoring** is not needed, because the shortcut library's tap is an active one, which Accessibility covers. At launch it asks once for each that is missing (macOS's own microphone prompt; the Accessibility dialog, remembered in Fyne's preferences so it is not shown at every launch), raises a notice with a button to System Settings for each that is refused, and shows them all on the settings window's Permissions page. Start refuses to record without the microphone permission, since macOS would deliver silence. `internal/platform` has the status API (`StatusOf`, `Request`, `PermissionStates`) for onboarding (#31). Permissions attach to the app's code signature, which matters during development: [permissions.md](permissions.md).
+
 ## Shortcuts
 
 `internal/hotkey` registers two global shortcuts from the settings: **transcribe** (`option+space` on macOS, `ctrl+space` on Windows, `ctrl+alt+space` on Linux) and **cancel** (`escape`). A shortcut is modifiers and one key, written as settings store it (`ctrl+shift+d`, `cmd+f5`); a plain letter, digit or Space is refused because a global shortcut swallows its key in every app, and only the cancel shortcut may be a plain Escape. The cancel shortcut is registered only while dictation is recording, so Escape works normally the rest of the time.
@@ -141,12 +145,13 @@ Background problems reach the user through one place, `internal/notice`. A `Noti
 - **Persistent problems** (no model downloaded, a missing permission) stay active until resolved: the model gets selected, the permission is granted, the shortcut registers. **Transient ones** (a failed paste, an engine crash) also end on their own after two minutes without a repeat, so the same failure much later is news again.
 - **Fan-out never blocks**: each subscriber has its own queue.
 
-The app shell routes each new notice once: an OS notification (`fyne.App.SendNotification`) when no window is open, otherwise a banner across the top of the settings window, which also shows the active notice whenever the window opens, with the action and a Dismiss button. Persistent problems also turn the idle tray icon amber, and a missing permission adds a menu item that opens System Settings at Accessibility. While that permission is missing the shell checks every two seconds whether it was granted, then clears the notice and registers the shortcut again.
+The app shell routes each new notice once: an OS notification (`fyne.App.SendNotification`) when no window is open, otherwise a banner across the top of the settings window, which also shows the active notice whenever the window opens, with the action and a Dismiss button. Persistent problems also turn the idle tray icon amber, and a missing permission adds a menu item that opens System Settings at its pane. While a permission is missing the shell checks every two seconds whether it was granted, then clears the notice (and, for Accessibility, registers the shortcut again). See [permissions.md](permissions.md).
 
 | Code | Level | Persistent | Action | Raised by |
 | --- | --- | --- | --- | --- |
 | `no_model` | error | yes | Download a model → Models page | the shell, at launch and when the selected model goes away; the coordinator, raised afresh on every Start without a model |
-| `permission_missing` | error | yes | Open System Settings | a shortcut or paste refused for lack of Accessibility |
+| `permission_missing` | error | yes | Open System Settings | a shortcut or paste refused for lack of Accessibility, and the launch check |
+| `microphone_denied` | error | yes | Open System Settings | the launch check, and a Start refused for lack of the microphone permission |
 | `shortcut_failed` | error | no | Open Settings | a shortcut that cannot register for another reason |
 | `paste_failed` | error | no | | a failed delivery (`notice.ForPasteError`) |
 | `microphone_unavailable` | error | no | | the recorder's notifications, and a microphone that will not open at Start |

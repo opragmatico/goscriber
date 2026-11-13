@@ -1,7 +1,6 @@
 package app
 
 import (
-	"net/url"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -9,16 +8,13 @@ import (
 	"github.com/opragmatico/goscriber/internal/config"
 	"github.com/opragmatico/goscriber/internal/hotkey"
 	"github.com/opragmatico/goscriber/internal/notice"
+	"github.com/opragmatico/goscriber/internal/platform"
 	"github.com/opragmatico/goscriber/internal/ui"
 )
 
-// accessibilitySettings opens System Settings at Privacy & Security →
-// Accessibility.
-const accessibilitySettings = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-
-// accessibilityPoll is how often the shell checks whether a missing
-// Accessibility permission has been granted; tests shorten it.
-var accessibilityPoll = 2 * time.Second
+// permissionsPoll is how often the shell checks whether a missing
+// permission has been granted; tests shorten it.
+var permissionsPoll = 2 * time.Second
 
 // routeNotices shows every notice where the user will see it, once: an OS
 // notification when no window is open, a banner in the settings window
@@ -91,11 +87,9 @@ func (sh *shell) noticeAction(id notice.ActionID) {
 	case notice.ActionOpenModels:
 		sh.settings.Show(ui.PageModels)
 	case notice.ActionOpenAccessibility:
-		if u, err := url.Parse(accessibilitySettings); err == nil {
-			if err := sh.app.OpenURL(u); err != nil {
-				sh.rt.Log.Warn("could not open System Settings", "err", err)
-			}
-		}
+		sh.openURL(platform.PermAccessibility.SettingsURL())
+	case notice.ActionOpenMicrophone:
+		sh.openURL(platform.PermMicrophone.SettingsURL())
 	default:
 		sh.settings.Show(ui.PageGeneral)
 	}
@@ -129,22 +123,17 @@ func (sh *shell) shortcutRegistered(p hotkey.Purpose) {
 	sh.notices.Resolve(notice.CodePermissionMissing)
 }
 
-// watchAccessibility notices when a missing Accessibility permission is
-// granted, clears the notice and registers the shortcut again, until the app
-// stops.
-func (sh *shell) watchAccessibility() {
-	tick := time.NewTicker(accessibilityPoll)
+// watchPermissions follows the permissions until the app stops: see
+// checkPermissions.
+func (sh *shell) watchPermissions() {
+	tick := time.NewTicker(permissionsPoll)
 	defer tick.Stop()
 	for {
 		select {
 		case <-sh.quit:
 			return
 		case <-tick.C:
-			if sh.notices.Count(notice.CodePermissionMissing) > 0 && sh.trusted() {
-				sh.rt.Log.Info("the Accessibility permission was granted; registering the shortcut again")
-				sh.notices.Resolve(notice.CodePermissionMissing)
-				sh.hotkeys.Apply(hotkey.ConfigFrom(sh.rt.Settings.Get()))
-			}
+			sh.checkPermissions()
 		}
 	}
 }

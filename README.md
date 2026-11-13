@@ -89,7 +89,7 @@ make deps                 # download Go modules and build the NeMo-Speech.cpp SD
 make build                # build ./goscriber, with the engine once make deps has run
 make run ARGS=--version   # build ./goscriber and run it
 make run ARGS=--debug     # run the app with debug logging and the tray's Debug menu
-make app                  # macOS: assemble dist/Goscriber.app (unsigned development bundle)
+make app                  # macOS: assemble dist/Goscriber.app (ad-hoc signed development bundle)
 make test                 # go test -race ./..., then the CGo-free check
 make test-engine          # test the NeMo-Speech.cpp binding against the SDK
 make engine-version       # print the SDK's version through CGo
@@ -108,6 +108,10 @@ Only `internal/app`, `internal/ui`, `internal/platform` and `internal/engine/nem
 The NeMo-Speech.cpp binding also needs the SDK from `make deps` and, until it is wired into the app, the `nemo` build tag, so CGo builds keep working without the SDK; `make test-engine` passes it, and `make build` does too once the SDK is there, which gives `goscriber transcribe` its engine. A `goscriber` built without it says so. Its tests that need a real model run when `GOSCRIBER_TEST_MODELS` names a directory holding the model's GGUF. See [docs/engine-sdk.md](docs/engine-sdk.md#model-tests).
 
 Shared test fixtures live in [`testdata/`](testdata/README.md).
+
+### macOS permissions
+
+Dictation needs the Microphone and Accessibility permissions. Run from a terminal (`make run`), the terminal app asks for and holds them. Run as `make app && open dist/Goscriber.app`, Goscriber asks for itself. macOS ties the grant to the bundle's signature, which the default ad-hoc signing changes on every build; `make app CODESIGN_IDENTITY="Apple Development: …"` keeps it across rebuilds. See [docs/permissions.md](docs/permissions.md).
 
 ### Model files
 

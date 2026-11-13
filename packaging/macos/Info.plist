@@ -27,5 +27,9 @@
 	<true/>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<!-- Shown in macOS's microphone prompt. Without it macOS ends a
+	     bundled app that opens the microphone. -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Goscriber records your voice while you hold the shortcut and transcribes it on this Mac. Audio never leaves your computer.</string>
 </dict>
 </plist>
