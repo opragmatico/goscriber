@@ -108,8 +108,33 @@ type Acquirer interface {
 	Acquire(ctx context.Context) (release func(), err error)
 }
 
-// Options configure a Coordinator. Every field but Stages and Log is
-// required.
+// Feedback plays the start and stop cues and mutes other audio while
+// recording. *audio.Feedback implements it.
+type Feedback interface {
+	// Start runs just before capture starts, and reports whether a cue
+	// played.
+	Start(o audio.FeedbackOptions) (played bool)
+	// Stop runs once capture has stopped, also after a cancel or a failed
+	// start, so other audio is always put back.
+	Stop(o audio.FeedbackOptions, cancelled bool)
+}
+
+// preRollDropper is a recorder whose always-on microphone keeps audio from
+// before Start, such as *audio.Recorder.
+type preRollDropper interface{ DropPreRoll() }
+
+// FeedbackOptions are the feedback the settings ask for.
+func FeedbackOptions(s config.Settings) audio.FeedbackOptions {
+	return audio.FeedbackOptions{
+		Sounds: s.AudioFeedback,
+		Volume: s.AudioFeedbackVolume,
+		Device: s.OutputDevice,
+		Mute:   s.MuteWhileRecording,
+	}
+}
+
+// Options configure a Coordinator. Every field but Feedback, Stages and Log
+// is required.
 type Options struct {
 	Recorder Recorder
 	// Engine transcribes. The coordinator loads the model into it on the
@@ -124,6 +149,9 @@ type Options struct {
 	// Settings returns the current settings. Each session reads them once,
 	// when it starts.
 	Settings func() config.Settings
+	// Feedback, if set, plays the cues and mutes other audio around each
+	// recording.
+	Feedback Feedback
 	Stages   Stages
 	// Log receives a line per session and, at debug level, the timing of
 	// every stage. Nil means slog's default logger.
@@ -146,6 +174,7 @@ type Coordinator struct {
 	out      Output
 	notices  Notices
 	settings func() config.Settings
+	feedback Feedback
 	stages   Stages
 	log      *slog.Logger
 
@@ -202,6 +231,7 @@ func New(opts Options) *Coordinator {
 		out:      opts.Output,
 		notices:  opts.Notices,
 		settings: opts.Settings,
+		feedback: opts.Feedback,
 		stages:   opts.Stages,
 		log:      log,
 		actions:  newSerial(),
@@ -309,6 +339,7 @@ func (c *Coordinator) Close() {
 	if s != nil {
 		if st == StateRecording {
 			c.rec.Stop()
+			c.feedbackStop(s.settings, true)
 		}
 		s.end()
 		c.log.Info("dictation discarded: Goscriber is quitting", "session", s.id, "state", st.String())
@@ -343,7 +374,15 @@ func (c *Coordinator) start() {
 		c.refuse(ActionStart, "no model is ready")
 		return
 	}
+	// The start cue plays to its end before capture starts, so the
+	// microphone does not record it.
+	if c.feedback != nil && c.feedback.Start(FeedbackOptions(settings)) {
+		if d, ok := c.rec.(preRollDropper); ok {
+			d.DropPreRoll()
+		}
+	}
 	if err := c.rec.Start(); err != nil {
+		c.feedbackStop(settings, true)
 		c.notices.Publish(notice.MicrophoneUnavailable(fmt.Sprintf("The microphone could not be opened: %v.", err)))
 		c.refuse(ActionStart, "the microphone could not be opened")
 		return
@@ -393,6 +432,7 @@ func (c *Coordinator) stop() {
 
 	samples := c.rec.Stop()
 	rate := c.rec.SampleRate()
+	c.feedbackStop(s.settings, false)
 	s.timings.recording = time.Since(s.started)
 	c.stageDone(s, "recording", s.timings.recording)
 
@@ -435,9 +475,18 @@ func (c *Coordinator) cancel() {
 	c.mu.Unlock()
 	if st == StateRecording {
 		c.rec.Stop()
+		c.feedbackStop(s.settings, true)
 	}
 	s.end()
 	c.log.Info("dictation cancelled", "session", s.id, "state", st.String())
+}
+
+// feedbackStop puts other audio back and, unless cancelled, plays the stop
+// cue.
+func (c *Coordinator) feedbackStop(s config.Settings, cancelled bool) {
+	if c.feedback != nil {
+		c.feedback.Stop(FeedbackOptions(s), cancelled)
+	}
 }
 
 // prepare loads the session's model if the engine does not hold it, and

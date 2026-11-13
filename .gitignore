@@ -18,6 +18,7 @@ go.work.sum
 *.nemo
 *.wav
 !testdata/**/*.wav
+!internal/audio/sounds/*.wav
 
 # Packaging
 *.app/

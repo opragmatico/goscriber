@@ -20,6 +20,8 @@ func TestDebugUsage(t *testing.T) {
 		{[]string{"debug", "record", "--seconds", "0", "a.wav"}, 2, "--seconds must be"},
 		{[]string{"debug", "record", "--seconds", "x", "a.wav"}, 2, "invalid value"},
 		{[]string{"debug", "devices", "extra"}, 2, "unexpected argument"},
+		{[]string{"debug", "sounds", "extra"}, 2, "unexpected argument"},
+		{[]string{"debug", "sounds", "--volume", "2"}, 2, "--volume must be"},
 	} {
 		code, stdout, stderr := runWith(t, Env{}, tt.args...)
 		if code != tt.code || stdout != "" || !strings.Contains(stderr, tt.want) {

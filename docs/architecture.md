@@ -54,7 +54,8 @@ internal/
 │   ├── ring.go            # lock-free ring buffer the audio callback writes into
 │   ├── level.go           # RMS / peak levels for the overlay
 │   ├── devices.go         # input / output device enumeration
-│   ├── feedback.go        # start / stop sounds
+│   ├── feedback.go        # start / stop cues, mute while recording
+│   ├── sounds/            # the cues, made by gen_sounds.go
 │   └── wav.go             # WAV read / write for history and the CLI
 ├── engine/
 │   ├── engine.go          # Engine / Stream interfaces, Result, Word, options
@@ -113,6 +114,14 @@ The window is a borderless Fyne window (`desktop.Driver.CreateSplashWindow`, ask
 - **Elsewhere** the window is centred on the screen and Fyne's always-on-top request applies; Linux and Windows positioning come with #35 and #36.
 
 The shell feeds it from the coordinator's events on the main thread: the state, the interim text, and the microphone level at most about 40 times a second (the recorder measures 30), with at most one level update and one clock tick waiting for the main thread at a time. If adjusting the GLFW window turns out not to be enough (it may still activate the app on some macOS versions), the fallback the issue foresaw is to draw this one overlay as a native `NSPanel` through CGo.
+
+## Sounds
+
+With `audio_feedback` on (off by default, as in Handy), a short rising chime plays when recording starts and a falling one when it stops (`internal/audio/feedback.go`). Both were made for Goscriber by `internal/audio/gen_sounds.go` (`go generate ./internal/audio`) and are embedded as WAV files, so they carry no third-party licence. They play through miniaudio on `output_device` (a device that is not connected falls back to the default) at `audio_feedback_volume`.
+
+The start cue plays to its end, plus the device's buffers, before the microphone starts, so it is not transcribed; an always-on microphone's pre-roll, which heard it, is dropped (`Recorder.DropPreRoll`). The stop cue plays once the microphone has stopped, without holding up the transcription. A cancel plays nothing.
+
+With `mute_while_recording` on, the system's default output is muted through CoreAudio after the start cue and put back as it was when the recording stops, is cancelled, fails to start or the app quits; a device that was already muted stays muted, and the device muted is the one restored even if the default changes meanwhile. Outputs without a mute switch (some HDMI and Bluetooth devices) are left alone with a warning. Muting is macOS-only for now. `goscriber debug sounds [--device D] [--volume V]` plays both cues.
 
 ## Shortcuts
 

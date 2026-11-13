@@ -85,13 +85,10 @@ func (b *malgoBackend) open(id string, onData func([]float32), onStop func()) (i
 	var pin runtime.Pinner
 	defer pin.Unpin()
 	if id != "" {
-		raw, err := hex.DecodeString(id)
-		var devID malgo.DeviceID
-		if err != nil || len(raw) > len(devID) {
-			return nil, fmt.Errorf("audio: bad device ID %q", id)
+		p, err := deviceID(id)
+		if err != nil {
+			return nil, err
 		}
-		p := new(malgo.DeviceID)
-		copy(p[:], raw)
 		pin.Pin(p)
 		cfg.Capture.DeviceID = unsafe.Pointer(p)
 	}
@@ -109,6 +106,55 @@ func (b *malgoBackend) open(id string, onData func([]float32), onStop func()) (i
 		return nil, err
 	}
 	return &malgoStream{dev: dev}, nil
+}
+
+func (b *malgoBackend) openOutput(id string, rate int, fill func([]float32)) (outputStream, error) {
+	ctx, err := b.context()
+	if err != nil {
+		return nil, err
+	}
+	cfg := malgo.DefaultDeviceConfig(malgo.Playback)
+	cfg.Playback.Format = malgo.FormatF32
+	cfg.Playback.Channels = 1 // miniaudio spreads it over the device's channels
+	cfg.SampleRate = uint32(rate)
+	cfg.PeriodSizeInMilliseconds = periodMillis
+	cfg.Alsa.NoMMap = 1
+
+	var pin runtime.Pinner
+	defer pin.Unpin()
+	if id != "" {
+		p, err := deviceID(id)
+		if err != nil {
+			return nil, err
+		}
+		pin.Pin(p)
+		cfg.Playback.DeviceID = unsafe.Pointer(p)
+	}
+
+	dev, err := malgo.InitDevice(ctx.Context, cfg, malgo.DeviceCallbacks{
+		// Runs on miniaudio's thread.
+		Data: func(out, _ []byte, frames uint32) {
+			if n := int(frames); n > 0 && len(out) >= 4*n {
+				fill(unsafe.Slice((*float32)(unsafe.Pointer(&out[0])), n))
+			}
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &malgoStream{dev: dev}, nil
+}
+
+// deviceID decodes a Device.ID for miniaudio.
+func deviceID(id string) (*malgo.DeviceID, error) {
+	raw, err := hex.DecodeString(id)
+	var devID malgo.DeviceID
+	if err != nil || len(raw) > len(devID) {
+		return nil, fmt.Errorf("audio: bad device ID %q", id)
+	}
+	p := new(malgo.DeviceID)
+	copy(p[:], raw)
+	return p, nil
 }
 
 type malgoStream struct {

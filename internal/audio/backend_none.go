@@ -12,3 +12,7 @@ func (noBackend) devices(deviceKind) ([]Device, error) { return nil, ErrNoBacken
 func (noBackend) open(string, func([]float32), func()) (inputStream, error) {
 	return nil, ErrNoBackend
 }
+
+func (noBackend) openOutput(string, int, func([]float32)) (outputStream, error) {
+	return nil, ErrNoBackend
+}

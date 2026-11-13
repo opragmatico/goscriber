@@ -16,9 +16,10 @@ type fakeBackend struct {
 	mu      sync.Mutex
 	devs    []Device
 	listErr error
-	rates   map[string]int // by ID; "" is the default device
-	openErr map[string]error
+	rates   map[string]int   // by ID; "" is the default device
+	openErr map[string]error // by ID; "out:" and an ID for playback
 	inputs  []*fakeInput
+	outputs []*fakeOutputStream
 }
 
 type fakeInput struct {

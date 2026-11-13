@@ -60,3 +60,25 @@ func TestMalgoBadDeviceID(t *testing.T) {
 		t.Error("opened a device with a malformed ID")
 	}
 }
+
+// miniaudio's null playback device takes samples in real time, so the malgo
+// playback path runs without hardware.
+func TestMalgoNullBackendPlays(t *testing.T) {
+	be := &malgoBackend{backends: []malgo.Backend{nullBackend}}
+	devs, err := be.devices(playbackDevices)
+	if err != nil || len(devs) == 0 {
+		t.Skipf("no null playback device: %v", err)
+	}
+	p := &Player{be: be}
+	cue := StartCue()
+	start := time.Now()
+	if err := p.Play(t.Context(), cue, devs[0].Name, 1); err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took < cue.Duration() || took > cue.Duration()+time.Second {
+		t.Errorf("a %v cue took %v to play", cue.Duration(), took)
+	}
+	if _, err := be.openOutput("zz", 16000, func([]float32) {}); err == nil {
+		t.Error("opened a device with a malformed ID")
+	}
+}
