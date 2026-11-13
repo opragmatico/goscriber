@@ -13,7 +13,7 @@ Handy is built with Tauri (Rust backend + React UI) and runs a broad catalog of 
 | Model download | Catalog + downloader with mirrors | Embedded two-model catalog, resumable HTTP download, SHA-256 verification |
 | Voice activity detection | Silero VAD v6 (GGUF) | Silero VAD GGUF loaded by NeMo-Speech.cpp (feature masking, endpointing) |
 | Audio capture | `handy-recorder` (cpal) | `malgo` (miniaudio); NeMo-Speech.cpp resamples 8–96 kHz input itself |
-| Global shortcuts | `handy-keys` (CGEventTap) / `rdev` | `golang.design/x/hotkey`; native event tap where needed |
+| Global shortcuts | `handy-keys` (CGEventTap) / `rdev` | `golang.design/x/hotkey` (a CGEventTap on macOS, XGrabKey on X11) |
 | Paste / typing | `enigo`, platform paste code | `golang.design/x/clipboard` + platform key events (CGo on macOS) |
 | Settings | `tauri-plugin-store` (JSON) | Go structs persisted as JSON under `os.UserConfigDir()` |
 | History | SQLite (`rusqlite`) | SQLite (`modernc.org/sqlite`, pure Go) + WAV files |
@@ -101,6 +101,16 @@ third_party/
 - **macOS**: with a tray the app is an accessory app with no Dock icon. The bundle's Info.plist sets `LSUIElement`, and the app also sets the activation policy at startup, because GLFW makes every app a regular one and plain `go run` builds have no Info.plist. Without a tray the Dock icon stays as the way back in.
 - **Shutdown**: Quit, SIGINT and SIGTERM all end Fyne's main loop; the app then stops following settings and closes the log.
 
+## Shortcuts
+
+`internal/hotkey` registers two global shortcuts from the settings: **transcribe** (`option+space` on macOS, `ctrl+space` on Windows, `ctrl+alt+space` on Linux) and **cancel** (`escape`). A shortcut is modifiers and one key, written as settings store it (`ctrl+shift+d`, `cmd+f5`); a plain letter, digit or Space is refused because a global shortcut swallows its key in every app, and only the cancel shortcut may be a plain Escape. The cancel shortcut is registered only while dictation is recording, so Escape works normally the rest of the time.
+
+Key-downs and key-ups of the transcribe shortcut drive the activation mode: **toggle** (press to start, press to stop), **push-to-talk** (hold to record) and **hold-or-toggle**, the default (a press starts recording; released after `hold_threshold_ms`, 300 ms, it was push-to-talk and stops, released sooner it was a tap and recording goes on until the next press). The manager owns the registrations on one goroutine and re-registers when the settings change, without a restart; a shortcut that cannot be registered is logged and handed to `OnError`, and the next settings change retries it.
+
+On macOS, `golang.design/x/hotkey` hears shortcuts through a keyboard event tap, which consumes the key and needs the **Accessibility** permission (the same one pasting needs). Registration dispatches onto the main thread, which Fyne's loop services; the manager never makes the main thread wait for it. An event tap hears no key presses while any process holds **Secure Event Input** (a focused password field, Terminal's Secure Keyboard Entry), so the app polls `IsSecureEventInputEnabled()` and logs a warning naming the holder when it stays on for 3 s, as Handy does.
+
+**Modifier-only shortcuts** (the right Option key, Fn) are not supported: the library matches a key with modifiers, not a modifier on its own, and the parser refuses them with a clear message. Supporting them needs our own CGEventTap watching `flagsChanged` in `internal/platform`; since the library's tap already needs Accessibility, that adds no new permission. Handy also shadows keyed shortcuts with Carbon hotkeys while Secure Event Input is on, which Carbon is immune to; that is a possible follow-up.
+
 ## The CGo engine
 
 NeMo-Speech.cpp exposes a stable C ABI: opaque handles, size-prefixed POD config structs, explicit ownership and status codes. `internal/engine/nemo` wraps it:
@@ -146,7 +156,7 @@ The `Coordinator` owns a single state machine: `idle → recording → transcrib
 
 - **Fyne main thread**: all widgets, tray, overlay. Other goroutines update the UI only through `fyne.Do` / `fyne.DoAndWait`.
 - **Audio callback (miniaudio thread)**: copies frames into a ring buffer and returns; never blocks or calls into the engine.
-- **Hotkey goroutine**: turns key-down / key-up events into coordinator actions.
+- **Hotkey goroutine**: owns the shortcut registrations and turns key-down / key-up events into coordinator actions, which reach the coordinator through `fyne.Do`.
 - **Engine goroutine**: one goroutine owns the engine client and serialises load, unload and recognition; a streaming session pumps audio from the ring buffer to `Push` / `Next`.
 - **Background goroutines**: model downloads, history I/O, LLM requests.
 
