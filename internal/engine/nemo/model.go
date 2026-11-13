@@ -58,6 +58,40 @@ func inspectModel(op, path string) (modelMeta, error) {
 	}, nil
 }
 
+// The library's VAD thresholds, which a zero onset or offset keeps.
+const (
+	defaultVADOnset  = 0.5
+	defaultVADOffset = 0.3
+)
+
+// checkVAD rejects VAD thresholds outside (0, 1), and an offset above the
+// onset once the library's defaults stand in for zeros, which would invert
+// the hysteresis. The library accepts both without complaint.
+func checkVAD(op string, spec engine.LoadSpec) error {
+	for _, v := range []float32{spec.VADOnset, spec.VADOffset} {
+		if v < 0 || v >= 1 {
+			return &engine.Error{
+				Op: op, Kind: engine.ErrInvalidArgument,
+				Detail: fmt.Sprintf("VAD onset %g and offset %g must be between 0 and 1", spec.VADOnset, spec.VADOffset),
+			}
+		}
+	}
+	onset, offset := spec.VADOnset, spec.VADOffset
+	if onset == 0 {
+		onset = defaultVADOnset
+	}
+	if offset == 0 {
+		offset = defaultVADOffset
+	}
+	if offset > onset {
+		return &engine.Error{
+			Op: op, Kind: engine.ErrInvalidArgument,
+			Detail: fmt.Sprintf("VAD offset %g is above the onset %g", offset, onset),
+		}
+	}
+	return nil
+}
+
 // checkFile fails with engine.ErrModelNotFound when path does not exist.
 func checkFile(op, path string) error {
 	fi, err := os.Stat(path)

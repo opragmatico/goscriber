@@ -45,7 +45,8 @@ Flags:
 
 Nothing is downloaded: fetch the model first with 'goscriber models pull'.
 The voice activity detector is used when it is downloaded and enabled in
-settings.
+settings, with the settings' onset and offset. NeMo-Speech.cpp applies it to
+streamed audio (--stream) only.
 `
 
 // streamChunk is how much audio --stream pushes at a time, like a microphone
@@ -124,6 +125,8 @@ type transcriber struct {
 	path  string // the model's GGUF
 	vad   string // the VAD's GGUF, or "" to run without
 	opts  engine.Options
+	// The VAD's speech thresholds, from the settings.
+	vadOnset, vadOffset float32
 
 	eng      engine.Engine
 	info     engine.ModelInfo
@@ -206,6 +209,7 @@ func newTranscriber(env Env, fl transcribeFlags) (*transcriber, error) {
 	if vad := cat.VAD(); settings.VADEnabled && vad != nil {
 		if p, err := m.Path(vad.ID, ""); err == nil {
 			t.vad = p
+			t.vadOnset, t.vadOffset = float32(settings.VADOnset), float32(settings.VADOffset)
 		} else {
 			fmt.Fprintf(env.Stderr, "goscriber: transcribing without voice activity detection: %v\n", err)
 		}
@@ -267,10 +271,12 @@ func (t *transcriber) backend() string {
 func (t *transcriber) load(ctx context.Context) error {
 	start := time.Now()
 	info, err := t.eng.Load(ctx, engine.LoadSpec{
-		ID:      t.model.ID,
-		Path:    t.path,
-		VADPath: t.vad,
-		CPU:     t.fl.cpu,
+		ID:        t.model.ID,
+		Path:      t.path,
+		VADPath:   t.vad,
+		VADOnset:  t.vadOnset,
+		VADOffset: t.vadOffset,
+		CPU:       t.fl.cpu,
 	})
 	if err != nil {
 		return err

@@ -74,3 +74,38 @@ func TestNormalizeResetsInvalidValues(t *testing.T) {
 		t.Errorf("invalid values were not reset: %+v", s)
 	}
 }
+
+func TestNormalizeSpeechDetection(t *testing.T) {
+	def := Defaults()
+	if def.VADOnset != 0.5 || def.VADOffset != 0.3 || def.MinRecordingMS != 250 || def.SilenceThresholdDB != -60 {
+		t.Errorf("speech detection defaults %v %v %v %v", def.VADOnset, def.VADOffset, def.MinRecordingMS, def.SilenceThresholdDB)
+	}
+	for _, tc := range []struct {
+		name       string
+		edit       func(*Settings)
+		fixed      []string
+		onset, off float64
+	}{
+		{"valid", func(s *Settings) { s.VADOnset, s.VADOffset = 0.7, 0.7 }, nil, 0.7, 0.7},
+		{"onset out of range", func(s *Settings) { s.VADOnset = 1 }, []string{"vad_onset"}, 0.5, 0.3},
+		{"offset above onset", func(s *Settings) { s.VADOnset, s.VADOffset = 0.6, 0.8 }, []string{"vad_offset"}, 0.6, 0.3},
+		{"offset reset stays under a low onset", func(s *Settings) { s.VADOnset, s.VADOffset = 0.2, 0 }, []string{"vad_offset"}, 0.2, 0.2},
+		{"thresholds off", func(s *Settings) { s.MinRecordingMS, s.SilenceThresholdDB = 0, -100 }, nil, 0.5, 0.3},
+		{
+			"thresholds out of range", func(s *Settings) { s.MinRecordingMS, s.SilenceThresholdDB = -1, -10 },
+			[]string{"min_recording_ms", "silence_threshold_db"},
+			0.5, 0.3,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := def.Clone()
+			tc.edit(&s)
+			if fixed := s.normalize(def); !slices.Equal(fixed, tc.fixed) {
+				t.Errorf("fixed = %v, want %v", fixed, tc.fixed)
+			}
+			if s.VADOnset != tc.onset || s.VADOffset != tc.off {
+				t.Errorf("onset %v offset %v, want %v %v", s.VADOnset, s.VADOffset, tc.onset, tc.off)
+			}
+		})
+	}
+}

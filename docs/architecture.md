@@ -131,11 +131,14 @@ A `GGML_ASSERT`, a GPU driver fault or an `abort()` inside C++ takes the whole G
 shortcut down ─► Capture.Start()
                  │  float32 frames ─► level meter ─► overlay
                  │                └► [streaming] Stream.Push ─► Next ─► interim text ─► overlay
-shortcut up   ─► Capture.Stop()
+shortcut up   ─► Capture.Stop() ─► speech gate (too short / too quiet ─► no speech)
                  └► [streaming] Stream.Finish ─► drain finals
                     [batch]     Recognize(whole clip, or the last chunk when chunking)
+                    └► empty transcript ─► no speech
                     └► text cleanup ─► [LLM post-processing] ─► [hook] ─► paste / type ─► history
 ```
+
+**No speech** is an outcome, not an error: nothing is pasted and the user sees no notice, only a debug log line. Three checks lead to it (`internal/pipeline/speech.go`): a recording shorter than `min_recording_ms` (250 ms), one whose loudest 33 ms window is under `silence_threshold_db` (−60 dBFS) — both skip the model — and an empty or whitespace-only final transcript. The Silero VAD masks silence on the streaming path only; NeMo-Speech.cpp v0.3.0 does not apply it to whole-clip decodes ([details](engine-sdk.md#voice-activity-detection)).
 
 The `Coordinator` owns a single state machine: `idle → recording → transcribing → post_processing → outputting → idle`. A cancel from any state returns to `idle` and discards the session. Only one session is active at a time.
 

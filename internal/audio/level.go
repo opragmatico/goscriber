@@ -61,3 +61,24 @@ func Measure(p []float32) Level {
 	m.add(p, func(l Level) { lv = l })
 	return lv
 }
+
+// Loudest returns the Level of the loudest 1/LevelRate window of p at rate
+// Hz: the RMS of that window and the largest absolute sample of the whole
+// buffer. A buffer shorter than one window is measured whole. Unlike the
+// RMS of the whole buffer, it does not fall as silence around a short word
+// grows, so it tells a near-silent recording from a quiet one with speech.
+func Loudest(p []float32, rate int) Level {
+	m := newMeter(rate)
+	if len(p) < m.window {
+		return Measure(p)
+	}
+	var lv Level
+	m.add(p, func(l Level) {
+		lv.RMS = max(lv.RMS, l.RMS)
+		lv.Peak = max(lv.Peak, l.Peak)
+	})
+	if m.n > 0 { // the partial last window still counts for the peak
+		lv.Peak = max(lv.Peak, m.peak)
+	}
+	return lv
+}

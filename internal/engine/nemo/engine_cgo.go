@@ -120,6 +120,9 @@ func (e *Engine) load(ctx context.Context, spec engine.LoadSpec, rightContext in
 		return engine.ModelInfo{}, err
 	}
 	if spec.VADPath != "" {
+		if err := checkVAD(op, spec); err != nil {
+			return engine.ModelInfo{}, err
+		}
 		if err := checkFile(op, spec.VADPath); err != nil {
 			return engine.ModelInfo{}, err
 		}
@@ -157,7 +160,9 @@ func (e *Engine) load(ctx context.Context, spec engine.LoadSpec, rightContext in
 		vad := cnew[C.nemo_speech_asr_vad_config](&mem)
 		vad.size = C.sizeof_nemo_speech_asr_vad_config
 		vad.model_path = mem.str(spec.VADPath)
-		vad.enable_masking = true // the library loads the VAD only to use it
+		vad.enable_masking = true            // the library loads the VAD only to use it
+		vad.onset = C.float(spec.VADOnset)   // 0 keeps the library's default
+		vad.offset = C.float(spec.VADOffset) // likewise
 		cfg.vad = vad
 	}
 

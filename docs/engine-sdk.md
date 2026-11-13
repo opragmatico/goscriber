@@ -139,6 +139,16 @@ The latency presets set `rnnt_right_context`, the encoder frames (80 ms each) th
 
 Measured on an M4 Max, best of three, streaming `testdata/audio/jfk.wav` in 20 ms chunks; every preset transcribes it without error.
 
+## Voice activity detection
+
+`LoadSpec.VADPath` loads the Silero VAD GGUF through `nemo_speech_asr_vad_config` with `enable_masking` on, and `VADOnset` / `VADOffset` set its thresholds (0 keeps the library's 0.5 and 0.3; the binding rejects values outside (0, 1) and an offset above the onset). Masking replaces the log-mel frames of non-speech with a fill value before the encoder, so the model never sees the silence. What v0.3.0 does with it:
+
+- **Only streams are masked.** The VAD is wired into the streaming runners (`CacheStreamRunner`, `BufferedStreamRunner`), not into `OfflineRunner`, which serves `recognize_f32` for every offline decode: Parakeet TDT always, and Nemotron when it is decoded whole. The recognizer still loads the VAD (its startup line says `vad=on`), but whole-clip transcripts are identical with and without it.
+- **Thresholds reach the library.** Streaming the fixture with an onset of 0.999 drops most of the first sentence; 0.5 and 0.95 leave it intact.
+- **Stationary noise is already harmless.** Five seconds of pink, brown or white noise (−40 to −50 dBFS), a 120 Hz hum or sparse clicks transcribe to nothing on both models, offline and streamed, with or without the VAD. Speech-like noise (reversed speech) does produce words, VAD or not.
+
+So the app does not rely on the VAD alone to keep silence out: `internal/pipeline` drops recordings that are too short or too quiet before the model, and treats an empty transcript as no speech.
+
 ## Model tests
 
 Most of the binding's tests need only the SDK. The ones that need a real model run when `GOSCRIBER_TEST_MODELS` names a directory holding NVIDIA's GGUF, and skip otherwise:
@@ -151,7 +161,7 @@ Most of the binding's tests need only the SDK. The ones that need a real model r
 GOSCRIBER_TEST_MODELS=~/Library/Caches/goscriber/models make test-engine
 ```
 
-They transcribe `testdata/audio/jfk.wav` on Metal and on the CPU and keep the word error rate under 10%, check that transcripts keep the model's punctuation and casing, run recognitions concurrently and across `Unload`, and load, recognize and unload the model 100 times (`GOSCRIBER_TEST_CYCLES` changes the count; `-short` skips it). The streaming tests feed the fixture in 20 ms chunks, check that interims arrive and that the final matches the offline result, measure each latency preset, and hold Finish → final under 300 ms on Apple Silicon (without `-race`, whose timings mean nothing). A Parakeet TDT GGUF (`parakeet-tdt-0.6b-v2.q8_0.gguf`, or NVIDIA's `parakeet-tdt-0.6b-v3.q8_0.gguf`) in the same directory adds the check that offline models refuse to stream.
+They transcribe `testdata/audio/jfk.wav` on Metal and on the CPU and keep the word error rate under 10%, check that transcripts keep the model's punctuation and casing, run recognitions concurrently and across `Unload`, and load, recognize and unload the model 100 times (`GOSCRIBER_TEST_CYCLES` changes the count; `-short` skips it). The streaming tests feed the fixture in 20 ms chunks, check that interims arrive and that the final matches the offline result, measure each latency preset, and hold Finish → final under 300 ms on Apple Silicon (without `-race`, whose timings mean nothing). A Parakeet TDT GGUF (`parakeet-tdt-0.6b-v2.q8_0.gguf`, or NVIDIA's `parakeet-tdt-0.6b-v3.q8_0.gguf`) in the same directory adds the check that offline models refuse to stream. With `silero-vad-v6.2.0.gguf` there too, the VAD tests load each speech model with the VAD and check that 4 s of silence on both sides of the fixture leave its transcript unchanged, and that 5 s of pink noise at −45 dBFS transcribes to nothing, offline and (for Nemotron) streamed. `goscriber models pull` puts all three files in `~/Library/Caches/goscriber/models`.
 
 That last test watches the process's memory. `Unload` destroys the recognizer and then asks the C allocator to hand its free memory back to the OS (`malloc_zone_pressure_relief` on macOS, `malloc_trim` with glibc). On macOS the test measures the physical footprint, which is what the system charges the process and Activity Monitor shows; RSS still drifts up by about a hundred megabytes over the cycles because the malloc zones keep clean, reusable pages mapped, which the system reclaims when it needs them. Elsewhere it measures RSS.
 

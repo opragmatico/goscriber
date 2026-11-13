@@ -46,7 +46,10 @@ func TestTranscribe(t *testing.T) {
 	if len(loads) != 1 {
 		t.Fatalf("%d loads", len(loads))
 	}
-	want := engine.LoadSpec{ID: "asr", Path: filepath.Join(s.dir, "asr.q8_0.gguf"), VADPath: filepath.Join(s.dir, "vad.gguf")}
+	want := engine.LoadSpec{
+		ID: "asr", Path: filepath.Join(s.dir, "asr.q8_0.gguf"),
+		VADPath: filepath.Join(s.dir, "vad.gguf"), VADOnset: 0.5, VADOffset: 0.3,
+	}
 	if loads[0] != want {
 		t.Errorf("load spec %+v, want %+v", loads[0], want)
 	}
@@ -288,5 +291,21 @@ func TestJoinFinals(t *testing.T) {
 	})
 	if r.Text != "one. two." || len(r.Words) != 2 || r.AudioProcessed != 2*time.Second || len(r.Languages) != 2 || r.Confidence != 0.5 {
 		t.Errorf("joined %+v", r)
+	}
+}
+
+func TestTranscribeVADThresholdsFromSettings(t *testing.T) {
+	s := newTranscribe(t, fake.Script{})
+	paths, _ := config.ResolvePaths()
+	settings := config.Defaults()
+	settings.VADOnset, settings.VADOffset = 0.6, 0.45
+	if err := config.Save(paths.SettingsFile(), settings); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, stderr := runWith(t, s.env, "transcribe", fixture); code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, stderr)
+	}
+	if spec := s.eng.Loads()[0]; spec.VADPath == "" || spec.VADOnset != 0.6 || spec.VADOffset != 0.45 {
+		t.Errorf("load spec %+v: want the VAD with onset 0.6 and offset 0.45", spec)
 	}
 }

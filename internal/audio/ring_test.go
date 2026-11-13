@@ -165,3 +165,32 @@ func TestMeasureAndDBFS(t *testing.T) {
 		}
 	}
 }
+
+func TestLoudest(t *testing.T) {
+	const rate = 16000 // 533-sample windows
+	// One short tone in five seconds of silence: the whole clip's RMS is low,
+	// but its loudest window is the tone's.
+	clip := make([]float32, 5*rate)
+	copy(clip[2*rate:], sine(rate, rate/5, 0.2, 440))
+	if whole := Measure(clip); DBFS(whole.RMS) > -25 {
+		t.Fatalf("whole-clip RMS %.1f dBFS; the test needs it low", DBFS(whole.RMS))
+	}
+	l := Loudest(clip, rate)
+	if math.Abs(float64(l.RMS)-0.2/math.Sqrt2) > 0.01 || math.Abs(float64(l.Peak)-0.2) > 0.01 {
+		t.Errorf("Loudest %+v, want the tone's RMS 0.141 and peak 0.2", l)
+	}
+	if l := Loudest(make([]float32, rate), rate); l.RMS != 0 || l.Peak != 0 {
+		t.Errorf("silence: %+v", l)
+	}
+	// Shorter than a window: measured whole.
+	short := []float32{0.5, -0.5, 0.5, -1}
+	if got := Loudest(short, rate); got != Measure(short) {
+		t.Errorf("short buffer: %+v, want %+v", got, Measure(short))
+	}
+	// A click in the partial last window counts for the peak only.
+	tail := make([]float32, 600)
+	tail[599] = 0.9
+	if got := Loudest(tail, rate); got.Peak != 0.9 || got.RMS != 0 {
+		t.Errorf("click in the last partial window: %+v", got)
+	}
+}
