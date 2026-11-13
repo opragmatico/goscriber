@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/test"
 
 	"github.com/opragmatico/goscriber/internal/audio"
@@ -282,5 +283,89 @@ func TestNoEngineSaysWhy(t *testing.T) {
 	n := notice.TranscriptionFailed(err)
 	if n.Message != "Nothing was pasted: the speech engine failed to load (unavailable: this build of Goscriber has no speech engine; build it with 'make deps build'). Try again." {
 		t.Errorf("notice %q", n.Message)
+	}
+}
+
+// The overlay shows while recording and transcribing, gets the levels, and
+// its cancel button cancels.
+func TestOverlayFollowsDictation(t *testing.T) {
+	home := isolate(t)
+	testShortcuts.reset()
+	writeSettings(t, home, `{"schema_version": 1, "selected_model": "m", "overlay_style": "minimal"}`)
+	a := &trayApp{plainApp: plainApp{App: test.NewTempApp(t)}}
+	sh, q := newTestShell(t, a, Options{})
+	rec := sh.svc.recorder.(*testRecorder)
+
+	sh.dictate(pipeline.ActionStart)
+	q.waitUI(t, "the overlay", func() bool { return sh.overlay.State() == ui.OverlayRecording && sh.overlay.Visible() })
+	rec.levels <- audio.Level{RMS: 1}
+	q.waitUI(t, "the level", func() bool { return slices.Contains(sh.overlay.Levels(), 1) })
+	q.waitUI(t, "a clock tick", func() bool { return sh.overlay.Elapsed() == "0:00" })
+
+	test.Tap(cancelButton(t, sh.overlay))
+	q.waitUI(t, "the overlay to hide", func() bool { return !sh.overlay.Visible() && sh.overlay.State() == ui.OverlayHidden })
+	if sh.dictation.State() != pipeline.StateIdle {
+		t.Errorf("state %v after the overlay's cancel", sh.dictation.State())
+	}
+
+	// The none style keeps it off screen; the setting applies at once.
+	if err := sh.rt.Settings.Update(func(s *config.Settings) { s.OverlayStyle = config.OverlayNone }); err != nil {
+		t.Fatal(err)
+	}
+	q.runNext(t)
+	sh.dictate(pipeline.ActionStart)
+	q.waitUI(t, "recording", func() bool { return sh.recording })
+	if sh.overlay.Visible() {
+		t.Error("the none style should keep the overlay hidden")
+	}
+}
+
+// cancelButton finds the overlay's cancel button among its window's objects.
+func cancelButton(t *testing.T, o *ui.Overlay) fyne.Tappable {
+	t.Helper()
+	var found fyne.Tappable
+	var walk func(fyne.CanvasObject)
+	walk = func(obj fyne.CanvasObject) {
+		if tp, ok := obj.(fyne.Tappable); ok && found == nil {
+			found = tp
+		}
+		if c, ok := obj.(*fyne.Container); ok {
+			for _, child := range c.Objects {
+				walk(child)
+			}
+		}
+		if w, ok := obj.(fyne.Widget); ok && found == nil {
+			for _, child := range test.WidgetRenderer(w).Objects() {
+				walk(child)
+			}
+		}
+	}
+	walk(o.Window().Content())
+	if found == nil {
+		t.Fatal("no cancel button in the overlay")
+	}
+	return found
+}
+
+func TestLatestKeepsOnlyTheNewest(t *testing.T) {
+	q := make(uiQueue, 8)
+	l := &latest{do: q.do}
+	var got []int
+	for i := range 5 {
+		l.post(func() { got = append(got, i) })
+	}
+	if len(q) != 1 {
+		t.Fatalf("%d updates queued, want 1", len(q))
+	}
+	(<-q)()
+	if !slices.Equal(got, []int{4}) {
+		t.Errorf("ran %v, want only the newest", got)
+	}
+
+	// Within the interval after a run, updates are dropped.
+	l.every = time.Hour
+	l.post(func() { got = append(got, 5) })
+	if len(q) != 0 {
+		t.Errorf("%d updates queued within the interval", len(q))
 	}
 }
