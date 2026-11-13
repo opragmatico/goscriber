@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -19,6 +20,18 @@ func newNoticeShell(t *testing.T, settings string) (*shell, *trayApp, uiQueue) {
 	t.Helper()
 	testShortcuts.reset()
 	return newNoticeShellKeepingShortcuts(t, settings)
+}
+
+// defaultTalk is how the shortcut backend names the default transcribe
+// shortcut, which differs by OS: "option+space" on macOS, "ctrl+alt+space"
+// on Linux, "ctrl+space" on Windows.
+func defaultTalk(t *testing.T) string {
+	t.Helper()
+	b, err := hotkey.Parse(config.Defaults().TranscribeShortcut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b.String()
 }
 
 func newNoticeShellKeepingShortcuts(t *testing.T, settings string) (*shell, *trayApp, uiQueue) {
@@ -105,7 +118,8 @@ func TestAccessibilityNotice(t *testing.T) {
 	testShortcuts.reset()
 	testShortcuts.setFail(errors.New("grant Accessibility"))
 	sh, a, q := newNoticeShellKeepingShortcuts(t, `{"schema_version": 1, "selected_model": "m"}`)
-	testShortcuts.waitLog(t, "!option+space")
+	talk := defaultTalk(t)
+	testShortcuts.waitLog(t, "!"+talk)
 	q.runNext(t)
 	alert := sh.tray.Alert()
 	if alert == nil || alert.Label != "⚠ Permission needed…" {
@@ -116,12 +130,18 @@ func TestAccessibilityNotice(t *testing.T) {
 		t.Errorf("opened %v, want System Settings at Accessibility", a.opened)
 	}
 
-	sh.started()
+	// started watches the permission on macOS only, the one OS that has it.
+	// The watcher works the same everywhere, so elsewhere start it directly.
+	if runtime.GOOS == "darwin" {
+		sh.started()
+	} else {
+		sh.following.Go(sh.watchAccessibility)
+	}
 	testShortcuts.setFail(nil)
 	mu.Lock()
 	trusted = true
 	mu.Unlock()
-	testShortcuts.waitLog(t, "!option+space", "+option+space")
+	testShortcuts.waitLog(t, "!"+talk, "+"+talk)
 	q.runNext(t)
 	if sh.tray.Alert() != nil || sh.notices.Count(notice.CodePermissionMissing) != 0 {
 		t.Error("granting the permission should end the notice")
@@ -133,7 +153,7 @@ func TestAccessibilityNotice(t *testing.T) {
 func TestShortcutNotice(t *testing.T) {
 	sh, a, q := newNoticeShell(t, `{"schema_version": 1, "selected_model": "m"}`)
 	sh.trusted = func() bool { return true }
-	testShortcuts.waitLog(t, "+option+space")
+	testShortcuts.waitLog(t, "+"+defaultTalk(t))
 
 	sh.shortcutFailed(&hotkey.RegisterError{Purpose: hotkey.PurposeTranscribe, Shortcut: "f5", Err: errors.New("taken")})
 	q.runNext(t)
