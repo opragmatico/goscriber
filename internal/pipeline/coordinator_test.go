@@ -202,6 +202,7 @@ type rigOptions struct {
 	stages   Stages
 	settings func(*config.Settings)
 	feedback Feedback
+	micOK    func() bool
 }
 
 func newRig(t *testing.T, o rigOptions) *rig {
@@ -225,15 +226,16 @@ func newRig(t *testing.T, o rigOptions) *rig {
 		o.settings(&settings)
 	}
 	r.c = New(Options{
-		Recorder: r.rec,
-		Engine:   eng,
-		Models:   r.models,
-		Output:   r.out,
-		Notices:  r.notices,
-		Settings: func() config.Settings { return settings },
-		Feedback: o.feedback,
-		Stages:   o.stages,
-		Log:      slog.New(slog.DiscardHandler),
+		Recorder:         r.rec,
+		Engine:           eng,
+		Models:           r.models,
+		Output:           r.out,
+		Notices:          r.notices,
+		Settings:         func() config.Settings { return settings },
+		Feedback:         o.feedback,
+		MicrophoneAccess: o.micOK,
+		Stages:           o.stages,
+		Log:              slog.New(slog.DiscardHandler),
 	})
 	r.events = watch(t, r.c)
 	t.Cleanup(r.c.Close)
@@ -948,5 +950,22 @@ func TestNoFeedbackWithoutAModel(t *testing.T) {
 	r.events.waitRefused(t, ActionStart)
 	if got := tr.get(); len(got) != 0 {
 		t.Errorf("trace %v: no cue without a model", got)
+	}
+}
+
+func TestNoMicrophonePermissionRecordsNothing(t *testing.T) {
+	asked := 0
+	tr := &tracer{}
+	r := newRig(t, rigOptions{feedback: &fakeFeedback{trace: tr}, micOK: func() bool { asked++; return false }})
+	r.c.Start()
+	r.events.waitRefused(t, ActionStart)
+	if codes := r.notices.codes(); !slices.Equal(codes, []notice.Code{notice.CodeMicrophoneDenied}) {
+		t.Errorf("notices %v", codes)
+	}
+	if starts, _, _ := r.rec.counts(); starts != 0 || asked != 1 {
+		t.Errorf("%d recordings, asked %d times", starts, asked)
+	}
+	if got := tr.get(); len(got) != 0 {
+		t.Errorf("trace %v: no cue without the microphone", got)
 	}
 }

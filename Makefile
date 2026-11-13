@@ -45,19 +45,32 @@ build: ## Build ./goscriber with the version stamped in (and the engine, after m
 run: build ## Build and run; pass flags with ARGS="--version"
 	./$(BIN) $(ARGS)
 
-# A development bundle for macOS: unsigned, no icon, no NeMo-Speech.cpp
-# libraries yet (the release bundle comes with issue #34). Its Info.plist sets
-# LSUIElement, so the app lives in the menu bar with no Dock icon.
+# A development bundle for macOS: no icon, no NeMo-Speech.cpp libraries yet
+# (the release bundle comes with issue #34). Its Info.plist sets LSUIElement,
+# so the app lives in the menu bar with no Dock icon, and carries the
+# microphone usage description macOS shows in its prompt.
+#
+# macOS attaches the microphone and Accessibility permissions to the bundle's
+# code signature. The default ad-hoc signature ("-") changes with every
+# build, so macOS asks again after each rebuild; sign with a stable identity
+# to keep them, such as CODESIGN_IDENTITY="Apple Development: Your Name".
+# See docs/permissions.md.
 APP_BUNDLE := dist/Goscriber.app
+CODESIGN_IDENTITY ?= -
 # CFBundleVersion only takes dotted numbers: a vX.Y[.Z] tag loses its "v" and
 # any "-commits-gHASH" suffix, and anything else (an untagged build) is 0.0.0.
 BUNDLE_VERSION := $(shell echo '$(VERSION)' | sed -nE 's/^v?([0-9]+\.[0-9]+(\.[0-9]+)?)(-.*)?$$/\1/p')
 
-app: build ## Assemble dist/Goscriber.app (macOS development bundle)
+app: build ## Assemble and sign dist/Goscriber.app (macOS development bundle; CODESIGN_IDENTITY=-)
 	rm -rf $(APP_BUNDLE)
 	mkdir -p $(APP_BUNDLE)/Contents/MacOS
 	sed 's/@VERSION@/$(or $(BUNDLE_VERSION),0.0.0)/g' packaging/macos/Info.plist > $(APP_BUNDLE)/Contents/Info.plist
 	cp $(BIN) $(APP_BUNDLE)/Contents/MacOS/goscriber
+	@if command -v codesign >/dev/null 2>&1; then \
+		codesign --force --sign '$(CODESIGN_IDENTITY)' $(APP_BUNDLE); \
+	else \
+		echo "codesign not found: $(APP_BUNDLE) is not signed"; \
+	fi
 
 test: test-race test-nocgo ## Run every test with the race detector, then the CGo-free check
 

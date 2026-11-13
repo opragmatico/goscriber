@@ -19,6 +19,7 @@ const (
 	CodeNoModel               Code = "no_model"
 	CodeMicrophoneUnavailable Code = "microphone_unavailable"
 	CodePermissionMissing     Code = "permission_missing"
+	CodeMicrophoneDenied      Code = "microphone_denied"
 	CodeModelCorrupt          Code = "model_corrupt"
 	CodeEngineCrashed         Code = "engine_crashed"
 	CodeEngineCPUFallback     Code = "engine_cpu_fallback"
@@ -70,6 +71,8 @@ const (
 	// ActionOpenAccessibility opens the Accessibility pane of System
 	// Settings.
 	ActionOpenAccessibility ActionID = "open_accessibility"
+	// ActionOpenMicrophone opens the Microphone pane of System Settings.
+	ActionOpenMicrophone ActionID = "open_microphone"
 	// ActionOpenSettings opens the settings window.
 	ActionOpenSettings ActionID = "open_settings"
 )
@@ -104,6 +107,7 @@ var kinds = map[Code]struct {
 	CodeNoModel:               {"No model downloaded", LevelError, SourceModel, true},
 	CodeMicrophoneUnavailable: {"Microphone unavailable", LevelError, SourceAudio, false},
 	CodePermissionMissing:     {"Permission needed", LevelError, SourcePermissions, true},
+	CodeMicrophoneDenied:      {"Microphone access needed", LevelError, SourcePermissions, true},
 	CodeModelCorrupt:          {"Model file damaged", LevelError, SourceModel, false},
 	CodeEngineCrashed:         {"Speech engine crashed", LevelError, SourceEngine, false},
 	CodeEngineCPUFallback:     {"Transcribing on the CPU", LevelWarning, SourceEngine, false},
@@ -152,6 +156,15 @@ func AccessibilityMissing() Notice {
 	n := New(CodePermissionMissing, "Goscriber needs the Accessibility permission to hear the shortcut and paste. "+
 		"Turn it on for Goscriber in System Settings → Privacy & Security → Accessibility.")
 	n.Action = Action{Label: "Open System Settings", ID: ActionOpenAccessibility}
+	return n
+}
+
+// MicrophoneDenied is the notice for the macOS microphone permission
+// refused, or restricted by a device policy, so recordings would be silent.
+func MicrophoneDenied() Notice {
+	n := New(CodeMicrophoneDenied, "Goscriber needs the microphone to hear you. "+
+		"Turn it on for Goscriber in System Settings → Privacy & Security → Microphone.")
+	n.Action = Action{Label: "Open System Settings", ID: ActionOpenMicrophone}
 	return n
 }
 

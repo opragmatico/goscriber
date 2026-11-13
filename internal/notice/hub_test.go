@@ -291,12 +291,15 @@ func TestNoticeKinds(t *testing.T) {
 	for _, code := range []Code{
 		CodeNoModel, CodeMicrophoneUnavailable, CodePermissionMissing, CodeModelCorrupt,
 		CodeEngineCrashed, CodeEngineCPUFallback, CodePasteFailed, CodeShortcutFailed,
-		CodeTranscriptionFailed,
+		CodeTranscriptionFailed, CodeMicrophoneDenied,
 	} {
 		n := New(code, "m")
 		if n.Title() == string(code) || n.Source == "" {
 			t.Errorf("%s has no title or source: %+v", code, n)
 		}
+	}
+	if a := MicrophoneDenied().Action; a.ID != ActionOpenMicrophone || !MicrophoneDenied().Persistent() {
+		t.Errorf("microphone notice: action %+v, persistent %v", a, MicrophoneDenied().Persistent())
 	}
 	if !NoModel().Persistent() || !AccessibilityMissing().Persistent() || New(CodePasteFailed, "").Persistent() {
 		t.Error("persistence: only a missing model or permission persists")

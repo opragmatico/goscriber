@@ -70,7 +70,7 @@ func TestSettingsWindowPages(t *testing.T) {
 	for _, it := range s.tabs.Items {
 		titles = append(titles, it.Text)
 	}
-	if !slices.Equal(titles, []string{"General", "Models", "About"}) {
+	if !slices.Equal(titles, []string{"General", "Models", "Permissions", "About"}) {
 		t.Errorf("pages = %v", titles)
 	}
 	if !strings.Contains(pageText(s, PageGeneral), info.SettingsFile) {
@@ -167,5 +167,45 @@ func TestSettingsWindowBanner(t *testing.T) {
 	s.closeRequested()
 	if s.Visible() {
 		t.Error("visible after closing")
+	}
+}
+
+func TestSettingsPermissionsPage(t *testing.T) {
+	a := test.NewTempApp(t)
+	s := NewSettingsWindow(a, info, nil)
+	s.Show(PagePermissions)
+	if got := pageText(s, PagePermissions); !strings.Contains(got, PermissionsNone) {
+		t.Errorf("page %q, want the no-permissions note", got)
+	}
+	opened := 0
+	s.SetPermissions([]PermissionRow{
+		{Title: "Microphone", Why: "To hear you.", Status: "denied", OnOpen: func() { opened++ }},
+		{Title: "Accessibility", Why: "To paste.", Status: "granted", OK: true},
+	})
+	got := pageText(s, PagePermissions)
+	for _, want := range []string{"✗ Microphone: denied", "To hear you.", "✓ Accessibility: granted"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("%q missing from %q", want, got)
+		}
+	}
+	var buttons []*widget.Button
+	var walk func(fyne.CanvasObject)
+	walk = func(o fyne.CanvasObject) {
+		switch o := o.(type) {
+		case *widget.Button:
+			buttons = append(buttons, o)
+		case *fyne.Container:
+			for _, c := range o.Objects {
+				walk(c)
+			}
+		}
+	}
+	walk(s.tabs.Items[PagePermissions].Content)
+	if len(buttons) != 1 {
+		t.Fatalf("%d buttons, want one for the denied permission", len(buttons))
+	}
+	test.Tap(buttons[0])
+	if opened != 1 {
+		t.Error("the button should open System Settings")
 	}
 }

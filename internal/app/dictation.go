@@ -86,14 +86,15 @@ func (sh *shell) startDictation() {
 		OnCancel: func() { sh.dictate(pipeline.ActionCancel) },
 	})
 	sh.dictation = pipeline.New(pipeline.Options{
-		Recorder: sh.svc.recorder,
-		Engine:   sh.svc.engine,
-		Models:   sh.svc.models,
-		Output:   sh.svc.output,
-		Notices:  sh.notices,
-		Settings: sh.rt.Settings.Get,
-		Feedback: sh.svc.feedback,
-		Log:      sh.rt.Log.Logger,
+		Recorder:         sh.svc.recorder,
+		Engine:           sh.svc.engine,
+		Models:           sh.svc.models,
+		Output:           sh.svc.output,
+		Notices:          sh.notices,
+		Settings:         sh.rt.Settings.Get,
+		Feedback:         sh.svc.feedback,
+		MicrophoneAccess: microphoneAccess,
+		Log:              sh.rt.Log.Logger,
 	})
 	events, stop := sh.dictation.Subscribe()
 	sh.stopDictationEvents = stop

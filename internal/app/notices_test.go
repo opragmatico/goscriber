@@ -11,6 +11,7 @@ import (
 	"github.com/opragmatico/goscriber/internal/config"
 	"github.com/opragmatico/goscriber/internal/hotkey"
 	"github.com/opragmatico/goscriber/internal/notice"
+	"github.com/opragmatico/goscriber/internal/platform"
 	"github.com/opragmatico/goscriber/internal/ui"
 )
 
@@ -90,9 +91,9 @@ func TestNoModelNotice(t *testing.T) {
 // the permission is granted, the shortcut registers again and the notice
 // ends.
 func TestAccessibilityNotice(t *testing.T) {
-	poll := accessibilityPoll
-	accessibilityPoll = 5 * time.Millisecond
-	t.Cleanup(func() { accessibilityPoll = poll })
+	poll := permissionsPoll
+	permissionsPoll = 5 * time.Millisecond
+	t.Cleanup(func() { permissionsPoll = poll })
 
 	var mu sync.Mutex
 	trusted := false
@@ -111,7 +112,7 @@ func TestAccessibilityNotice(t *testing.T) {
 		t.Fatalf("alert %+v", alert)
 	}
 	alert.Action()
-	if len(a.opened) != 1 || a.opened[0] != accessibilitySettings {
+	if len(a.opened) != 1 || a.opened[0] != platform.PermAccessibility.SettingsURL() {
 		t.Errorf("opened %v, want System Settings at Accessibility", a.opened)
 	}
 

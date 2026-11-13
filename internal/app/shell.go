@@ -119,6 +119,8 @@ type shell struct {
 	quit        chan struct{} // closed when the app stops
 	quitOnce    sync.Once
 	stopOnce    sync.Once
+	// permissionRows updates the settings window's Permissions page.
+	permissionRows *latest
 }
 
 func newShell(rt *Runtime, a fyne.App, opts Options) *shell {
@@ -135,6 +137,7 @@ func newShell(rt *Runtime, a fyne.App, opts Options) *shell {
 		trusted: accessibilityTrusted,
 	}
 	sh.svc = newServices(rt, opts, sh.notices)
+	sh.permissionRows = &latest{do: func(f func()) { sh.do(f) }}
 	if runtime.GOOS == "darwin" {
 		sh.secureInput = platform.SecureInputEnabled
 	}
@@ -155,6 +158,7 @@ func (sh *shell) start() {
 		LogsDir:      sh.rt.Paths.LogsDir(),
 	}, sh.settingsClosed)
 	sh.settings.SetModel(model)
+	sh.refreshPermissions()
 
 	if sh.plan.Tray {
 		sh.tray = ui.NewTray(sh.desk, ui.TrayOptions{
@@ -213,7 +217,8 @@ func (sh *shell) started() {
 		sh.following.Go(sh.watchSecureInput)
 	}
 	if runtime.GOOS == "darwin" {
-		sh.following.Go(sh.watchAccessibility)
+		go sh.askPermissions()
+		sh.following.Go(sh.watchPermissions)
 	}
 	sh.following.Go(sh.openMicrophone)
 }

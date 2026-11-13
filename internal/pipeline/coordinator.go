@@ -152,7 +152,12 @@ type Options struct {
 	// Feedback, if set, plays the cues and mutes other audio around each
 	// recording.
 	Feedback Feedback
-	Stages   Stages
+	// MicrophoneAccess, if set, is asked before each recording whether the
+	// app may use the microphone; it may ask the user and wait for the
+	// answer. False refuses the start with the microphone-permission
+	// notice: macOS would record silence.
+	MicrophoneAccess func() bool
+	Stages           Stages
 	// Log receives a line per session and, at debug level, the timing of
 	// every stage. Nil means slog's default logger.
 	Log *slog.Logger
@@ -175,6 +180,7 @@ type Coordinator struct {
 	notices  Notices
 	settings func() config.Settings
 	feedback Feedback
+	micOK    func() bool
 	stages   Stages
 	log      *slog.Logger
 
@@ -232,6 +238,7 @@ func New(opts Options) *Coordinator {
 		notices:  opts.Notices,
 		settings: opts.Settings,
 		feedback: opts.Feedback,
+		micOK:    opts.MicrophoneAccess,
 		stages:   opts.Stages,
 		log:      log,
 		actions:  newSerial(),
@@ -374,6 +381,13 @@ func (c *Coordinator) start() {
 		c.refuse(ActionStart, "no model is ready")
 		return
 	}
+	if c.micOK != nil && !c.micOK() {
+		c.log.Info("dictation cannot start: no microphone permission")
+		c.notices.Resolve(notice.CodeMicrophoneDenied)
+		c.notices.Publish(notice.MicrophoneDenied())
+		c.refuse(ActionStart, "no microphone permission")
+		return
+	}
 	// The start cue plays to its end before capture starts, so the
 	// microphone does not record it.
 	if c.feedback != nil && c.feedback.Start(FeedbackOptions(settings)) {
@@ -442,6 +456,13 @@ func (c *Coordinator) stop() {
 		c.mu.Unlock()
 		s.end()
 		c.log.Debug("dictation ended without speech", "session", s.id, "reason", err)
+		if len(samples) > 0 && audio.Measure(samples).Peak == 0 {
+			// Real microphones always pick up some noise: exact zeros are
+			// what macOS delivers without the permission, or a muted or
+			// wrong input device.
+			c.log.Warn("the microphone recorded nothing but digital silence; check the microphone permission and the input device",
+				"session", s.id)
+		}
 		return
 	}
 	c.mu.Lock()
