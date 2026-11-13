@@ -97,7 +97,7 @@ third_party/
 `goscriber` with no subcommand starts the Fyne app (`io.github.opragmatico.goscriber`) as a menu bar / tray icon:
 
 - **Tray menu**: Start / Stop Dictation, Cancel, the current model (or "No model: Download…", which opens the Models page, with the dictation items disabled), Settings… and Quit. With debug mode on, a Debug submenu forces the icon state.
-- **Icon per state**: idle and transcribing are template icons that follow the menu bar's colour; recording is red. The coordinator drives the state.
+- **Icon per state**: idle and transcribing are template icons that follow the menu bar's colour; recording is red. The coordinator drives the state; post-processing and outputting show as transcribing.
 - **No window at launch** while the tray is shown; windows open from the menu. Without a tray (`--no-tray`, the `show_tray_icon` setting, or a desktop with no tray) the settings window opens at launch, even with `--start-hidden`, and closing it quits, as in Handy.
 - **macOS**: with a tray the app is an accessory app with no Dock icon. The bundle's Info.plist sets `LSUIElement`, and the app also sets the activation policy at startup, because GLFW makes every app a regular one and plain `go run` builds have no Info.plist. Without a tray the Dock icon stays as the way back in.
 - **Shutdown**: Quit, SIGINT and SIGTERM all end Fyne's main loop; the app then stops following settings and closes the log.
@@ -124,16 +124,17 @@ The app shell routes each new notice once: an OS notification (`fyne.App.SendNot
 
 | Code | Level | Persistent | Action | Raised by |
 | --- | --- | --- | --- | --- |
-| `no_model` | error | yes | Download a model → Models page | the shell, at launch and when the selected model goes away |
+| `no_model` | error | yes | Download a model → Models page | the shell, at launch and when the selected model goes away; the coordinator, raised afresh on every Start without a model |
 | `permission_missing` | error | yes | Open System Settings | a shortcut or paste refused for lack of Accessibility |
 | `shortcut_failed` | error | no | Open Settings | a shortcut that cannot register for another reason |
 | `paste_failed` | error | no | | a failed delivery (`notice.ForPasteError`) |
-| `microphone_unavailable` | error | no | | the recorder's notifications |
+| `microphone_unavailable` | error | no | | the recorder's notifications, and a microphone that will not open at Start |
 | `model_corrupt` | error | no | Download again → Models page | a model that fails to load or verify |
 | `engine_crashed` | error | no | | the engine worker (#28) |
 | `engine_cpu_fallback` | warning | no | | the engine worker (#28) |
+| `transcription_failed` | error | no | | the coordinator, when a decode fails or a model will not load for a reason other than a damaged file |
 
-The last five have constructors and tests but no producer until the coordinator (#20) and the engine worker (#28) exist.
+`engine_crashed` and `engine_cpu_fallback` have constructors and tests but no producer until the engine worker (#28) exists.
 
 ## Output
 
@@ -192,14 +193,27 @@ shortcut up   ─► Capture.Stop() ─► speech gate (too short / too quiet �
 
 **No speech** is an outcome, not an error: nothing is pasted and the user sees no notice, only a debug log line. Three checks lead to it (`internal/pipeline/speech.go`): a recording shorter than `min_recording_ms` (250 ms), one whose loudest 33 ms window is under `silence_threshold_db` (−60 dBFS) — both skip the model — and an empty or whitespace-only final transcript. The Silero VAD masks silence on the streaming path only; NeMo-Speech.cpp v0.3.0 does not apply it to whole-clip decodes ([details](engine-sdk.md#voice-activity-detection)).
 
-The `Coordinator` owns a single state machine: `idle → recording → transcribing → post_processing → outputting → idle`. A cancel from any state returns to `idle` and discards the session. Only one session is active at a time.
+The `Coordinator` (`internal/pipeline/coordinator.go`) owns a single state machine: `idle → recording → transcribing → post_processing → outputting → idle`. A cancel from any state returns to `idle` and discards the session. Only one session is active at a time.
+
+- **Actions**: `Start`, `Stop`, `Toggle` and `Cancel` (also `Do(action)`), from the shortcut, the tray and later the command line (#33). They never block: they are queued and run in order on the coordinator's own goroutine, so they are safe on the UI thread. An action that does not fit the state is refused, not queued: the shortcut pressed while a transcript is on its way does nothing.
+- **Events**: `Subscribe` delivers state changes, refusals, the microphone level while recording (coalesced, so a slow reader gets the latest), interim text (from #24) and the delivered transcript. A refusal carries the unchanged state, so the shortcut's activator, which guessed the press would start or stop a recording, resyncs. The shell follows the events to drive the tray icon and to register Escape only while recording.
+- **Model**: every `Start` resolves the selected model through a `ModelSource` (`CatalogModels` over the models manager: `selected_model`, in `model_quant` when the model has it, on the CPU when `accelerator` says so, with the Silero VAD when enabled and downloaded). With no model ready, `Start` records nothing and raises `no_model` afresh, so every press is answered; a damaged file raises `model_corrupt`. The engine goroutine loads the model when recording starts, if the engine does not hold it already, and `Acquire`s it until the transcript is out.
+- **Batch decode**: on `Stop`, the speech gate runs first (too short or too quiet ends the session quietly), then the whole clip is decoded with `Recognize` on the engine goroutine, behind the load. The streaming path comes with live transcription (#24).
+- **Session IDs**: each session has an ID and a context. A cancel ends the context (the decode, a text stage or the paste may stop early) and anything that finishes afterwards for that session is dropped, even while the next session is recording.
+- **Stages**: `Stages{Cleanup, LLM, Hook, History}` run after recognition, each optional and nil until its issue lands (#27, #39, #38, #32). A failing text stage passes its input on; empty output pastes nothing. History saves after delivery, off the critical path.
+- **Failures**: an engine error ends in `idle` with `transcription_failed`, `model_corrupt` or `no_model`; a failed delivery with `paste_failed` or `permission_missing`. Each is raised before the state returns to idle. No speech is not a failure.
+- **Timings**: each stage's duration is logged at debug level, and a summary line per session (`dictation timings`); the info-level line says only whether something was delivered and how many characters, never the text.
+
+Until onboarding (#31) and the Models page (#30) exist, choose the model by setting `selected_model` in `settings.json` to a downloaded model's id, for example `"nemotron-3.5-asr-streaming-0.6b"` after `goscriber models pull nemotron-3.5-asr-streaming-0.6b`.
 
 ## Threading model
 
 - **Fyne main thread**: all widgets, tray, overlay. Other goroutines update the UI only through `fyne.Do` / `fyne.DoAndWait`.
 - **Audio callback (miniaudio thread)**: copies frames into a ring buffer and returns; never blocks or calls into the engine.
-- **Hotkey goroutine**: owns the shortcut registrations and turns key-down / key-up events into coordinator actions, which reach the coordinator through `fyne.Do`.
-- **Engine goroutine**: one goroutine owns the engine client and serialises load, unload and recognition; a streaming session pumps audio from the ring buffer to `Push` / `Next`.
+- **Hotkey goroutine**: owns the shortcut registrations and turns key-down / key-up events into coordinator actions, which it hands straight to the coordinator: its actions never block.
+- **Coordinator goroutine**: runs the actions in order (opening the microphone, stopping it, refusing what does not fit the state) and owns the session's state with a mutex.
+- **Engine goroutine**: one goroutine owns the engine client and serialises load, acquire and recognition; a streaming session pumps audio from the ring buffer to `Push` / `Next` (#24).
+- **Session goroutine**: per session, runs the text stages, the delivery and the history save, so a slow paste, LLM or hook never holds up a cancel.
 - **Background goroutines**: model downloads, history I/O, LLM requests.
 
 Goroutines talk through channels and the coordinator; nothing outside the main thread touches a widget directly.

@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/opragmatico/goscriber/internal/config"
+	"github.com/opragmatico/goscriber/internal/engine"
 	"github.com/opragmatico/goscriber/internal/logging"
 )
 
@@ -17,6 +18,9 @@ type Options struct {
 	NoTray      bool      // --no-tray: no tray icon; the settings window opens instead
 	Version     string    // shown in the startup log line
 	Stderr      io.Writer // nil means os.Stderr
+	// NewEngine returns the speech engine dictation transcribes with. Nil
+	// means this build has none: dictation records, then says so.
+	NewEngine func() engine.Engine
 }
 
 // Runtime is what every part of the app shares: where files live, the

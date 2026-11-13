@@ -199,19 +199,6 @@ func TestDebugFlagShowsDebugMenu(t *testing.T) {
 	item(t, a.menu, ui.LabelDebug)
 }
 
-func TestDictationItemsAreLoggedUntilTheCoordinatorLands(t *testing.T) {
-	home := isolate(t)
-	writeSettings(t, home, `{"schema_version": 1, "selected_model": "m"}`)
-	var stderr bytes.Buffer
-	a := &trayApp{plainApp: plainApp{App: test.NewTempApp(t)}}
-	newTestShell(t, a, Options{Stderr: &stderr})
-
-	item(t, a.menu, ui.LabelStartDictation).Action()
-	if !strings.Contains(stderr.String(), "dictation is not implemented yet") {
-		t.Errorf("stderr = %q", stderr.String())
-	}
-}
-
 func TestShellWithoutTrayOpensWindowAndQuitsOnClose(t *testing.T) {
 	for _, tt := range []struct {
 		name string

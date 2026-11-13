@@ -7,6 +7,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/opragmatico/goscriber/internal/engine"
 	"github.com/opragmatico/goscriber/internal/output"
 )
 
@@ -21,6 +22,7 @@ const (
 	CodeModelCorrupt          Code = "model_corrupt"
 	CodeEngineCrashed         Code = "engine_crashed"
 	CodeEngineCPUFallback     Code = "engine_cpu_fallback"
+	CodeTranscriptionFailed   Code = "transcription_failed"
 	CodePasteFailed           Code = "paste_failed"
 	CodeShortcutFailed        Code = "shortcut_failed"
 )
@@ -105,6 +107,7 @@ var kinds = map[Code]struct {
 	CodeModelCorrupt:          {"Model file damaged", LevelError, SourceModel, false},
 	CodeEngineCrashed:         {"Speech engine crashed", LevelError, SourceEngine, false},
 	CodeEngineCPUFallback:     {"Transcribing on the CPU", LevelWarning, SourceEngine, false},
+	CodeTranscriptionFailed:   {"Transcription failed", LevelError, SourceEngine, false},
 	CodePasteFailed:           {"Could not paste", LevelError, SourceOutput, false},
 	CodeShortcutFailed:        {"Shortcut unavailable", LevelError, SourceShortcut, false},
 }
@@ -168,6 +171,24 @@ func EngineCrashed(detail string) Notice {
 // after the GPU failed.
 func EngineCPUFallback(detail string) Notice {
 	return New(CodeEngineCPUFallback, "The GPU failed, so transcription runs on the CPU, more slowly. "+detail)
+}
+
+// TranscriptionFailed is the notice for a recording the speech engine could
+// not turn into text, or a model that would not load for a reason other
+// than a damaged file.
+func TranscriptionFailed(err error) Notice {
+	reason := err.Error()
+	if eerr, ok := errors.AsType[*engine.Error](err); ok {
+		reason = fmt.Sprintf("the speech engine failed to %s", eerr.Op)
+		if eerr.Kind != nil {
+			reason += fmt.Sprintf(" (%v", eerr.Kind)
+			if eerr.Detail != "" {
+				reason += ": " + eerr.Detail
+			}
+			reason += ")"
+		}
+	}
+	return New(CodeTranscriptionFailed, sentence(fmt.Sprintf("Nothing was pasted: %s. Try again.", reason)))
 }
 
 // ForPasteError is the notice for a failed delivery: a missing permission

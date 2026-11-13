@@ -104,27 +104,26 @@ func (f *fakeShortcuts) press(t *testing.T, key string) {
 	ch <- hotkey.KeyUp
 }
 
-func TestShortcutDrivesDictationAndFollowsSettings(t *testing.T) {
+// down sends only a key-down, for a shortcut that may be unregistered as
+// soon as it is heard, such as Escape.
+func (f *fakeShortcuts) down(t *testing.T, key string) {
+	t.Helper()
+	f.mu.Lock()
+	ch := f.active[key]
+	f.mu.Unlock()
+	if ch == nil {
+		t.Fatalf("%s is not registered", key)
+	}
+	ch <- hotkey.KeyDown
+}
+
+func TestShortcutFollowsSettings(t *testing.T) {
 	home := isolate(t)
 	testShortcuts.reset()
 	writeSettings(t, home, `{"schema_version": 1, "selected_model": "m", "transcribe_shortcut": "ctrl+shift+d", "activation_mode": "toggle"}`)
-	var stderr syncBuffer
 	a := &trayApp{plainApp: plainApp{App: test.NewTempApp(t)}}
-	sh, q := newTestShell(t, a, Options{Stderr: &stderr})
+	sh, q := newTestShell(t, a, Options{})
 	testShortcuts.waitLog(t, "+ctrl+shift+d")
-
-	// The press reaches dictation on the main thread. The stand-in never
-	// records, so the shortcut stays idle and Escape is never taken.
-	testShortcuts.press(t, "ctrl+shift+d")
-	q.runNext(t)
-	if !strings.Contains(stderr.String(), `dictation is not implemented yet" action=start`) {
-		t.Errorf("stderr = %q", stderr.String())
-	}
-	testShortcuts.press(t, "ctrl+shift+d")
-	q.runNext(t)
-	if n := strings.Count(stderr.String(), "action=start"); n != 2 {
-		t.Errorf("%d starts; with nothing recording, every toggle press starts", n)
-	}
 
 	// A new shortcut in the settings replaces the old one without a restart.
 	if err := sh.rt.Settings.Update(func(s *config.Settings) { s.TranscribeShortcut = "f5" }); err != nil {

@@ -14,6 +14,7 @@ func init() {
 			StartHidden: o.StartHidden,
 			NoTray:      o.NoTray,
 			Version:     o.Version,
+			NewEngine:   newEngine,
 		})
 	}
 }

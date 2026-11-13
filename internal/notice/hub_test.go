@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/opragmatico/goscriber/internal/engine"
 	"github.com/opragmatico/goscriber/internal/output"
 )
 
@@ -290,6 +291,7 @@ func TestNoticeKinds(t *testing.T) {
 	for _, code := range []Code{
 		CodeNoModel, CodeMicrophoneUnavailable, CodePermissionMissing, CodeModelCorrupt,
 		CodeEngineCrashed, CodeEngineCPUFallback, CodePasteFailed, CodeShortcutFailed,
+		CodeTranscriptionFailed,
 	} {
 		n := New(code, "m")
 		if n.Title() == string(code) || n.Source == "" {
@@ -332,5 +334,16 @@ func TestForShortcutError(t *testing.T) {
 	n := ForShortcutError(err, true)
 	if n.Code != CodeShortcutFailed || !strings.HasPrefix(n.Message, `The transcribe shortcut "option+space" is not available: taken.`) || n.Action.ID != ActionOpenSettings {
 		t.Errorf("trusted: %+v", n)
+	}
+}
+
+func TestTranscriptionFailed(t *testing.T) {
+	n := TranscriptionFailed(&engine.Error{Op: "recognize", Kind: engine.ErrOutOfMemory, Detail: "ggml alloc"})
+	if n.Code != CodeTranscriptionFailed || n.Level != LevelError || n.Persistent() ||
+		n.Message != "Nothing was pasted: the speech engine failed to recognize (out of memory: ggml alloc). Try again." {
+		t.Errorf("engine error: %+v", n)
+	}
+	if n := TranscriptionFailed(errors.New("boom")); n.Message != "Nothing was pasted: boom. Try again." {
+		t.Errorf("other error: %+v", n)
 	}
 }

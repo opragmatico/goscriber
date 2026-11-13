@@ -1,7 +1,6 @@
 package app
 
 import (
-	"log/slog"
 	"runtime"
 	"sync"
 	"time"
@@ -13,6 +12,7 @@ import (
 	"github.com/opragmatico/goscriber/internal/config"
 	"github.com/opragmatico/goscriber/internal/hotkey"
 	"github.com/opragmatico/goscriber/internal/notice"
+	"github.com/opragmatico/goscriber/internal/pipeline"
 	"github.com/opragmatico/goscriber/internal/platform"
 	"github.com/opragmatico/goscriber/internal/ui"
 )
@@ -89,11 +89,15 @@ type shell struct {
 	// do runs UI updates from other goroutines on the Fyne main thread.
 	do func(func())
 
-	dictation dictation
-	hotkeys   *hotkey.Manager
-	tray      *ui.Tray // nil without a tray
-	settings  *ui.SettingsWindow
-	desk      desktop.App
+	svc       services
+	dictation *pipeline.Coordinator
+	// recording is what the shortcuts were last told about dictation.
+	recording           bool
+	stopDictationEvents func()
+	hotkeys             *hotkey.Manager
+	tray                *ui.Tray // nil without a tray
+	settings            *ui.SettingsWindow
+	desk                desktop.App
 
 	// secureInput reports macOS Secure Event Input; nil skips the check.
 	secureInput func() bool
@@ -109,22 +113,23 @@ type shell struct {
 	following   sync.WaitGroup
 	quit        chan struct{} // closed when the app stops
 	quitOnce    sync.Once
+	stopOnce    sync.Once
 }
 
 func newShell(rt *Runtime, a fyne.App, opts Options) *shell {
 	desk, traySupported := a.(desktop.App)
 	sh := &shell{
-		rt:        rt,
-		app:       a,
-		opts:      opts,
-		plan:      planLaunch(rt.Settings.Get(), opts, traySupported),
-		do:        fyne.Do,
-		dictation: pendingDictation{log: rt.Log.Logger},
-		desk:      desk,
-		quit:      make(chan struct{}),
-		notices:   notice.NewHub(notice.Options{Log: rt.Log.Logger}),
-		trusted:   accessibilityTrusted,
+		rt:      rt,
+		app:     a,
+		opts:    opts,
+		plan:    planLaunch(rt.Settings.Get(), opts, traySupported),
+		do:      fyne.Do,
+		desk:    desk,
+		quit:    make(chan struct{}),
+		notices: notice.NewHub(notice.Options{Log: rt.Log.Logger}),
+		trusted: accessibilityTrusted,
 	}
+	sh.svc = newServices(rt, opts, sh.notices)
 	if runtime.GOOS == "darwin" {
 		sh.secureInput = platform.SecureInputEnabled
 	}
@@ -149,9 +154,9 @@ func (sh *shell) start() {
 	if sh.plan.Tray {
 		sh.tray = ui.NewTray(sh.desk, ui.TrayOptions{
 			Actions: ui.TrayActions{
-				StartDictation: func() { sh.dictate(hotkey.ActionStart) },
-				StopDictation:  func() { sh.dictate(hotkey.ActionStop) },
-				Cancel:         func() { sh.dictate(hotkey.ActionCancel) },
+				StartDictation: func() { sh.dictate(pipeline.ActionStart) },
+				StopDictation:  func() { sh.dictate(pipeline.ActionStop) },
+				Cancel:         func() { sh.dictate(pipeline.ActionCancel) },
 				OpenModels:     func() { sh.settings.Show(ui.PageModels) },
 				OpenSettings:   func() { sh.settings.Show(ui.PageGeneral) },
 				Quit:           sh.app.Quit,
@@ -167,14 +172,16 @@ func (sh *shell) start() {
 	sh.followModel(s)
 
 	// The shortcuts register in the background: on macOS that waits for
-	// Fyne's main loop, which starts with the app.
+	// Fyne's main loop, which starts with the app. Their actions go
+	// straight to the coordinator, which never blocks.
 	sh.hotkeys = hotkey.NewManager(newHotkeyBackend(), hotkey.Options{
-		OnAction:     func(a hotkey.Action) { sh.do(func() { sh.dictate(a) }) },
+		OnAction:     func(a hotkey.Action) { sh.dictate(dictationAction(a)) },
 		OnError:      sh.shortcutFailed,
 		OnRegistered: sh.shortcutRegistered,
 		Log:          sh.rt.Log.Logger,
 	})
 	sh.hotkeys.Apply(hotkey.ConfigFrom(s))
+	sh.startDictation()
 
 	sh.app.Lifecycle().SetOnStarted(sh.started)
 	// Stop following settings as soon as Fyne shuts down; stop then waits for
@@ -203,23 +210,21 @@ func (sh *shell) started() {
 	if runtime.GOOS == "darwin" {
 		sh.following.Go(sh.watchAccessibility)
 	}
+	sh.following.Go(sh.openMicrophone)
 }
 
-// dictate carries out a dictation action from the shortcut or the tray, on
-// the main thread, and tells the shortcuts whether dictation is now
-// recording, so the cancel shortcut is only taken while it is.
-func (sh *shell) dictate(a hotkey.Action) {
+// dictationAction is the coordinator's action for a shortcut's.
+func dictationAction(a hotkey.Action) pipeline.Action {
 	switch a {
 	case hotkey.ActionStart:
-		sh.dictation.Start()
+		return pipeline.ActionStart
 	case hotkey.ActionStop:
-		sh.dictation.Stop()
+		return pipeline.ActionStop
 	case hotkey.ActionCancel:
-		sh.dictation.Cancel()
+		return pipeline.ActionCancel
 	default:
-		return
+		return 0
 	}
-	sh.hotkeys.SetRecording(sh.dictation.Recording())
 }
 
 // watchSecureInput warns while macOS Secure Event Input keeps the shortcut
@@ -257,10 +262,12 @@ func (sh *shell) settingsClosed() {
 	}
 }
 
-// stop waits for the settings follower; call it after the app has run.
+// stop waits for the settings follower and ends dictation; call it after
+// the app has run.
 func (sh *shell) stop() {
 	sh.stopFollowing()
 	sh.following.Wait()
+	sh.stopOnce.Do(sh.stopDictation)
 }
 
 func (sh *shell) follow() {
@@ -284,6 +291,9 @@ func (sh *shell) stopFollowing() {
 		if sh.stopNotices != nil {
 			sh.stopNotices()
 		}
+		if sh.stopDictationEvents != nil {
+			sh.stopDictationEvents()
+		}
 		if sh.hotkeys != nil {
 			sh.hotkeys.Close() // returns at once: on macOS the main loop may be gone
 		}
@@ -301,6 +311,7 @@ func (sh *shell) applySettings(s config.Settings) {
 		sh.tray.SetDebug(sh.debugMode(s))
 	}
 	sh.hotkeys.Apply(hotkey.ConfigFrom(s))
+	sh.applyDictationSettings(s)
 	sh.followModel(s)
 }
 
@@ -311,26 +322,3 @@ func (sh *shell) debugMode(s config.Settings) bool { return s.DebugMode || sh.op
 // selected_model setting; the manager will also check that the file is on
 // disk and supply the catalog's display name.
 func modelName(s config.Settings) string { return s.SelectedModel }
-
-// dictation is what the shortcut and the tray's dictation items drive. The
-// coordinator (issue #20) will implement it.
-type dictation interface {
-	Start()
-	Stop()
-	Cancel()
-	// Recording reports whether a recording is in progress.
-	Recording() bool
-}
-
-// pendingDictation stands in for the coordinator: it only logs the request
-// and never records.
-type pendingDictation struct{ log *slog.Logger }
-
-func (d pendingDictation) Start()          { d.note("start") }
-func (d pendingDictation) Stop()           { d.note("stop") }
-func (d pendingDictation) Cancel()         { d.note("cancel") }
-func (d pendingDictation) Recording() bool { return false }
-
-func (d pendingDictation) note(action string) {
-	d.log.Warn("dictation is not implemented yet", "action", action)
-}
