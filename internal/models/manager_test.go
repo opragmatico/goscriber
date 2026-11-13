@@ -69,8 +69,12 @@ func TestFreshInstallHasNoModelAndMakesNoRequest(t *testing.T) {
 func TestDefaultManagerMakesNoRequest(t *testing.T) {
 	// The real catalog, a fresh directory and an empty HF cache.
 	m := NewManager(t.TempDir(), Options{HFCache: t.TempDir(), Downloader: &Downloader{Client: &http.Client{Transport: noNetwork{t}}}})
-	if m.Any() || len(m.List()) != 4 {
-		t.Errorf("Any() = %t, %d statuses", m.Any(), len(m.List()))
+	files := 0
+	for _, model := range Default().Models {
+		files += len(model.Files)
+	}
+	if m.Any() || len(m.List()) != files {
+		t.Errorf("Any() = %t, %d statuses, want one per catalog file (%d)", m.Any(), len(m.List()), files)
 	}
 }
 

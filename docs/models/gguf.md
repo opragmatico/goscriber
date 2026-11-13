@@ -1,19 +1,24 @@
 # Model files
 
-Goscriber runs three GGUF files through NeMo-Speech.cpp. None of them is in this repository or in the app. The user downloads the model they choose from Hugging Face at a pinned revision, and Goscriber checks its SHA-256 ([#13](https://github.com/opragmatico/goscriber/issues/13)). Nobody needs Python or NeMo to use Goscriber: that is only for producing the files below.
+Goscriber runs four GGUF files through NeMo-Speech.cpp. None of them is in this repository or in the app. The user downloads the model they choose from Hugging Face at a pinned revision, and Goscriber checks its SHA-256 ([#13](https://github.com/opragmatico/goscriber/issues/13)). Nobody needs Python or NeMo to use Goscriber: that is only for producing the files below.
 
 | Model | Role | Hugging Face repository and revision | File | Size (bytes) | SHA-256 |
 | --- | --- | --- | --- | --- | --- |
 | Nemotron Streaming 3.5 | ASR, the default | [`nvidia/nemotron-3.5-asr-streaming-0.6b`](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b/tree/ea30d66debe3740a08b573244286791d423d6b3e) `ea30d66debe3740a08b573244286791d423d6b3e` | `nemotron-3.5-asr-streaming-0.6b.q8_0.gguf` | 742,090,464 | `3fc991d3badad7277c11030a7519832cddaf2057aafed6d4b25147e953a070b1` |
 | Parakeet TDT 0.6B v2 | ASR, English | [`opragmatico/parakeet-tdt-0.6b-v2-nemo-speech-gguf`](https://huggingface.co/opragmatico/parakeet-tdt-0.6b-v2-nemo-speech-gguf/tree/da0de3b9ff0f0b219b71bee25e9ef296f0d9cf8c) `da0de3b9ff0f0b219b71bee25e9ef296f0d9cf8c` | `parakeet-tdt-0.6b-v2.q8_0.gguf` (default) | 700,133,856 | `ad2c2e6ccd12c0f0a23ccd4f3a7d1145978d59a7172a10f3ba23db117909d0cd` |
 | | | | `parakeet-tdt-0.6b-v2.f16.gguf` | 1,278,057,440 | `894ee6efa3a35bee3654171b85bb473e07479c420678997c6e63523fe571c2a3` |
+| Parakeet TDT 0.6B v3 | ASR, 25 European languages | [`nvidia/parakeet-tdt-0.6b-v3`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/tree/541d1f99c6b0c3cd0b11a95167540bb8edefd82b) `541d1f99c6b0c3cd0b11a95167540bb8edefd82b` | `parakeet-tdt-0.6b-v3.q8_0.gguf` | 713,975,456 | `e3880d0aaaaf2c308ea2c35016b2b895c423eb3fda924c1b463d1c19b7f4d32e` |
 | Silero VAD v6.2.0 | VAD companion | [`opragmatico/silero-vad-nemo-speech-gguf`](https://huggingface.co/opragmatico/silero-vad-nemo-speech-gguf/tree/9ae6d95f3640eb5a730eb6fbf2567542fec2d964) `9ae6d95f3640eb5a730eb6fbf2567542fec2d964` | `silero-vad-v6.2.0.gguf` | 1,240,224 | `83d702b11378ced4b1bbfcb53394bd00994f7382ff0b9a11b87605dd0898369d` |
 
-The catalog, [`internal/models/catalog.json`](../../internal/models/catalog.json), copies these values, and a test checks that the two agree. Q8_0 is the default quantisation for both speech models.
+The catalog, [`internal/models/catalog.json`](../../internal/models/catalog.json), copies these values, and a test checks that the two agree. Q8_0 is the default quantisation for every speech model.
 
 ## Nemotron Streaming 3.5: NVIDIA's own file
 
 NVIDIA publishes a ready-to-run Q8_0 GGUF next to the `.nemo`, so Goscriber does not re-host it. It pins a newer revision than NeMo-Speech.cpp v0.3.0's own index (`models/index.json`), which still names `1c8deaecc64b` (2026-08-05; 741,548,352 bytes, SHA-256 `a5c435f2…`). On 2026-09-10 NVIDIA re-converted the file "with embedded SentencePiece tokenizer" (`ea30d66debe3`). The two files have the same 657 tensors with the same types; the newer one adds a single metadata key, `asr.tokenizer.spm_model`. NeMo-Speech.cpp tokenises word-boosting phrases with it and, without it, boosting falls back or does nothing, so custom vocabulary ([#26](https://github.com/opragmatico/goscriber/issues/26)) needs the newer file. Goscriber's model tests ([#9](https://github.com/opragmatico/goscriber/issues/9), [#10](https://github.com/opragmatico/goscriber/issues/10)) already ran on it.
+
+## Parakeet TDT 0.6B v3: NVIDIA's own file
+
+NVIDIA publishes a ready-to-run Q8_0 GGUF next to the `.nemo` here too, and NeMo-Speech.cpp v0.3.0 lists the model in its own index at the same revision, `541d1f99c6b0` (2026-08-05), which is still the repository's latest. Goscriber does not re-host it. The file predates the tokenizer re-conversion described above: it carries the 8,192-token vocabulary but not `asr.tokenizer.spm_model`, so custom vocabulary ([#26](https://github.com/opragmatico/goscriber/issues/26)) should not be expected to work with v3 until NVIDIA re-converts it or Goscriber converts its own. [Parakeet TDT 0.6B v3 checks](parakeet-tdt-0.6b-v3.md) records how it ran in Goscriber.
 
 ## Parakeet TDT 0.6B v2 and Silero VAD: converted by Goscriber
 
@@ -35,7 +40,7 @@ What the script pins, which together decide every byte of the output:
 
 It converts into a staging directory and moves the files into place only when all three are done, then compares them with [`scripts/convert-models.sha256`](../../scripts/convert-models.sha256).
 
-The Silero VAD file loads as the VAD companion of both speech models (`LoadSpec.VADPath`), masks silence, and leaves their transcript of `testdata/audio/jfk.wav` unchanged.
+The Silero VAD file loads as the VAD companion of every speech model (`LoadSpec.VADPath`), masks silence, and leaves their transcript of `testdata/audio/jfk.wav` unchanged.
 
 ### Reproducibility
 
