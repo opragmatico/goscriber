@@ -118,7 +118,20 @@ type Settings struct {
 	Language           string        `json:"language"`
 	Accelerator        Accelerator   `json:"accelerator"`
 	ModelUnloadTimeout UnloadTimeout `json:"model_unload_timeout"`
-	VADEnabled         bool          `json:"vad_enabled"`
+
+	// Speech detection. With VADEnabled the Silero VAD masks silence in
+	// streamed audio before the model sees it: a frame enters speech when
+	// its speech probability rises above VADOnset and leaves it when it
+	// falls below VADOffset.
+	// Recordings shorter than MinRecordingMS, or whose loudest moment is
+	// quieter than SilenceThresholdDB (dBFS), never reach the model.
+	// SilenceThresholdDB at -100 and MinRecordingMS at 0 turn those checks
+	// off.
+	VADEnabled         bool    `json:"vad_enabled"`
+	VADOnset           float64 `json:"vad_onset"`
+	VADOffset          float64 `json:"vad_offset"`
+	MinRecordingMS     int     `json:"min_recording_ms"`
+	SilenceThresholdDB float64 `json:"silence_threshold_db"`
 
 	// Audio. Empty device names mean the system default. An always-on
 	// microphone stays open between recordings and keeps ~200 ms of audio
@@ -177,6 +190,10 @@ func defaultsFor(goos string) Settings {
 		Accelerator:         AcceleratorAuto,
 		ModelUnloadTimeout:  Unload5m,
 		VADEnabled:          true,
+		VADOnset:            0.5,
+		VADOffset:           0.3,
+		MinRecordingMS:      250,
+		SilenceThresholdDB:  -60,
 		AudioFeedbackVolume: 1.0,
 		OverlayStyle:        defaultOverlayStyle(goos),
 		OverlayPosition:     OverlayBottom,
@@ -243,6 +260,14 @@ func (s *Settings) normalize(def Settings) []string {
 	check("model_unload_timeout",
 		oneOf(s.ModelUnloadTimeout, UnloadNever, UnloadImmediately, Unload2m, Unload5m, Unload10m, Unload15m, Unload1h),
 		func() { s.ModelUnloadTimeout = def.ModelUnloadTimeout })
+	check("vad_onset", s.VADOnset > 0 && s.VADOnset < 1, func() { s.VADOnset = def.VADOnset })
+	// The offset must not exceed the onset, or a frame could be in and out of
+	// speech at once.
+	check("vad_offset", s.VADOffset > 0 && s.VADOffset <= s.VADOnset,
+		func() { s.VADOffset = min(def.VADOffset, s.VADOnset) })
+	check("min_recording_ms", between(s.MinRecordingMS, 0, 5000), func() { s.MinRecordingMS = def.MinRecordingMS })
+	check("silence_threshold_db", s.SilenceThresholdDB >= -100 && s.SilenceThresholdDB <= -20,
+		func() { s.SilenceThresholdDB = def.SilenceThresholdDB })
 	check("audio_feedback_volume", s.AudioFeedbackVolume >= 0 && s.AudioFeedbackVolume <= 1,
 		func() { s.AudioFeedbackVolume = def.AudioFeedbackVolume })
 	check("overlay_style", oneOf(s.OverlayStyle, OverlayNone, OverlayMinimal, OverlayLive),

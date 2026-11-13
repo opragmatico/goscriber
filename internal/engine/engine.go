@@ -90,7 +90,16 @@ type LoadSpec struct {
 	Path string
 	// VADPath is an optional Silero VAD GGUF that masks silence before the
 	// model sees it. Empty means no VAD.
+	//
+	// NeMo-Speech.cpp v0.3.0 masks only audio decoded through StartStream:
+	// its whole-clip path (Recognize) loads the VAD but never consults it.
+	// Callers that must not transcribe silence check the clip themselves
+	// before Recognize and treat an empty transcript as no speech.
 	VADPath string
+	// VADOnset and VADOffset are the speech probabilities at which the VAD
+	// enters and leaves speech, between 0 and 1 with VADOffset no higher
+	// than VADOnset. Zero means the library's default: 0.5 and 0.3.
+	VADOnset, VADOffset float32
 	// CPU runs the model on the CPU even when the build has a GPU backend
 	// (Metal on macOS).
 	CPU bool
