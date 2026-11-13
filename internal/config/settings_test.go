@@ -1,8 +1,10 @@
 package config
 
 import (
+	"encoding/json"
 	"slices"
 	"testing"
+	"time"
 )
 
 func TestDefaultsPerOS(t *testing.T) {
@@ -36,8 +38,11 @@ func TestDefaultsAreValidAndSelectNoModel(t *testing.T) {
 	if d.SchemaVersion != SchemaVersion {
 		t.Errorf("SchemaVersion = %d, want %d", d.SchemaVersion, SchemaVersion)
 	}
-	if d.ActivationMode != ActivationHoldOrToggle || d.HistoryLimit != 5 || d.ModelUnloadTimeout != Unload5m {
+	if d.ActivationMode != ActivationHoldOrToggle || d.HistoryLimit != 5 {
 		t.Errorf("defaults drifted from Handy's: %+v", d)
+	}
+	if d.ModelUnloadTimeout != 30 {
+		t.Errorf("ModelUnloadTimeout = %d, want 30 seconds", d.ModelUnloadTimeout)
 	}
 }
 
@@ -107,5 +112,67 @@ func TestNormalizeSpeechDetection(t *testing.T) {
 				t.Errorf("onset %v offset %v, want %v %v", s.VADOnset, s.VADOffset, tc.onset, tc.off)
 			}
 		})
+	}
+}
+
+func TestUnloadTimeoutJSON(t *testing.T) {
+	for _, tt := range []struct {
+		json string
+		want UnloadTimeout
+	}{
+		{`"never"`, UnloadNever},
+		{`0`, 0},
+		{`30`, 30},
+		{`86400`, MaxUnloadTimeout},
+	} {
+		var got UnloadTimeout
+		if err := json.Unmarshal([]byte(tt.json), &got); err != nil || got != tt.want {
+			t.Errorf("Unmarshal(%s) = %d, %v; want %d", tt.json, got, err, tt.want)
+		}
+		out, err := json.Marshal(tt.want)
+		if err != nil || string(out) != tt.json {
+			t.Errorf("Marshal(%d) = %s, %v; want %s", tt.want, out, err, tt.json)
+		}
+	}
+
+	for _, bad := range []string{`"sometimes"`, `"30"`, `"5m"`, `-1`, `1.5`, `true`, `[]`} {
+		got := UnloadTimeout(7)
+		if err := json.Unmarshal([]byte(bad), &got); err == nil {
+			t.Errorf("Unmarshal(%s) = %d, want an error", bad, got)
+		}
+	}
+
+	got := UnloadTimeout(7)
+	if err := json.Unmarshal([]byte(`null`), &got); err != nil || got != 7 {
+		t.Errorf("Unmarshal(null) = %d, %v; want it to leave the value alone", got, err)
+	}
+}
+
+func TestUnloadTimeoutDuration(t *testing.T) {
+	for in, want := range map[UnloadTimeout]time.Duration{0: 0, 30: 30 * time.Second, 3600: time.Hour} {
+		if got := in.Duration(); got != want {
+			t.Errorf("UnloadTimeout(%d).Duration() = %v, want %v", in, got, want)
+		}
+	}
+	if d := UnloadNever.Duration(); d >= 0 {
+		t.Errorf("UnloadNever.Duration() = %v, want a negative duration", d)
+	}
+}
+
+func TestNormalizeUnloadTimeout(t *testing.T) {
+	def := Defaults()
+	for _, v := range []UnloadTimeout{UnloadNever, 0, 1, MaxUnloadTimeout} {
+		s := def.Clone()
+		s.ModelUnloadTimeout = v
+		if fixed := s.normalize(def); len(fixed) > 0 {
+			t.Errorf("%d was rejected: %v", v, fixed)
+		}
+	}
+	for _, v := range []UnloadTimeout{-2, MaxUnloadTimeout + 1} {
+		s := def.Clone()
+		s.ModelUnloadTimeout = v
+		if fixed := s.normalize(def); !slices.Equal(fixed, []string{"model_unload_timeout"}) || s.ModelUnloadTimeout != 30 {
+			t.Errorf("%d: fixed = %v, value %d; want it reset to 30", v, fixed, s.ModelUnloadTimeout)
+		}
 	}
 }

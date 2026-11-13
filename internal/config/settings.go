@@ -1,8 +1,12 @@
 package config
 
 import (
+	"encoding/json"
+	"errors"
 	"runtime"
 	"slices"
+	"strconv"
+	"time"
 )
 
 // ActivationMode is how the transcribe shortcut's key events drive a recording.
@@ -65,19 +69,60 @@ const (
 	RetentionMonths3       RecordingRetention = "months_3"
 )
 
-// UnloadTimeout is how long an idle model stays loaded.
-type UnloadTimeout string
+// UnloadTimeout is how many seconds the model stays loaded with nothing to do
+// before it is unloaded to free its memory, or UnloadNever. 0 unloads it as
+// soon as it is idle. In JSON it is "never" or a whole number of seconds.
+type UnloadTimeout int
 
-// Model unload timeouts.
+// Special and limit values of UnloadTimeout.
 const (
-	UnloadNever       UnloadTimeout = "never"
-	UnloadImmediately UnloadTimeout = "immediately"
-	Unload2m          UnloadTimeout = "2m"
-	Unload5m          UnloadTimeout = "5m"
-	Unload10m         UnloadTimeout = "10m"
-	Unload15m         UnloadTimeout = "15m"
-	Unload1h          UnloadTimeout = "1h"
+	UnloadNever      UnloadTimeout = -1    // keep an idle model loaded until the app quits
+	MaxUnloadTimeout UnloadTimeout = 86400 // a day
 )
+
+// valid reports whether t is UnloadNever or 0 to MaxUnloadTimeout seconds.
+func (t UnloadTimeout) valid() bool { return t == UnloadNever || (t >= 0 && t <= MaxUnloadTimeout) }
+
+// Duration returns the timeout as a duration, or a negative one for
+// UnloadNever.
+func (t UnloadTimeout) Duration() time.Duration {
+	if t == UnloadNever {
+		return -1
+	}
+	return time.Duration(t) * time.Second
+}
+
+// MarshalJSON writes "never" or the number of seconds.
+func (t UnloadTimeout) MarshalJSON() ([]byte, error) {
+	if t == UnloadNever {
+		return []byte(`"never"`), nil
+	}
+	return strconv.AppendInt(nil, int64(t), 10), nil
+}
+
+var errUnloadTimeout = errors.New(`model_unload_timeout: want "never" or a whole number of seconds`)
+
+// UnmarshalJSON reads "never" or a whole, non-negative number of seconds.
+// null leaves t as it is.
+func (t *UnloadTimeout) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		return nil
+	}
+	var word string
+	if json.Unmarshal(data, &word) == nil {
+		if word != "never" {
+			return errUnloadTimeout
+		}
+		*t = UnloadNever
+		return nil
+	}
+	var secs int
+	if json.Unmarshal(data, &secs) != nil || secs < 0 {
+		return errUnloadTimeout
+	}
+	*t = UnloadTimeout(secs)
+	return nil
+}
 
 // Accelerator selects where inference runs.
 type Accelerator string
@@ -117,7 +162,7 @@ type Settings struct {
 	ModelQuant         string        `json:"model_quant"`
 	Language           string        `json:"language"`
 	Accelerator        Accelerator   `json:"accelerator"`
-	ModelUnloadTimeout UnloadTimeout `json:"model_unload_timeout"`
+	ModelUnloadTimeout UnloadTimeout `json:"model_unload_timeout"` // the next dictation reloads an unloaded model
 
 	// Speech detection. With VADEnabled the Silero VAD masks silence in
 	// streamed audio before the model sees it: a frame enters speech when
@@ -188,7 +233,7 @@ func defaultsFor(goos string) Settings {
 		ModelQuant:          "Q8_0",
 		Language:            "auto",
 		Accelerator:         AcceleratorAuto,
-		ModelUnloadTimeout:  Unload5m,
+		ModelUnloadTimeout:  30,
 		VADEnabled:          true,
 		VADOnset:            0.5,
 		VADOffset:           0.3,
@@ -257,8 +302,7 @@ func (s *Settings) normalize(def Settings) []string {
 	check("model_quant", s.ModelQuant != "", func() { s.ModelQuant = def.ModelQuant })
 	check("language", s.Language != "", func() { s.Language = def.Language })
 	check("accelerator", oneOf(s.Accelerator, AcceleratorAuto, AcceleratorCPU), func() { s.Accelerator = def.Accelerator })
-	check("model_unload_timeout",
-		oneOf(s.ModelUnloadTimeout, UnloadNever, UnloadImmediately, Unload2m, Unload5m, Unload10m, Unload15m, Unload1h),
+	check("model_unload_timeout", s.ModelUnloadTimeout.valid(),
 		func() { s.ModelUnloadTimeout = def.ModelUnloadTimeout })
 	check("vad_onset", s.VADOnset > 0 && s.VADOnset < 1, func() { s.VADOnset = def.VADOnset })
 	// The offset must not exceed the onset, or a frame could be in and out of

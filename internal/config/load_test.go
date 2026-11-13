@@ -65,6 +65,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	want.CustomFillerWords = []string{}
 	want.PasteMethod = PasteDirect
 	want.AudioFeedbackVolume = 0.25
+	want.ModelUnloadTimeout = UnloadNever
 
 	if err := Save(path, want); err != nil {
 		t.Fatal(err)
@@ -261,5 +262,41 @@ func TestLoadReadErrorIsReturned(t *testing.T) {
 	}
 	if _, _, err := Load(path); err == nil {
 		t.Error("expected an error when the settings path is a directory")
+	}
+}
+
+func TestLoadModelUnloadTimeout(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		value string
+		want  UnloadTimeout
+		fixed bool
+	}{
+		{"never", `"never"`, UnloadNever, false},
+		{"seconds", `90`, 90, false},
+		{"zero", `0`, 0, false},
+		{"absent", ``, 30, false},
+		{"over a day", `100000`, 30, true},
+		{"negative", `-5`, 30, true},
+		{"other word", `"5m"`, 30, true}, // an old build's choice: not seconds, so the default
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			path := settingsPath(t)
+			doc := `{"schema_version": 1}`
+			if tt.value != "" {
+				doc = `{"schema_version": 1, "model_unload_timeout": ` + tt.value + `}`
+			}
+			writeFile(t, path, doc)
+			got, rep, err := Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.ModelUnloadTimeout != tt.want {
+				t.Errorf("ModelUnloadTimeout = %d, want %d", got.ModelUnloadTimeout, tt.want)
+			}
+			if fixed := slices.Contains(rep.Fixed, "model_unload_timeout"); fixed != tt.fixed {
+				t.Errorf("Fixed = %v, want model_unload_timeout reported: %v", rep.Fixed, tt.fixed)
+			}
+		})
 	}
 }
