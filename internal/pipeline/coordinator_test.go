@@ -30,7 +30,31 @@ type fakeRecorder struct {
 	recording bool
 	starts    int
 	stops     int
+	trace     *tracer // records starts, stops and pre-roll drops, if set
 }
+
+// tracer records what the recorder and the feedback did, in order.
+type tracer struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (tr *tracer) add(e string) {
+	if tr == nil {
+		return
+	}
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	tr.events = append(tr.events, e)
+}
+
+func (tr *tracer) get() []string {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	return slices.Clone(tr.events)
+}
+
+func (r *fakeRecorder) DropPreRoll() { r.trace.add("drop pre-roll") }
 
 func newFakeRecorder(samples []float32) *fakeRecorder {
 	return &fakeRecorder{levels: make(chan audio.Level, 1), samples: samples, rate: rate}
@@ -39,6 +63,7 @@ func newFakeRecorder(samples []float32) *fakeRecorder {
 func (r *fakeRecorder) Start() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.trace.add("record")
 	if r.startErr != nil {
 		return r.startErr
 	}
@@ -53,6 +78,7 @@ func (r *fakeRecorder) Stop() []float32 {
 	if !r.recording {
 		return nil
 	}
+	r.trace.add("stop recording")
 	r.recording = false
 	r.stops++
 	return slices.Clone(r.samples)
@@ -175,6 +201,7 @@ type rigOptions struct {
 	engine   engine.Engine // overrides the fake engine
 	stages   Stages
 	settings func(*config.Settings)
+	feedback Feedback
 }
 
 func newRig(t *testing.T, o rigOptions) *rig {
@@ -204,6 +231,7 @@ func newRig(t *testing.T, o rigOptions) *rig {
 		Output:   r.out,
 		Notices:  r.notices,
 		Settings: func() config.Settings { return settings },
+		Feedback: o.feedback,
 		Stages:   o.stages,
 		Log:      slog.New(slog.DiscardHandler),
 	})
@@ -834,5 +862,91 @@ func TestCloseDiscardsTheSession(t *testing.T) {
 	}
 	if r.c.State() != StateIdle {
 		t.Errorf("state %v", r.c.State())
+	}
+}
+
+// fakeFeedback traces the cues and the mute.
+type fakeFeedback struct {
+	trace *tracer
+	opts  []audio.FeedbackOptions
+	mu    sync.Mutex
+}
+
+func (f *fakeFeedback) Start(o audio.FeedbackOptions) bool {
+	f.mu.Lock()
+	f.opts = append(f.opts, o)
+	f.mu.Unlock()
+	f.trace.add("start cue")
+	return o.Sounds
+}
+
+func (f *fakeFeedback) Stop(_ audio.FeedbackOptions, cancelled bool) {
+	if cancelled {
+		f.trace.add("unmute")
+	} else {
+		f.trace.add("unmute, stop cue")
+	}
+}
+
+func TestFeedbackAroundRecording(t *testing.T) {
+	tr := &tracer{}
+	fb := &fakeFeedback{trace: tr}
+	r := newRig(t, rigOptions{
+		script:   fake.Script{Replies: []fake.Reply{fake.Transcript("x")}},
+		feedback: fb,
+		settings: func(s *config.Settings) {
+			s.AudioFeedback, s.AudioFeedbackVolume, s.OutputDevice, s.MuteWhileRecording = true, 0.4, "Speakers", true
+		},
+	})
+	r.rec.trace = tr
+
+	// The start cue plays before capture, its echo leaves the pre-roll, and
+	// the stop cue plays once capture has stopped.
+	r.c.Start()
+	r.events.waitState(t, StateRecording, 1)
+	r.c.Stop()
+	r.events.waitState(t, StateIdle, 1)
+	want := []string{"start cue", "drop pre-roll", "record", "stop recording", "unmute, stop cue"}
+	if got := tr.get(); !slices.Equal(got, want) {
+		t.Errorf("trace %v, want %v", got, want)
+	}
+	if o := fb.opts[0]; o != (audio.FeedbackOptions{Sounds: true, Volume: 0.4, Device: "Speakers", Mute: true}) {
+		t.Errorf("feedback options %+v, want the settings'", o)
+	}
+
+	// A cancel, a microphone that fails and quitting all unmute without the
+	// stop cue.
+	r.c.Start()
+	r.events.waitState(t, StateRecording, 2)
+	r.c.Cancel()
+	r.events.waitState(t, StateIdle, 2)
+	r.rec.mu.Lock()
+	r.rec.startErr = errors.New("busy")
+	r.rec.mu.Unlock()
+	r.c.Start()
+	r.events.waitRefused(t, ActionStart)
+	r.rec.mu.Lock()
+	r.rec.startErr = nil
+	r.rec.mu.Unlock()
+	r.c.Start()
+	r.events.waitState(t, StateRecording, 3)
+	r.c.Close()
+	want = append(want,
+		"start cue", "drop pre-roll", "record", "stop recording", "unmute",
+		"start cue", "drop pre-roll", "record", "unmute",
+		"start cue", "drop pre-roll", "record", "stop recording", "unmute")
+	if got := tr.get(); !slices.Equal(got, want) {
+		t.Errorf("trace\n%v, want\n%v", got, want)
+	}
+}
+
+func TestNoFeedbackWithoutAModel(t *testing.T) {
+	tr := &tracer{}
+	r := newRig(t, rigOptions{feedback: &fakeFeedback{trace: tr}})
+	r.models.err = ErrNoModel
+	r.c.Start()
+	r.events.waitRefused(t, ActionStart)
+	if got := tr.get(); len(got) != 0 {
+		t.Errorf("trace %v: no cue without a model", got)
 	}
 }

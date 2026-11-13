@@ -30,6 +30,7 @@ func init() {
 			engine:   fake.New(fake.Script{Replies: []fake.Reply{fake.Transcript("hello from the test")}}),
 			output:   &testOutput{},
 			models:   testModels{},
+			feedback: &testFeedback{},
 		}
 	}
 }
@@ -123,6 +124,31 @@ func (o *testOutput) delivered() []string {
 	return slices.Clone(o.texts)
 }
 
+// testFeedback counts what it is asked to do.
+type testFeedback struct {
+	mu                    sync.Mutex
+	starts, stops, closes int
+}
+
+func (f *testFeedback) Start(audio.FeedbackOptions) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.starts++
+	return false
+}
+
+func (f *testFeedback) Stop(audio.FeedbackOptions, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stops++
+}
+
+func (f *testFeedback) Close() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.closes++
+}
+
 // testModels has whatever model is selected.
 type testModels struct{}
 
@@ -176,6 +202,13 @@ func TestTrayDrivesDictation(t *testing.T) {
 	q.waitUI(t, "the idle icon", func() bool { return a.trayIcon == ui.TrayIcon(ui.TrayIdle) })
 	if got := out.delivered(); got[0] != "hello from the test" {
 		t.Errorf("delivered %q", got)
+	}
+	fb := sh.svc.feedback.(*testFeedback)
+	fb.mu.Lock()
+	starts, stops := fb.starts, fb.stops
+	fb.mu.Unlock()
+	if starts != 1 || stops != 1 {
+		t.Errorf("feedback started %d and stopped %d times, want once each", starts, stops)
 	}
 
 	// Cancel discards a recording.
@@ -269,6 +302,13 @@ func TestDictationFollowsSettingsAndStops(t *testing.T) {
 	rec.mu.Unlock()
 	if !closed {
 		t.Error("stopping the app should close the microphone")
+	}
+	fb := sh.svc.feedback.(*testFeedback)
+	fb.mu.Lock()
+	closes := fb.closes
+	fb.mu.Unlock()
+	if closes != 1 {
+		t.Errorf("feedback closed %d times, want once, to restore other audio", closes)
 	}
 	if sh.dictation.State() != pipeline.StateIdle {
 		t.Error("dictation should be idle once stopped")

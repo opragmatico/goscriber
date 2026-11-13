@@ -14,6 +14,7 @@ const debugUsage = `Usage:
   goscriber debug devices
   goscriber debug record [flags] FILE.wav
   goscriber debug paste [flags] TEXT...
+  goscriber debug sounds [flags]
 
 Commands:
   devices   list the audio input and output devices, with their IDs
@@ -22,6 +23,8 @@ Commands:
   paste     after a few seconds to switch apps, put TEXT into the focused app
             the way dictation does, then report whether the clipboard holds
             what it held before
+  sounds    play the start and stop cues, as dictation does when audio
+            feedback is on
 
 Flags for record:
       --device D     microphone name or ID (default: the settings' microphone,
@@ -37,6 +40,10 @@ Flags for paste (default: the settings' output options):
       --keep         leave the text on the clipboard instead of restoring it
       --submit       press Return afterwards
       --space        add a trailing space
+
+Flags for sounds (default: the settings' output device and volume):
+      --device D     output device name or ID; "" is the system default
+      --volume V     from 0 to 1
 `
 
 func runDebug(args []string, env Env) int {
@@ -54,6 +61,8 @@ func runDebug(args []string, env Env) int {
 		return debugRecord(args[1:], env)
 	case "paste":
 		return debugPaste(args[1:], env)
+	case "sounds":
+		return debugSounds(args[1:], env)
 	default:
 		fmt.Fprintf(env.Stderr, "goscriber debug: unknown command %q\n\n%s", args[0], debugUsage)
 		return exitUsage
@@ -218,4 +227,41 @@ func meterBar(rms float32) string {
 	n := int((audio.DBFS(rms) + 60) / 60 * width)
 	n = max(0, min(width, n))
 	return "[" + strings.Repeat("#", n) + strings.Repeat(" ", width-n) + "]"
+}
+
+func debugSounds(args []string, env Env) int {
+	settings := userSettings()
+	c := newCommand("debug sounds", debugUsage, env)
+	device := c.fs.String("device", settings.OutputDevice, "output device name or ID")
+	volume := c.fs.Float64("volume", settings.AudioFeedbackVolume, "volume from 0 to 1")
+	pos, code, ok := c.parse(args)
+	if !ok {
+		return code
+	}
+	if len(pos) > 0 {
+		return c.fail("unexpected argument %q", pos[0])
+	}
+	if *volume < 0 || *volume > 1 {
+		return c.fail("--volume must be between 0 and 1")
+	}
+	where := *device
+	if where == "" {
+		where = "the default output"
+	}
+	ctx, stop := interruptible()
+	defer stop()
+	p := audio.NewPlayer()
+	for _, cue := range []struct {
+		name  string
+		sound audio.Sound
+	}{{"start", audio.StartCue()}, {"stop", audio.StopCue()}} {
+		fmt.Fprintf(env.Stdout, "playing the %s cue (%s) on %s at volume %.2f\n",
+			cue.name, cue.sound.Duration().Round(time.Millisecond), where, *volume)
+		if err := p.Play(ctx, cue.sound, *device, *volume); err != nil {
+			fmt.Fprintf(env.Stderr, "goscriber: %v\n", err)
+			return exitFailure
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	return exitOK
 }

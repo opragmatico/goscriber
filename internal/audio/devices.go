@@ -60,6 +60,20 @@ type backend interface {
 	// audio thread and must not block. onStop runs when the device stops on
 	// its own, such as when it is unplugged.
 	open(id string, onData func([]float32), onStop func()) (inputStream, error)
+	// openOutput prepares a playback device, or the default one when id is
+	// "", to play mono float32 samples at rate Hz; the backend converts them
+	// to the device's channels and rate. fill runs on the audio thread for
+	// each period, must fill out (with zeros past the end of the sound) and
+	// must not block.
+	openOutput(id string, rate int, fill func(out []float32)) (outputStream, error)
+}
+
+// outputStream is an open playback device.
+type outputStream interface {
+	start() error
+	// close stops and releases the device. No fill call is running or will
+	// run once it returns.
+	close()
 }
 
 // inputStream is an open capture device.

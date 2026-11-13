@@ -25,6 +25,15 @@ type services struct {
 	engine   engine.Engine
 	output   pipeline.Output
 	models   pipeline.ModelSource
+	feedback feedback
+}
+
+// feedback plays the cues and mutes other audio around recordings.
+// *audio.Feedback implements it.
+type feedback interface {
+	pipeline.Feedback
+	// Close puts other audio back and waits for a cue still playing.
+	Close()
 }
 
 // recorder is the microphone as the shell drives it. *audio.Recorder
@@ -63,6 +72,7 @@ func systemServices(rt *Runtime, opts Options, notices *notice.Hub) services {
 		models: pipeline.CatalogModels{Manager: models.NewManager(rt.Paths.ModelsDir(), models.Options{
 			HFCache: models.HFCacheDir(os.Getenv),
 		})},
+		feedback: audio.NewFeedback(audio.NewPlayer(), platform.MuteOutput, rt.Log.Logger),
 	}
 }
 
@@ -82,6 +92,7 @@ func (sh *shell) startDictation() {
 		Output:   sh.svc.output,
 		Notices:  sh.notices,
 		Settings: sh.rt.Settings.Get,
+		Feedback: sh.svc.feedback,
 		Log:      sh.rt.Log.Logger,
 	})
 	events, stop := sh.dictation.Subscribe()
@@ -197,6 +208,7 @@ func (sh *shell) stopDictation() {
 	if sh.dictation != nil {
 		sh.dictation.Close()
 	}
+	sh.svc.feedback.Close()
 	if err := sh.svc.engine.Unload(); err != nil {
 		sh.rt.Log.Warn("unloading the model failed", "err", err)
 	}

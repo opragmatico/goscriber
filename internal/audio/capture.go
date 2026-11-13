@@ -198,6 +198,23 @@ func (r *Recorder) endLocked(s *session) {
 	wake(s.notify)
 }
 
+// DropPreRoll forgets the audio an always-on microphone kept from before
+// now, so the next recording starts from here. Call it after playing the
+// start cue, which the pre-roll would otherwise hold.
+func (r *Recorder) DropPreRoll() {
+	r.mu.Lock()
+	d := r.in
+	r.mu.Unlock()
+	if d != nil {
+		d.flushNow() // what the device delivered up to now goes into the pre-roll first
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.pre != nil && r.sess == nil {
+		r.pre.take()
+	}
+}
+
 // Frames returns the recording's audio as it arrives, in chunks of about
 // 10 ms (larger when the reader falls behind), starting with the pre-roll.
 // The channel closes after Stop has delivered every sample, so the chunks
