@@ -6,7 +6,7 @@ Press a shortcut, speak, release, and your words are pasted into whatever app yo
 
 Goscriber is a Go re-implementation of [Handy](https://github.com/cjpais/Handy) by CJ Pais. Handy is a Tauri (Rust + React) app that runs many model families through `transcribe.cpp`. Goscriber keeps Handy's dictation behaviour but deliberately narrows the speech stack to **three NVIDIA models running in-process through [NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) via CGo**, and ships a single native binary with a [Fyne](https://fyne.io) UI.
 
-> **Status: early development.** `goscriber` starts as a menu bar / tray icon with a placeholder settings window; dictation is not wired up yet. `goscriber transcribe` already transcribes WAV files from the command line. See the [roadmap](#roadmap) and the [issue tracker](https://github.com/opragmatico/goscriber/issues).
+> **Status: early development.** `goscriber` runs as a menu bar / tray icon: the shortcut or the tray records, transcribes the whole recording once you stop, and pastes the text. There is no onboarding or Models page yet, so pick a downloaded model by setting `selected_model` in `settings.json` (see [Dictation pipeline](docs/architecture.md#dictation-pipeline)). `goscriber transcribe` transcribes WAV files from the command line. See the [roadmap](#roadmap) and the [issue tracker](https://github.com/opragmatico/goscriber/issues).
 
 ## Supported models
 
