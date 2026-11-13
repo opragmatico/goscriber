@@ -60,6 +60,7 @@ internal/
 │   ├── engine.go          # Engine / Stream interfaces, Result, Word, options
 │   ├── nemo/              # CGo binding to nemo_speech/asr.h (built with cgo only)
 │   ├── worker/            # supervisor (parent) + worker (child) and their protocol
+│   ├── autounload/        # unloads an idle model, reloads it on next use
 │   └── fake/              # scripted engine for tests and CGo-free builds
 ├── models/
 │   ├── catalog.json       # the two models (+ Silero VAD), pinned revisions and checksums
@@ -171,6 +172,10 @@ The binding needs `cgo` and the NeMo-Speech.cpp SDK (headers and shared librarie
 ### Process isolation
 
 A `GGML_ASSERT`, a GPU driver fault or an `abort()` inside C++ takes the whole Go process with it. Following Handy's `engine_supervisor`, the native engine runs in a child process: the same `goscriber` binary started with a hidden `engine-worker` subcommand. The parent's `engine/worker` supervisor implements the same `Engine` interface over a framed stdin/stdout protocol (load, unload, recognize, stream push / next / finish, cancel), restarts a crashed worker, and retries on the CPU when the GPU backend was at fault. A worker lives exactly as long as its loaded model, so unloading returns all native memory to the OS.
+
+### Idle unload
+
+A loaded model holds hundreds of megabytes, so `engine/autounload` wraps the engine (the supervisor, or the binding directly) and unloads the model once it has been idle for `model_unload_timeout`: a number of seconds (30 by default; `0` unloads it as soon as it is idle), or `"never"`. The model is busy while a `Recognize` is in flight, a stream is open, or the coordinator holds it with `Acquire`, which it does from the start of a recording until the transcript is out. Holding it then hides a reload behind the user speaking, and a long batch recording, when the engine itself has no work, cannot outlast the timeout. An idle unload keeps the `LoadSpec`, and the next call loads the same model again; an explicit `Unload` forgets it. The coordinator passes settings changes on with `SetTimeout`.
 
 ## Dictation pipeline
 
