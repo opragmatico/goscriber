@@ -99,8 +99,16 @@ type harness struct {
 	actions chan Action
 	errs    chan error
 
-	mu  sync.Mutex
-	now time.Time
+	mu   sync.Mutex
+	now  time.Time
+	regs []Purpose
+}
+
+func (h *harness) registered() []Purpose {
+	h.sync()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.Clone(h.regs)
 }
 
 func newHarness(t *testing.T) *harness {
@@ -111,8 +119,9 @@ func newHarness(t *testing.T) *harness {
 		now: time.Unix(1000, 0),
 	}
 	h.m = newManager(h.be, Options{
-		OnAction: func(a Action) { h.actions <- a },
-		OnError:  func(err error) { h.errs <- err },
+		OnAction:     func(a Action) { h.actions <- a },
+		OnError:      func(err error) { h.errs <- err },
+		OnRegistered: func(p Purpose) { h.mu.Lock(); h.regs = append(h.regs, p); h.mu.Unlock() },
 	}, h.clock)
 	t.Cleanup(func() {
 		h.m.Close()
@@ -317,6 +326,9 @@ func TestManagerReportsFailuresAndRetries(t *testing.T) {
 	h.be.setFail("option+space", nil)
 	h.m.Apply(cfg(config.ActivationToggle))
 	h.wantLog("!option+space", "+option+space")
+	if got := h.registered(); !slices.Equal(got, []Purpose{PurposeTranscribe}) {
+		t.Errorf("OnRegistered saw %v, want only the successful registration", got)
+	}
 }
 
 func TestManagerRejectsInvalidShortcuts(t *testing.T) {

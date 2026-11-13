@@ -114,3 +114,58 @@ func TestSettingsWindowCloseHides(t *testing.T) {
 	s.Show(PageGeneral)
 	s.closeRequested()
 }
+
+func TestSettingsWindowBanner(t *testing.T) {
+	a := test.NewTempApp(t)
+	s := NewSettingsWindow(a, info, nil)
+	acted, dismissed := 0, 0
+	b := &Banner{
+		Error: true, Title: "No model downloaded", Message: "Download a speech model to start dictating.",
+		ActionLabel: "Download a model", OnAction: func() { acted++ }, OnDismiss: func() { dismissed++ },
+	}
+	s.SetBanner(b) // before the window exists: shown when it opens
+	if s.Visible() {
+		t.Error("visible before Show")
+	}
+	s.Show(PageGeneral)
+	if !s.Visible() || s.Banner() != b {
+		t.Fatal("the window should be visible with the banner")
+	}
+	if s.Window().Content() == s.tabs {
+		t.Fatal("the banner should sit above the pages")
+	}
+
+	var texts []string
+	buttons := map[string]*widget.Button{}
+	var walk func(fyne.CanvasObject)
+	walk = func(o fyne.CanvasObject) {
+		switch o := o.(type) {
+		case *widget.Label:
+			texts = append(texts, o.Text)
+		case *widget.Button:
+			buttons[o.Text] = o
+		case *fyne.Container:
+			for _, c := range o.Objects {
+				walk(c)
+			}
+		}
+	}
+	walk(s.Window().Content().(*fyne.Container).Objects[1]) // the banner; Objects[0] is the pages
+	if !slices.Contains(texts, "No model downloaded") || !slices.Contains(texts, "Download a speech model to start dictating.") {
+		t.Errorf("banner text %q", texts)
+	}
+	test.Tap(buttons["Download a model"])
+	test.Tap(buttons["Dismiss"])
+	if acted != 1 || dismissed != 1 {
+		t.Errorf("acted %d, dismissed %d", acted, dismissed)
+	}
+
+	s.SetBanner(nil)
+	if s.Window().Content() != s.tabs {
+		t.Error("without a banner the pages should fill the window again")
+	}
+	s.closeRequested()
+	if s.Visible() {
+		t.Error("visible after closing")
+	}
+}

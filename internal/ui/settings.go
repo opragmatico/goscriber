@@ -2,7 +2,9 @@ package ui
 
 import (
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
@@ -36,10 +38,23 @@ type SettingsWindow struct {
 	info    SettingsInfo
 	onClose func()
 	model   string
+	banner  *Banner
+	visible bool
 
 	win        fyne.Window
 	tabs       *container.AppTabs
 	modelLabel *widget.Label
+}
+
+// Banner is a problem shown across the top of the settings window, with a
+// button that fixes it and one that dismisses it.
+type Banner struct {
+	Error       bool // an error (red) rather than a warning (amber)
+	Title       string
+	Message     string
+	ActionLabel string // no action button when empty
+	OnAction    func()
+	OnDismiss   func()
 }
 
 // NewSettingsWindow prepares the window. onClose, if not nil, runs after the
@@ -56,6 +71,52 @@ func (s *SettingsWindow) Show(p Page) {
 	s.tabs.SelectIndex(int(p))
 	s.win.Show()
 	s.win.RequestFocus()
+	s.visible = true
+}
+
+// Visible reports whether the window is on screen.
+func (s *SettingsWindow) Visible() bool { return s.visible }
+
+// Banner is the banner shown, or nil.
+func (s *SettingsWindow) Banner() *Banner { return s.banner }
+
+// SetBanner shows b across the top of the window, or removes the banner
+// with nil.
+func (s *SettingsWindow) SetBanner(b *Banner) {
+	s.banner = b
+	if s.win != nil {
+		s.layout()
+	}
+}
+
+// layout puts the banner, if any, above the pages.
+func (s *SettingsWindow) layout() {
+	if s.banner == nil {
+		s.win.SetContent(s.tabs)
+		return
+	}
+	s.win.SetContent(container.NewBorder(bannerView(s.banner), nil, nil, nil, s.tabs))
+}
+
+func bannerView(b *Banner) fyne.CanvasObject {
+	title := widget.NewLabelWithStyle(b.Title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	message := paragraph(b.Message)
+	buttons := container.NewHBox()
+	if b.ActionLabel != "" {
+		action := widget.NewButton(b.ActionLabel, b.OnAction)
+		action.Importance = widget.HighImportance
+		buttons.Add(action)
+	}
+	buttons.Add(widget.NewButton("Dismiss", b.OnDismiss))
+
+	color := theme.Color(theme.ColorNameWarning)
+	if b.Error {
+		color = theme.Color(theme.ColorNameError)
+	}
+	stripe := canvas.NewRectangle(color)
+	stripe.SetMinSize(fyne.NewSize(4, 0))
+	body := container.NewVBox(title, message, container.NewHBox(layout.NewSpacer(), buttons))
+	return container.NewPadded(container.NewBorder(nil, nil, stripe, nil, body))
 }
 
 // Window is the Fyne window, or nil before the first Show.
@@ -104,7 +165,7 @@ func (s *SettingsWindow) create() {
 
 	s.win = s.app.NewWindow(SettingsTitle)
 	s.win.SetIcon(AppIcon())
-	s.win.SetContent(s.tabs)
+	s.layout()
 	s.win.Resize(fyne.NewSize(640, 420))
 	s.win.CenterOnScreen()
 	s.win.SetCloseIntercept(s.closeRequested)
@@ -113,6 +174,7 @@ func (s *SettingsWindow) create() {
 // closeRequested runs when the user closes the window.
 func (s *SettingsWindow) closeRequested() {
 	s.win.Hide()
+	s.visible = false
 	if s.onClose != nil {
 		s.onClose()
 	}

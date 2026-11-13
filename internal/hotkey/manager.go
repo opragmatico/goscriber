@@ -75,6 +75,9 @@ type Options struct {
 	OnAction func(Action)
 	// OnError receives each *RegisterError, on the Manager's goroutine.
 	OnError func(error)
+	// OnRegistered is told each shortcut that registers, on the Manager's
+	// goroutine, so a problem reported through OnError can be cleared.
+	OnRegistered func(Purpose)
 	// Log receives debug lines about registrations and actions. Nil means
 	// slog's default logger.
 	Log *slog.Logger
@@ -289,6 +292,9 @@ func (m *Manager) register(s *slot, b Binding) {
 	}
 	s.reg, s.events = reg, reg.Events()
 	m.log.Debug("shortcut registered", "purpose", string(s.purpose), "shortcut", b.String())
+	if m.opts.OnRegistered != nil {
+		m.opts.OnRegistered(s.purpose)
+	}
 }
 
 func (m *Manager) unregister(s *slot) {

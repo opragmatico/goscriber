@@ -26,6 +26,13 @@ type fakeShortcuts struct {
 	mu     sync.Mutex
 	active map[string]chan hotkey.KeyEvent
 	log    []string
+	fail   error // Register fails with it while set
+}
+
+func (f *fakeShortcuts) setFail(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fail = err
 }
 
 type fakeShortcut struct {
@@ -37,12 +44,16 @@ type fakeShortcut struct {
 func (f *fakeShortcuts) reset() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.active, f.log = map[string]chan hotkey.KeyEvent{}, nil
+	f.active, f.log, f.fail = map[string]chan hotkey.KeyEvent{}, nil, nil
 }
 
 func (f *fakeShortcuts) Register(b hotkey.Binding) (hotkey.Registration, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.fail != nil {
+		f.log = append(f.log, "!"+b.String())
+		return nil, f.fail
+	}
 	if f.active == nil {
 		f.active = map[string]chan hotkey.KeyEvent{}
 	}
