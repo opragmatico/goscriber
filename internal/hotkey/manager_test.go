@@ -14,7 +14,7 @@ import (
 type fakeBackend struct {
 	mu     sync.Mutex
 	active map[string]*fakeReg // by Binding.String()
-	log    []string            // "+option+space", "-escape", "!f5"
+	log    []string            // "+alt+space", "-escape", "!f5"
 	fail   map[string]error    // Register fails for these shortcuts
 }
 
@@ -199,6 +199,20 @@ func (h *harness) wantLog(want ...string) {
 	}
 }
 
+// talk is how the backend names cfg's transcribe shortcut, "option+space":
+// Binding.String uses this OS's modifier names, so it is "option+space" on
+// macOS and "alt+space" elsewhere. Settings keep the text as typed, so
+// errors quote "option+space" on every OS.
+var talk = mustParse("option+space").String()
+
+func mustParse(s string) Binding {
+	b, err := Parse(s)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
 func cfg(mode config.ActivationMode) Config {
 	return Config{Transcribe: "option+space", Cancel: "escape", Mode: mode, HoldThreshold: 300 * time.Millisecond}
 }
@@ -207,9 +221,9 @@ func TestManagerRegistersOnApply(t *testing.T) {
 	h := newHarness(t)
 	h.wantLog() // nothing before Apply
 	h.m.Apply(cfg(config.ActivationToggle))
-	h.wantLog("+option+space") // the cancel shortcut waits for a recording
+	h.wantLog("+" + talk) // the cancel shortcut waits for a recording
 	h.m.Apply(cfg(config.ActivationPushToTalk))
-	h.wantLog("+option+space") // only the mode changed
+	h.wantLog("+" + talk) // only the mode changed
 }
 
 func TestManagerPushToTalkWithCancelWhileRecording(t *testing.T) {
@@ -217,27 +231,27 @@ func TestManagerPushToTalkWithCancelWhileRecording(t *testing.T) {
 	h.m.Apply(cfg(config.ActivationPushToTalk))
 	h.sync()
 
-	h.be.send(t, "option+space", KeyDown)
+	h.be.send(t, talk, KeyDown)
 	h.wantAction(ActionStart)
-	h.wantLog("+option+space") // not confirmed yet: Escape stays free
-	h.m.SetRecording(true)     // dictation started
-	h.wantLog("+option+space", "+escape")
+	h.wantLog("+" + talk)  // not confirmed yet: Escape stays free
+	h.m.SetRecording(true) // dictation started
+	h.wantLog("+"+talk, "+escape")
 
 	h.advance(2 * time.Second)
-	h.be.send(t, "option+space", KeyUp)
+	h.be.send(t, talk, KeyUp)
 	h.wantAction(ActionStop)
-	h.wantLog("+option+space", "+escape", "-escape") // freed without waiting for dictation
+	h.wantLog("+"+talk, "+escape", "-escape") // freed without waiting for dictation
 	h.m.SetRecording(false)
-	h.wantLog("+option+space", "+escape", "-escape")
+	h.wantLog("+"+talk, "+escape", "-escape")
 
 	// Cancel mid-recording; the release that follows does nothing.
-	h.be.send(t, "option+space", KeyDown)
+	h.be.send(t, talk, KeyDown)
 	h.wantAction(ActionStart)
 	h.m.SetRecording(true)
 	h.sync()
 	h.be.send(t, "escape", KeyDown)
 	h.wantAction(ActionCancel)
-	h.be.send(t, "option+space", KeyUp)
+	h.be.send(t, talk, KeyUp)
 	h.wantNoAction()
 	if h.be.isActive("escape") {
 		t.Error("escape is still registered after the cancel")
@@ -249,21 +263,21 @@ func TestManagerHoldOrToggleUsesTheClock(t *testing.T) {
 	h.m.Apply(cfg(config.ActivationHoldOrToggle))
 	h.sync()
 
-	h.be.send(t, "option+space", KeyDown)
+	h.be.send(t, talk, KeyDown)
 	h.wantAction(ActionStart)
 	h.advance(100 * time.Millisecond) // a tap
-	h.be.send(t, "option+space", KeyUp)
+	h.be.send(t, talk, KeyUp)
 	h.wantNoAction()
 	h.advance(3 * time.Second)
-	h.be.send(t, "option+space", KeyDown)
+	h.be.send(t, talk, KeyDown)
 	h.wantAction(ActionStop)
-	h.be.send(t, "option+space", KeyUp)
+	h.be.send(t, talk, KeyUp)
 	h.wantNoAction()
 
-	h.be.send(t, "option+space", KeyDown)
+	h.be.send(t, talk, KeyDown)
 	h.wantAction(ActionStart)
 	h.advance(time.Second) // held
-	h.be.send(t, "option+space", KeyUp)
+	h.be.send(t, talk, KeyUp)
 	h.wantAction(ActionStop)
 }
 
@@ -274,36 +288,36 @@ func TestManagerFollowsARefusal(t *testing.T) {
 	h.m.Apply(cfg(config.ActivationToggle))
 	h.sync()
 	for range 2 {
-		h.be.send(t, "option+space", KeyDown)
+		h.be.send(t, talk, KeyDown)
 		h.wantAction(ActionStart)
 		h.m.SetRecording(false)
-		h.be.send(t, "option+space", KeyUp)
+		h.be.send(t, talk, KeyUp)
 		h.wantNoAction()
 	}
-	h.wantLog("+option+space")
+	h.wantLog("+" + talk)
 }
 
 func TestManagerReregistersOnSettingsChange(t *testing.T) {
 	h := newHarness(t)
 	h.m.Apply(cfg(config.ActivationToggle))
 	h.m.SetRecording(true)
-	h.wantLog("+option+space", "+escape")
+	h.wantLog("+"+talk, "+escape")
 
 	next := cfg(config.ActivationToggle)
 	next.Transcribe = "ctrl+shift+d"
 	h.m.Apply(next)
-	h.wantLog("+option+space", "+escape", "-option+space", "+ctrl+shift+d", "-escape", "+escape")
+	h.wantLog("+"+talk, "+escape", "-"+talk, "+ctrl+shift+d", "-escape", "+escape")
 
 	next.Cancel = "shift+escape"
 	h.m.Apply(next)
-	h.wantLog("+option+space", "+escape", "-option+space", "+ctrl+shift+d", "-escape", "+escape", "-escape", "+shift+escape")
+	h.wantLog("+"+talk, "+escape", "-"+talk, "+ctrl+shift+d", "-escape", "+escape", "-escape", "+shift+escape")
 
 	// The new shortcut drives dictation; the old one is gone.
 	h.m.SetRecording(false)
 	h.sync()
 	h.be.send(t, "ctrl+shift+d", KeyDown)
 	h.wantAction(ActionStart)
-	if h.be.isActive("option+space") {
+	if h.be.isActive(talk) {
 		t.Error("the old shortcut is still registered")
 	}
 }
@@ -311,7 +325,7 @@ func TestManagerReregistersOnSettingsChange(t *testing.T) {
 func TestManagerReportsFailuresAndRetries(t *testing.T) {
 	h := newHarness(t)
 	denied := errors.New("grant Accessibility")
-	h.be.setFail("option+space", denied)
+	h.be.setFail(talk, denied)
 	h.m.Apply(cfg(config.ActivationToggle))
 	rerr := h.wantError(PurposeTranscribe)
 	if rerr.Shortcut != "option+space" || !errors.Is(rerr, denied) {
@@ -323,9 +337,9 @@ func TestManagerReportsFailuresAndRetries(t *testing.T) {
 
 	// Applying the same settings again, once the permission is granted,
 	// retries the failed shortcut.
-	h.be.setFail("option+space", nil)
+	h.be.setFail(talk, nil)
 	h.m.Apply(cfg(config.ActivationToggle))
-	h.wantLog("!option+space", "+option+space")
+	h.wantLog("!"+talk, "+"+talk)
 	if got := h.registered(); !slices.Equal(got, []Purpose{PurposeTranscribe}) {
 		t.Errorf("OnRegistered saw %v, want only the successful registration", got)
 	}
@@ -347,7 +361,7 @@ func TestManagerRejectsInvalidShortcuts(t *testing.T) {
 	if rerr := h.wantError(PurposeCancel); rerr.Error() != `the cancel shortcut "option+space" is not available: it is the transcribe shortcut too` {
 		t.Errorf("error %v", rerr)
 	}
-	h.wantLog("+option+space")
+	h.wantLog("+" + talk)
 }
 
 func TestManagerCloseUnregistersEverything(t *testing.T) {
@@ -361,7 +375,7 @@ func TestManagerCloseUnregistersEverything(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Close did not finish")
 	}
-	if got := h.be.logged(); !slices.Equal(got, []string{"+option+space", "+escape", "-option+space", "-escape"}) {
+	if got := h.be.logged(); !slices.Equal(got, []string{"+" + talk, "+escape", "-" + talk, "-escape"}) {
 		t.Errorf("registrations %v", got)
 	}
 	h.m.Apply(cfg(config.ActivationToggle)) // after Close: ignored, no panic
