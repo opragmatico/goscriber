@@ -6,10 +6,15 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -X main.version=$(VERSION)
 
 # golangci-lint is pinned and installed into ./bin on first use, so every
-# machine and CI lint with the same version.
+# machine and CI lint with the same version. It must be built with a Go at
+# least as new as go.mod's go line, or it refuses to load the module, so it is
+# built with the toolchain this module selects (GOTOOLCHAIN would otherwise
+# pick the older Go that golangci-lint's own go.mod asks for). That Go version
+# is part of the binary's name, so a Go upgrade rebuilds it.
 GOLANGCI_LINT_VERSION := v2.15.0
 TOOLS_BIN             := $(CURDIR)/bin
-GOLANGCI_LINT         := $(TOOLS_BIN)/golangci-lint-$(GOLANGCI_LINT_VERSION)
+GO_TOOLCHAIN          := $(shell $(GO) env GOVERSION)
+GOLANGCI_LINT         := $(TOOLS_BIN)/golangci-lint-$(GOLANGCI_LINT_VERSION)-$(GO_TOOLCHAIN)
 
 # Packages allowed to use CGo: app wiring and the Fyne UI, native platform code,
 # and the NeMo-Speech.cpp binding. Everything else must build and test with
@@ -96,5 +101,5 @@ clean-deps: ## Remove the NeMo-Speech.cpp SDK and its build tree (.deps/)
 	rm -rf .deps
 
 $(GOLANGCI_LINT):
-	GOBIN=$(TOOLS_BIN) $(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+	GOTOOLCHAIN=$(GO_TOOLCHAIN) GOBIN=$(TOOLS_BIN) $(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 	mv $(TOOLS_BIN)/golangci-lint $@
