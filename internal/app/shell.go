@@ -3,6 +3,7 @@ package app
 import (
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -91,6 +92,10 @@ type shell struct {
 
 	svc       services
 	dictation *pipeline.Coordinator
+	overlay   *ui.Overlay
+	// overlayActive is whether a session is in progress, for the overlay's
+	// clock; it is read off the main thread.
+	overlayActive atomic.Bool
 	// recording is what the shortcuts were last told about dictation.
 	recording           bool
 	stopDictationEvents func()

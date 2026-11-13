@@ -7,7 +7,7 @@ Handy is built with Tauri (Rust backend + React UI) and runs a broad catalog of 
 | Concern | Handy | Goscriber |
 | --- | --- | --- |
 | UI | Tauri webview + React | Fyne v2 widgets |
-| Tray / overlay | Tauri tray, NSPanel / webview overlay | Fyne `desktop.App` tray menu; borderless Fyne window, made non-activating and always-on-top through native window handles |
+| Tray / overlay | Tauri tray, NSPanel / webview overlay | Fyne `desktop.App` tray menu; borderless Fyne window, created without focus and made floating and click-through through native window handles |
 | Speech-to-text | `transcribe-cpp` (many families) | NeMo-Speech.cpp C ABI (`nemo_speech/asr.h`) via CGo, three models only |
 | Engine isolation | `engine_supervisor`: worker child process | Same idea: the `goscriber` binary re-launched as an engine worker |
 | Model download | Catalog + downloader with mirrors | Embedded three-model catalog, resumable HTTP download, SHA-256 verification |
@@ -75,7 +75,7 @@ internal/
 ├── output/                # clipboard paste with restore, direct typing
 ├── hotkey/                # global shortcuts, push-to-talk and toggle
 ├── history/               # SQLite history + saved recordings
-├── platform/              # permissions and native window tweaks (per-OS, CGo)
+├── platform/              # permissions, the overlay's native window tweaks (per-OS, CGo)
 └── ui/
     ├── tray.go
     ├── overlay.go
@@ -101,6 +101,18 @@ third_party/
 - **No window at launch** while the tray is shown; windows open from the menu. Without a tray (`--no-tray`, the `show_tray_icon` setting, or a desktop with no tray) the settings window opens at launch, even with `--start-hidden`, and closing it quits, as in Handy.
 - **macOS**: with a tray the app is an accessory app with no Dock icon. The bundle's Info.plist sets `LSUIElement`, and the app also sets the activation policy at startup, because GLFW makes every app a regular one and plain `go run` builds have no Info.plist. Without a tray the Dock icon stays as the way back in.
 - **Shutdown**: Quit, SIGINT and SIGTERM all end Fyne's main loop; the app then stops following settings and closes the log.
+
+## Overlay
+
+While a session is in progress, a small pill near the edge of the screen shows that Goscriber is listening (`internal/ui/overlay.go`): a red dot, a level meter and the elapsed time while recording, "Transcribing…" with an amber dot after it, and a cancel button in both. `overlay_style` picks how much: `none` (never shown; the default on Linux, where overlays steal focus on several desktops, as in Handy), `minimal` (the pill) or `live` (the default elsewhere: the pill widens to show the end of the interim text, which live transcription, #24, fills in). `overlay_position` puts it at the top or the bottom centre of the screen that holds the mouse pointer.
+
+The window is a borderless Fyne window (`desktop.Driver.CreateSplashWindow`, asked to stay on top), created the first time there is something to show. It must never take the keyboard from the app the user dictates into, or the paste would land in Goscriber:
+
+- **No focus on show, on every OS**: GLFW focuses a window when it shows it unless the window was created with `GLFW_FOCUS_ON_SHOW` off. Fyne never sets that hint, so the overlay sets it (through `go-gl/glfw`, which Fyne's driver owns) only around the window's creation, then puts it back for windows created later.
+- **macOS** (`platform.PrepareOverlay`, through `driver.NativeWindow.RunNative`): the `NSWindow` gets the status window level, joins all Spaces and full-screen apps (`CanJoinAllSpaces`, `FullScreenAuxiliary`, `Stationary`, `IgnoresCycle`), loses its shadow, and has its content clipped to a pill by its layer. AppKit can only pass a window's clicks through as a whole, so the overlay ignores the mouse except while the pointer is over the cancel button, which it checks ten times a second while shown (`platform.OverlayClickThrough`). Clicking cancel makes Goscriber the active app, so the overlay then hands the keyboard back (`[NSApp deactivate]`). It is placed with `NSScreen.visibleFrame`, clear of the menu bar and the Dock.
+- **Elsewhere** the window is centred on the screen and Fyne's always-on-top request applies; Linux and Windows positioning come with #35 and #36.
+
+The shell feeds it from the coordinator's events on the main thread: the state, the interim text, and the microphone level at most about 40 times a second (the recorder measures 30), with at most one level update and one clock tick waiting for the main thread at a time. If adjusting the GLFW window turns out not to be enough (it may still activate the app on some macOS versions), the fallback the issue foresaw is to draw this one overlay as a native `NSPanel` through CGo.
 
 ## Shortcuts
 
