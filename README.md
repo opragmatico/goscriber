@@ -53,7 +53,7 @@ Following Handy, Goscriber also plans transcription history, custom vocabulary (
 | Voice activity detection | Silero VAD, run by NeMo-Speech.cpp |
 | Audio capture and sounds | [`malgo`](https://github.com/gen2brain/malgo) (miniaudio) |
 | Global shortcuts | [`golang.design/x/hotkey`](https://github.com/golang-design/hotkey) (needs the Accessibility permission on macOS) |
-| Clipboard and paste | [`golang.design/x/clipboard`](https://github.com/golang-design/clipboard) + platform key events |
+| Clipboard and paste | `NSPasteboard` and Core Graphics key events through CGo on macOS (needs the Accessibility permission) |
 | Settings | JSON under `os.UserConfigDir()` |
 | History | SQLite via [`modernc.org/sqlite`](https://pkg.go.dev/modernc.org/sqlite) (pure Go) |
 | Logging | `log/slog` |

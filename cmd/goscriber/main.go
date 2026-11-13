@@ -19,6 +19,10 @@ var runApp func(cli.AppOptions) error
 // engine.go for builds with the NeMo-Speech.cpp SDK; other builds leave it nil.
 var newEngine func() engine.Engine
 
+// newOutput reaches the clipboard and keyboard for `goscriber debug paste`.
+// It is set in output.go for CGo builds; other builds leave it nil.
+var newOutput func() cli.OutputEnv
+
 func main() {
 	os.Exit(cli.Run(os.Args[1:], cli.Env{
 		Stdout:    os.Stdout,
@@ -26,5 +30,6 @@ func main() {
 		Version:   version,
 		RunApp:    runApp,
 		NewEngine: newEngine,
+		Output:    newOutput,
 	}))
 }

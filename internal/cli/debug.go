@@ -13,11 +13,15 @@ import (
 const debugUsage = `Usage:
   goscriber debug devices
   goscriber debug record [flags] FILE.wav
+  goscriber debug paste [flags] TEXT...
 
 Commands:
   devices   list the audio input and output devices, with their IDs
   record    record from the microphone to a 16-bit WAV file, then report the
             sample rate, dropped samples and levels
+  paste     after a few seconds to switch apps, put TEXT into the focused app
+            the way dictation does, then report whether the clipboard holds
+            what it held before
 
 Flags for record:
       --device D     microphone name or ID (default: the settings' microphone,
@@ -25,6 +29,14 @@ Flags for record:
       --seconds N    how long to record (default 10); Ctrl-C stops early
       --always-on    open the microphone a second before recording and keep
                      its pre-roll, as the always-on setting does
+
+Flags for paste (default: the settings' output options):
+      --method M     paste (clipboard and Cmd/Ctrl+V), direct (type the text)
+                     or none (copy only)
+      --wait D       time to switch to the target app first (default 3s)
+      --keep         leave the text on the clipboard instead of restoring it
+      --submit       press Return afterwards
+      --space        add a trailing space
 `
 
 func runDebug(args []string, env Env) int {
@@ -40,6 +52,8 @@ func runDebug(args []string, env Env) int {
 		return debugDevices(args[1:], env)
 	case "record":
 		return debugRecord(args[1:], env)
+	case "paste":
+		return debugPaste(args[1:], env)
 	default:
 		fmt.Fprintf(env.Stderr, "goscriber debug: unknown command %q\n\n%s", args[0], debugUsage)
 		return exitUsage
