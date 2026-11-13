@@ -2,6 +2,18 @@ package audio
 
 import "math"
 
+// Levels never reach the speech model, which takes the raw samples and copes
+// with a wide range of loudness. They exist for two reasons:
+//
+//   - Feedback: the overlay's meter shows the user that the right microphone
+//     is live while they speak, which push-to-talk otherwise gives no sign of.
+//   - Catching bad input before it becomes a bad transcript. A peak of exactly
+//     0 almost always means no microphone permission or the wrong device:
+//     macOS delivers zeros rather than an error, which would otherwise end as
+//     an unexplained empty transcript. Very quiet input (a distant or muted
+//     microphone) costs accuracy, and peaks pinned at full scale (clipping)
+//     mean distorted audio, which does too.
+
 // LevelRate is how many Levels a recording reports per second, enough for a
 // smooth meter in the overlay.
 const LevelRate = 30
