@@ -102,11 +102,17 @@ func (sh *shell) startDictation() {
 	// throttle stops a burst after a stall from flooding the main thread,
 	// with room for jitter so the steady rate gets through.
 	levels := &latest{do: sh.do, every: time.Second / (audio.LevelRate + audio.LevelRate/3)}
+	// Interim text changes up to about six times a second (the low latency
+	// preset); the overlay follows it at most every interimEvery, always
+	// ending on the newest text.
+	interims := &latest{do: sh.do, every: interimEvery, trailing: true}
 	sh.following.Go(func() {
 		for ev := range events {
 			switch ev.Kind {
 			case pipeline.EventLevel:
 				levels.post(func() { sh.overlay.SetLevel(ev.Level) })
+			case pipeline.EventInterim:
+				interims.post(func() { sh.showInterim(ev) })
 			case pipeline.EventState:
 				sh.overlayActive.Store(ev.State != pipeline.StateIdle)
 				fallthrough
@@ -121,6 +127,9 @@ func (sh *shell) startDictation() {
 // overlayTick is how often the overlay's clock and, on macOS, its
 // click-through follow the time and the mouse pointer while it is shown.
 const overlayTick = 100 * time.Millisecond
+
+// interimEvery is the most often the overlay's interim text changes.
+const interimEvery = 100 * time.Millisecond
 
 // tickOverlay drives the overlay's clock while dictation is active, until
 // the app stops. A tick that the main thread has not run yet is not doubled.
@@ -169,15 +178,27 @@ func (sh *shell) dictationEvent(ev pipeline.Event) {
 		if sh.tray != nil {
 			sh.tray.SetState(trayState(ev.State))
 		}
+		if ev.State == pipeline.StateRecording {
+			sh.liveSession = ev.Session
+		}
 		sh.overlay.SetState(overlayState(ev.State), time.Now())
 		sh.syncRecording(ev.State == pipeline.StateRecording, false)
-	case pipeline.EventInterim:
-		sh.overlay.SetInterim(ev.Text)
 	case pipeline.EventRefused:
 		// The shortcut assumed its press would start or stop a recording;
 		// tell it what happened instead.
 		sh.syncRecording(ev.State == pipeline.StateRecording, true)
 	}
+}
+
+// showInterim shows the transcript so far in the overlay, on the main thread,
+// unless it belongs to a session that has already ended: the throttle may
+// deliver it late.
+func (sh *shell) showInterim(ev pipeline.Event) {
+	if ev.Session != sh.liveSession || sh.overlay.State() == ui.OverlayHidden {
+		return
+	}
+	stable := min(max(ev.Stable, 0), len(ev.Text))
+	sh.overlay.SetInterim(ev.Text[:stable], ev.Text[stable:])
 }
 
 // syncRecording tells the shortcuts about a recording starting or ending,
@@ -268,6 +289,9 @@ func (noEngine) StartStream(context.Context, engine.Options) (engine.Stream, err
 type latest struct {
 	do    func(func())
 	every time.Duration
+	// trailing delays an update that comes sooner than every after the
+	// last one, instead of dropping it, so the newest update always runs.
+	trailing bool
 
 	mu      sync.Mutex
 	f       func()
@@ -276,23 +300,33 @@ type latest struct {
 }
 
 // post schedules f, replacing any update still waiting. An update that
-// comes sooner than every after the last one is dropped.
+// comes sooner than every after the last one is dropped, or with trailing
+// held back until every has passed.
 func (l *latest) post(f func()) {
 	l.mu.Lock()
-	if l.pending || time.Since(l.last) < l.every {
-		if l.pending {
-			l.f = f
-		}
+	if l.pending {
+		l.f = f
+		l.mu.Unlock()
+		return
+	}
+	wait := l.every - time.Since(l.last)
+	if wait > 0 && !l.trailing {
 		l.mu.Unlock()
 		return
 	}
 	l.f, l.pending = f, true
 	l.mu.Unlock()
-	l.do(func() {
-		l.mu.Lock()
-		f := l.f
-		l.f, l.pending, l.last = nil, false, time.Now()
-		l.mu.Unlock()
-		f()
-	})
+	if wait > 0 {
+		time.AfterFunc(wait, func() { l.do(l.run) })
+	} else {
+		l.do(l.run)
+	}
+}
+
+func (l *latest) run() {
+	l.mu.Lock()
+	f := l.f
+	l.f, l.pending, l.last = nil, false, time.Now()
+	l.mu.Unlock()
+	f()
 }

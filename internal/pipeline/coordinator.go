@@ -83,6 +83,10 @@ type Recorder interface {
 	Stop() []float32
 	// SampleRate is the rate of the current or latest recording.
 	SampleRate() int
+	// Frames delivers the current recording's samples as they arrive, and
+	// closes once Stop has delivered them all: the chunks add up to what
+	// Stop returns. The reader must drain it.
+	Frames() <-chan []float32
 	// Levels delivers the recording's level about audio.LevelRate times a
 	// second. The channel lives as long as the Recorder.
 	Levels() <-chan audio.Level
@@ -172,6 +176,14 @@ type Options struct {
 // run on a third, per session. Every session has an ID, and anything that
 // finishes after its session was cancelled is dropped. Follow the state with
 // Subscribe.
+//
+// Recordings are transcribed while they go on. A streaming model decodes the
+// audio through a stream as it arrives, and its interim results are
+// published as EventInterim; on Stop the stream is finished and its final is
+// the transcript. An offline model, with long_form_chunking, decodes the
+// recording in chunks cut at pauses while it goes on, and on Stop only the
+// open chunk. Either way, if decoding live fails, the recording is decoded
+// whole on Stop instead.
 type Coordinator struct {
 	rec      Recorder
 	eng      engine.Engine
@@ -196,9 +208,10 @@ type Coordinator struct {
 	subs   map[*subscriber]struct{}
 	closed bool
 
-	// loaded is the spec the engine holds, or nil. Only the engine
-	// goroutine touches it.
+	// loaded is the spec the engine holds, or nil, and info what the model
+	// can do. Only the engine goroutine touches them.
 	loaded *engine.LoadSpec
+	info   engine.ModelInfo
 }
 
 // session is one dictation, from Start to idle.
@@ -209,9 +222,12 @@ type session struct {
 	settings config.Settings
 	model    Model
 	started  time.Time
+	frames   <-chan []float32 // the recording's audio as it arrives
+	rate     int              // of the recording
 
 	// Written by one goroutine at a time, as the session moves on.
-	prepErr error // why the model could not be made ready; engine goroutine only
+	prepErr error       // why the model could not be made ready; engine goroutine only
+	live    liveDecoder // decodes the recording as it goes on, or nil; engine goroutine only
 	timings timings
 
 	mu      sync.Mutex
@@ -349,6 +365,7 @@ func (c *Coordinator) Close() {
 			c.feedbackStop(s.settings, true)
 		}
 		s.end()
+		c.discardLive(s)
 		c.log.Info("dictation discarded: Goscriber is quitting", "session", s.id, "state", st.String())
 	}
 	close(c.done)
@@ -401,6 +418,7 @@ func (c *Coordinator) start() {
 		c.refuse(ActionStart, "the microphone could not be opened")
 		return
 	}
+	frames, rate := c.rec.Frames(), c.rec.SampleRate()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	c.mu.Lock()
@@ -412,12 +430,15 @@ func (c *Coordinator) start() {
 		settings: settings,
 		model:    model,
 		started:  time.Now(),
+		frames:   frames,
+		rate:     rate,
 	}
 	c.sess = s
 	c.setStateLocked(StateRecording, s.id)
 	c.mu.Unlock()
 	c.log.Info("dictation started", "session", s.id, "model", model.Spec.ID)
 	c.jobs.post(func() { c.prepare(s) })
+	c.jobs.post(func() { c.pump(s) })
 }
 
 // modelUnavailable tells the user why Start cannot record. The notice is
@@ -455,6 +476,7 @@ func (c *Coordinator) stop() {
 		c.endLocked(s)
 		c.mu.Unlock()
 		s.end()
+		c.discardLive(s)
 		c.log.Debug("dictation ended without speech", "session", s.id, "reason", err)
 		if len(samples) > 0 && audio.Measure(samples).Peak == 0 {
 			// Real microphones always pick up some noise: exact zeros are
@@ -499,6 +521,7 @@ func (c *Coordinator) cancel() {
 		c.feedbackStop(s.settings, true)
 	}
 	s.end()
+	c.discardLive(s)
 	c.log.Info("dictation cancelled", "session", s.id, "state", st.String())
 }
 
@@ -520,16 +543,16 @@ func (c *Coordinator) prepare(s *session) {
 	spec := s.model.Spec
 	if c.loaded == nil || *c.loaded != spec {
 		start := time.Now()
-		_, err := c.eng.Load(s.ctx, spec)
+		info, err := c.eng.Load(s.ctx, spec)
 		s.timings.load = time.Since(start)
 		if err != nil {
-			c.loaded = nil
+			c.loaded, c.info = nil, engine.ModelInfo{}
 			if s.ctx.Err() == nil {
 				s.prepErr = &loadError{err: err}
 			}
 			return
 		}
-		c.loaded = &spec
+		c.loaded, c.info = &spec, info
 		c.stageDone(s, "load", s.timings.load)
 	}
 	if a, ok := c.eng.(Acquirer); ok {
@@ -544,9 +567,75 @@ func (c *Coordinator) prepare(s *session) {
 	}
 }
 
-// transcribe decodes the recording. It runs on the engine goroutine, after
-// prepare.
+// pump decodes the recording while it goes on: it feeds the audio to a live
+// decoder as it arrives and publishes the transcript so far. It runs on the
+// engine goroutine after prepare, until the recording stops, and always
+// drains the recording's frames.
+func (c *Coordinator) pump(s *session) {
+	if s.ctx.Err() == nil && s.prepErr == nil {
+		s.live = c.startLive(s)
+	}
+	for samples := range s.frames {
+		if s.live == nil || s.ctx.Err() != nil {
+			continue
+		}
+		if sofar, changed := s.live.push(samples); changed {
+			c.publishInterim(s, sofar)
+		}
+	}
+}
+
+// startLive returns the live decoder for the session's model: a stream for a
+// streaming model, chunks at pauses for an offline one with
+// long_form_chunking, or nil to decode the recording whole once it stops.
+func (c *Coordinator) startLive(s *session) liveDecoder {
+	o := liveOptions{
+		engine: c.eng,
+		ctx:    s.ctx,
+		opts:   s.options(),
+		rate:   s.rate,
+		gate:   GateFromSettings(s.settings),
+		log:    c.log.With("session", s.id),
+	}
+	switch {
+	case c.info.Streaming:
+		c.log.Debug("transcribing live through a stream", "session", s.id)
+		return startStreamDecoder(o)
+	case s.settings.LongFormChunking:
+		c.log.Debug("transcribing live in chunks cut at pauses", "session", s.id)
+		return newChunkDecoder(o, defaultChunkPlan)
+	default:
+		return nil
+	}
+}
+
+// publishInterim publishes the transcript so far while session s records.
+func (c *Coordinator) publishInterim(s *session, in interim) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.sess == s && c.state == StateRecording {
+		c.emitLocked(Event{Kind: EventInterim, Session: s.id, State: StateRecording, Text: in.text, Stable: in.stable})
+	}
+}
+
+// discardLive releases the live decoder of a session that ended without a
+// transcript. It runs after the pump, which still owns the decoder.
+func (c *Coordinator) discardLive(s *session) {
+	c.jobs.post(func() { closeLive(s) })
+}
+
+func closeLive(s *session) {
+	if s.live != nil {
+		s.live.close()
+		s.live = nil
+	}
+}
+
+// transcribe finishes decoding the recording: the live decoder's final, or a
+// decode of the whole recording. It runs on the engine goroutine, after the
+// pump.
 func (c *Coordinator) transcribe(s *session, samples []float32, rate int) {
+	defer closeLive(s)
 	if s.ctx.Err() != nil {
 		return
 	}
@@ -554,8 +643,11 @@ func (c *Coordinator) transcribe(s *session, samples []float32, rate int) {
 	err := s.prepErr
 	if err == nil {
 		start := time.Now()
-		opts := engine.Options{Language: s.model.Language}
-		res, err = c.eng.Recognize(s.ctx, samples, rate, opts)
+		if s.live != nil {
+			res, err = s.live.finish(s.ctx, samples)
+		} else {
+			res, err = c.eng.Recognize(s.ctx, samples, rate, s.options())
+		}
 		s.timings.transcribe = time.Since(start)
 		if err == nil {
 			err = CheckTranscript(res)
@@ -777,6 +869,11 @@ func (c *Coordinator) emitLocked(ev Event) {
 	for s := range c.subs {
 		s.push(ev)
 	}
+}
+
+// options are the session's recognition options.
+func (s *session) options() engine.Options {
+	return engine.Options{Language: s.model.Language}
 }
 
 // hold keeps the engine acquired until the session ends.

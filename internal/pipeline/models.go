@@ -43,7 +43,8 @@ type ModelSource interface {
 
 // CatalogModels resolves the selected model through the model manager: the
 // selected_model setting, in the model_quant quantisation when the model has
-// it, with the Silero VAD when vad_enabled and it is downloaded.
+// it, with the Silero VAD when vad_enabled and it is downloaded, and for a
+// streaming model the streaming_latency preset.
 type CatalogModels struct {
 	Manager *models.Manager
 }
@@ -78,6 +79,11 @@ func (c CatalogModels) Resolve(s config.Settings) (Model, error) {
 		},
 		Name:     m.Name,
 		Language: s.Language,
+	}
+	// Only streaming models look ahead; leaving the preset out of an offline
+	// model's spec keeps a change to it from reloading the model.
+	if m.Capabilities.Streaming {
+		out.Spec.Latency = engine.Latency(s.StreamingLatency)
 	}
 	// A model with one language ignores the setting; asking for another
 	// language could only make it fail.

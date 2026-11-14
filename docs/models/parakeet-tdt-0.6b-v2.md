@@ -116,7 +116,7 @@ Memory and time stay modest. The 24-minute result does not: the first segment, n
 
 Dictation is one speaker on one microphone, so the risk is low, but the failure is silent: no error, only missing text. Goscriber should therefore:
 
-- Decode Parakeet recordings in chunks split at pauses, of at most about 30 s, rather than whole. No input that short failed here, and the chunked decode for live text ([#24](https://github.com/opragmatico/goscriber/issues/24)) cuts recordings at pauses anyway.
+- Decode Parakeet recordings in chunks split at pauses, of at most about 30 s, rather than whole. No input that short failed here, and the chunked decode for live text ([#24](https://github.com/opragmatico/goscriber/issues/24)) cuts recordings at pauses anyway. Dictation now does this with `long_form_chunking`, on by default, in chunks of 3 to 25 s ([live transcription](../architecture.md#live-transcription)); `goscriber transcribe` still decodes files whole.
 - Treat an empty or very short transcript of a long stretch of speech as a failure, not as silence. The VAD ([#16](https://github.com/opragmatico/goscriber/issues/16)) knows how much speech there was.
 
 ## Handy's transcribe.cpp GGUF

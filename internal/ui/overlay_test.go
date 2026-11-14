@@ -105,9 +105,12 @@ func TestOverlayLiveGrowsForInterimText(t *testing.T) {
 	if s := o.Window().Canvas().Size(); s.Width != overlayWidth {
 		t.Errorf("window %v before any text", s)
 	}
-	o.SetInterim("hello there")
-	if o.Interim() != "hello there" {
-		t.Errorf("interim %q", o.Interim())
+	o.SetInterim("hello ", "there")
+	if stable, tail := o.InterimParts(); o.Interim() != "hello there" || stable != "hello " || tail != "there" {
+		t.Errorf("interim %q: %q + %q", o.Interim(), stable, tail)
+	}
+	if o.textStable.Style.ColorName == o.textTail.Style.ColorName {
+		t.Error("the changing end should look different from the settled start")
 	}
 	s := o.Window().Canvas().Size()
 	if s.Width != overlayLiveWidth || s.Height <= overlayHeight {
@@ -133,12 +136,16 @@ func TestOverlayHelpers(t *testing.T) {
 	if got := meterLevel(audio.Level{RMS: 0.0316}); got < 0.49 || got > 0.51 {
 		t.Errorf("-30 dBFS fills %v of the meter, want half", got)
 	}
-	long := strings.Repeat("word ", 40) + "end"
-	got := interimText(long)
-	if !strings.HasPrefix(got, "…") || !strings.HasSuffix(got, "end") || len([]rune(got)) != interimTail {
-		t.Errorf("interim tail %q", got)
+	long := strings.Repeat("word ", 40)
+	stable, tail := interimText(long, "end")
+	if !strings.HasPrefix(stable, "…") || tail != "end" || len([]rune(stable+tail)) != interimTail {
+		t.Errorf("interim end %q + %q", stable, tail)
 	}
-	if interimText("short") != "short" {
+	stable, tail = interimText("settled ", long+"end")
+	if stable != "" || !strings.HasPrefix(tail, "…") || !strings.HasSuffix(tail, "end") || len([]rune(tail)) != interimTail {
+		t.Errorf("interim end %q + %q, want only the changing end", stable, tail)
+	}
+	if s, t2 := interimText("short ", "text"); s != "short " || t2 != "text" {
 		t.Error("short text is shown whole")
 	}
 }

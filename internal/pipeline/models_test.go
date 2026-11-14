@@ -14,8 +14,8 @@ import (
 	"github.com/opragmatico/goscriber/internal/models"
 )
 
-// testCatalog has a multilingual model in two quantisations, an English-only
-// one and the VAD. Each file holds its own name, so its size and checksum
+// testCatalog has a multilingual streaming model in two quantisations, an
+// offline English-only one and the VAD. Each file holds its own name, so its size and checksum
 // are known.
 func testCatalog(t *testing.T) *models.Catalog {
 	t.Helper()
@@ -24,13 +24,14 @@ func testCatalog(t *testing.T) *models.Catalog {
 		return fmt.Sprintf(`{"quant": %q, "filename": %q, "size": %d, "sha256": %q}`, quant, name, len(name), hex.EncodeToString(h[:]))
 	}
 	model := func(id, kind, langs string, detect bool, files ...string) string {
+		streaming := detect
 		list := files[0]
 		for _, f := range files[1:] {
 			list += ", " + f
 		}
 		return fmt.Sprintf(`{"id": %q, "kind": %q, "name": "Model %s", "repo": "org/%s", "revision": "0123456789abcdef0123456789abcdef01234567",
-			"license": "MIT", "languages": [%s], "capabilities": {"language_detection": %v}, "default_quant": "Q8_0", "files": [%s]}`,
-			id, kind, id, id, langs, detect, list)
+			"license": "MIT", "languages": [%s], "capabilities": {"language_detection": %v, "streaming": %v}, "default_quant": "Q8_0", "files": [%s]}`,
+			id, kind, id, id, langs, detect, streaming, list)
 	}
 	cat, err := models.Parse([]byte(`{"default_model": "multi", "models": [` +
 		model("multi", "asr", `"en-US", "de-DE"`, true, file("Q8_0", "multi.q8_0.gguf"), file("F16", "multi.f16.gguf")) + ", " +
@@ -79,23 +80,27 @@ func TestCatalogModels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Model{Spec: engine.LoadSpec{ID: "multi", Path: q8}, Name: "Model multi", Language: "auto"}
+	want := Model{Spec: engine.LoadSpec{ID: "multi", Path: q8, Latency: engine.LatencyBalanced}, Name: "Model multi", Language: "auto"}
 	if m != want {
 		t.Errorf("model %+v, want %+v (no VAD downloaded yet)", m, want)
 	}
 
-	// The settings' quantisation, accelerator and language; the VAD once it
-	// is downloaded.
+	// The settings' quantisation, accelerator, latency and language; the VAD
+	// once it is downloaded.
 	vad := put(t, dir, "vad.gguf", "vad.gguf")
 	m, err = src.Resolve(settings(func(s *config.Settings) {
 		s.SelectedModel, s.ModelQuant, s.Accelerator, s.Language = "multi", "F16", config.AcceleratorCPU, "de-DE"
 		s.VADOnset, s.VADOffset = 0.6, 0.4
+		s.StreamingLatency = config.LatencyLow
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	want = Model{
-		Spec:     engine.LoadSpec{ID: "multi", Path: f16, CPU: true, VADPath: vad, VADOnset: 0.6, VADOffset: 0.4},
+		Spec: engine.LoadSpec{
+			ID: "multi", Path: f16, CPU: true, VADPath: vad, VADOnset: 0.6, VADOffset: 0.4,
+			Latency: engine.LatencyLow,
+		},
 		Name:     "Model multi",
 		Language: "de-DE",
 	}
@@ -107,14 +112,16 @@ func TestCatalogModels(t *testing.T) {
 		t.Errorf("VAD %q with vad_enabled off", m.Spec.VADPath)
 	}
 
-	// A model with one language ignores the setting; a quantisation it does
-	// not have falls back to its own.
+	// A model with one language ignores the setting, and an offline one the
+	// latency; a quantisation it does not have falls back to its own.
 	eng := put(t, dir, "english.gguf", "english.gguf")
-	m, err = src.Resolve(settings(func(s *config.Settings) { s.SelectedModel, s.ModelQuant, s.Language = "english", "F16", "de-DE" }))
+	m, err = src.Resolve(settings(func(s *config.Settings) {
+		s.SelectedModel, s.ModelQuant, s.Language, s.StreamingLatency = "english", "F16", "de-DE", config.LatencyAccurate
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Spec.Path != eng || m.Language != "" {
+	if m.Spec.Path != eng || m.Language != "" || m.Spec.Latency != "" {
 		t.Errorf("model %+v", m)
 	}
 

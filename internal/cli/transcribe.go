@@ -10,7 +10,6 @@ import (
 	"math"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 	"time"
 
@@ -431,36 +430,7 @@ func (t *transcriber) streamDecode(ctx context.Context, samples []float32, rate 
 		return engine.Result{}, timing{}, err
 	}
 	done := time.Now()
-	return joinFinals(finals), timing{decode: done.Sub(start), finalize: done.Sub(end)}, nil
-}
-
-// joinFinals merges the finals of a stream: one per utterance, and only one
-// with endpointing off.
-func joinFinals(finals []engine.Result) engine.Result {
-	if len(finals) == 1 {
-		return finals[0]
-	}
-	out := engine.Result{Final: true}
-	var texts []string
-	var conf float32
-	for _, r := range finals {
-		if r.Text != "" {
-			texts = append(texts, r.Text)
-		}
-		out.Words = append(out.Words, r.Words...)
-		for _, l := range r.Languages {
-			if !slices.Contains(out.Languages, l) {
-				out.Languages = append(out.Languages, l)
-			}
-		}
-		out.AudioProcessed = max(out.AudioProcessed, r.AudioProcessed)
-		conf += r.Confidence
-	}
-	out.Text = strings.Join(texts, " ")
-	if len(finals) > 0 {
-		out.Confidence = conf / float32(len(finals))
-	}
-	return out
+	return engine.JoinFinals(finals), timing{decode: done.Sub(start), finalize: done.Sub(end)}, nil
 }
 
 type jsonWord struct {
