@@ -30,8 +30,8 @@ func testCatalog(t *testing.T) *models.Catalog {
 			list += ", " + f
 		}
 		return fmt.Sprintf(`{"id": %q, "kind": %q, "name": "Model %s", "repo": "org/%s", "revision": "0123456789abcdef0123456789abcdef01234567",
-			"license": "MIT", "languages": [%s], "capabilities": {"language_detection": %v, "streaming": %v}, "default_quant": "Q8_0", "files": [%s]}`,
-			id, kind, id, id, langs, detect, streaming, list)
+			"license": "MIT", "languages": [%s], "capabilities": {"language_detection": %v, "language_selection": %v, "streaming": %v}, "default_quant": "Q8_0", "files": [%s]}`,
+			id, kind, id, id, langs, detect, detect, streaming, list)
 	}
 	cat, err := models.Parse([]byte(`{"default_model": "multi", "models": [` +
 		model("multi", "asr", `"en-US", "de-DE"`, true, file("Q8_0", "multi.q8_0.gguf"), file("F16", "multi.f16.gguf")) + ", " +
@@ -110,6 +110,11 @@ func TestCatalogModels(t *testing.T) {
 	m, _ = src.Resolve(settings(func(s *config.Settings) { s.SelectedModel, s.VADEnabled = "multi", false }))
 	if m.Spec.VADPath != "" {
 		t.Errorf("VAD %q with vad_enabled off", m.Spec.VADPath)
+	}
+	// A language the model does not take falls back to detection.
+	m, _ = src.Resolve(settings(func(s *config.Settings) { s.SelectedModel, s.Language = "multi", "fr-FR" }))
+	if m.Language != "auto" {
+		t.Errorf("language %q for a setting the model does not take, want auto", m.Language)
 	}
 
 	// A model with one language ignores the setting, and an offline one the

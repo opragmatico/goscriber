@@ -745,8 +745,11 @@ func TestStages(t *testing.T) {
 	}
 	e := saved[0]
 	if e.RawText != "um hello" || e.Text != "hello!" || !e.Delivered || len(e.Samples) != rate ||
-		e.SampleRate != rate || !slices.Equal(e.Languages, []string{"en-US"}) || e.At.IsZero() {
+		e.SampleRate != rate || !slices.Equal(e.Languages, []string{"en-US"}) || e.Language != "en-US" || e.At.IsZero() {
 		t.Errorf("history entry %+v", e)
+	}
+	if res := r.events.kinds(EventResult); len(res) != 1 || !slices.Equal(res[0].Languages, []string{"en-US"}) {
+		t.Errorf("result events %+v, want the detected language", res)
 	}
 }
 

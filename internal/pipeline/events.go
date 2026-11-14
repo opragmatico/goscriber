@@ -65,6 +65,9 @@ type Event struct {
 	// EventInterim: the words a streaming model will not change, or the
 	// chunks an offline model has decoded.
 	Stable int
+	// Languages are the languages the model detected in the recording, for
+	// EventResult; empty when it reports none.
+	Languages []string
 }
 
 // subscriber is an unbounded queue in front of a channel, so publishing never

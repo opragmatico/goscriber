@@ -2,6 +2,7 @@ package app
 
 import (
 	"runtime"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -161,6 +162,8 @@ func (sh *shell) start() {
 		LogsDir:      sh.rt.Paths.LogsDir(),
 	}, sh.settingsClosed)
 	sh.settings.SetModel(model)
+	sh.settings.SetLanguage(languageSetting(s))
+	sh.settings.OnLanguage(sh.pickLanguage)
 	sh.refreshPermissions()
 
 	if sh.plan.Tray {
@@ -319,6 +322,12 @@ func (sh *shell) stopFollowing() {
 func (sh *shell) applySettings(s config.Settings) {
 	model := modelName(s)
 	sh.settings.SetModel(model)
+	l := languageSetting(s)
+	if !slices.Equal(l.Options, sh.settings.Language().Options) {
+		// Another model: what the last one detected says nothing about it.
+		sh.settings.SetDetected("")
+	}
+	sh.settings.SetLanguage(l)
 	if sh.tray != nil {
 		sh.tray.SetModel(model)
 		sh.tray.SetDebug(sh.debugMode(s))

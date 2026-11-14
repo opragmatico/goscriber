@@ -127,15 +127,22 @@ type seen struct {
 
 // dictation is one session's outcome.
 type dictation struct {
-	text     string
-	release  time.Duration // from the end of the recording to the transcript
-	interims []seen
-	play     *playback
+	text      string
+	languages []string      // the languages the result reports
+	release   time.Duration // from the end of the recording to the transcript
+	interims  []seen
+	play      *playback
 }
 
-// dictate records samples through a coordinator on e, played speed times
-// faster than real time, and waits for the transcript.
+// dictate records samples through a coordinator on e, asking for English,
+// played speed times faster than real time, and waits for the transcript.
 func dictate(t *testing.T, e engine.Engine, spec engine.LoadSpec, samples []float32, rate int, speed float64) dictation {
+	t.Helper()
+	return dictateIn(t, e, spec, "en-US", samples, rate, speed)
+}
+
+// dictateIn is dictate in another language.
+func dictateIn(t *testing.T, e engine.Engine, spec engine.LoadSpec, lang string, samples []float32, rate int, speed float64) dictation {
 	t.Helper()
 	play := &playback{samples: samples, rate: rate, speed: speed, levels: make(chan audio.Level)}
 	out := &timedOutput{}
@@ -143,7 +150,7 @@ func dictate(t *testing.T, e engine.Engine, spec engine.LoadSpec, samples []floa
 	c := pipeline.New(pipeline.Options{
 		Recorder: play,
 		Engine:   e,
-		Models:   oneModel{pipeline.Model{Spec: spec, Name: "test", Language: "en-US"}},
+		Models:   oneModel{pipeline.Model{Spec: spec, Name: "test", Language: lang}},
 		Output:   out,
 		Notices:  noNotices{t},
 		Settings: func() config.Settings { return settings },
@@ -171,6 +178,8 @@ func dictate(t *testing.T, e engine.Engine, spec engine.LoadSpec, samples []floa
 			}()
 		case ev.Kind == pipeline.EventInterim:
 			d.interims = append(d.interims, seen{ev.Text, time.Now()})
+		case ev.Kind == pipeline.EventResult:
+			d.languages = ev.Languages
 		case ev.Kind == pipeline.EventState && ev.State == pipeline.StateIdle:
 			out.mu.Lock()
 			d.text = out.text

@@ -476,3 +476,46 @@ func TestInterimTextReachesTheOverlay(t *testing.T) {
 		t.Errorf("a late interim %q shown after the session ended", sh.overlay.Interim())
 	}
 }
+
+// The Models page offers the selected model's languages and saves the one
+// picked; a model with a fixed language shows it locked; and the language a
+// dictation was detected in is shown until the model changes.
+func TestLanguagePicker(t *testing.T) {
+	home := isolate(t)
+	testShortcuts.reset()
+	writeSettings(t, home, `{"schema_version": 1, "selected_model": "nemotron-3.5-asr-streaming-0.6b"}`)
+	a := &trayApp{plainApp: plainApp{App: test.NewTempApp(t)}}
+	sh, q := newTestShell(t, a, Options{})
+
+	l := sh.settings.Language()
+	if l.Locked || l.Selected != "auto" || len(l.Options) != 33 || l.Options[0] != (ui.LanguageOption{Code: "auto", Name: "Automatic"}) {
+		t.Fatalf("Nemotron's languages %+v", l)
+	}
+	sh.settings.Show(ui.PageModels)
+	sh.settings.PickLanguage("es-ES")
+	q.runNext(t)
+	if got := sh.rt.Settings.Get().Language; got != "es-ES" {
+		t.Errorf("language setting %q after picking Spanish (Spain)", got)
+	}
+	if sh.settings.Language().Selected != "es-ES" {
+		t.Errorf("picker shows %q", sh.settings.Language().Selected)
+	}
+
+	sh.dictationEvent(pipeline.Event{Kind: pipeline.EventResult, Text: "hola", Languages: []string{"es-US"}})
+	if got := sh.settings.Detected(); got != "Spanish (US)" {
+		t.Errorf("detected %q", got)
+	}
+
+	// Parakeet TDT v2 is English only.
+	if err := sh.rt.Settings.Update(func(s *config.Settings) { s.SelectedModel = "parakeet-tdt-0.6b-v2" }); err != nil {
+		t.Fatal(err)
+	}
+	q.runNext(t)
+	l = sh.settings.Language()
+	if !l.Locked || l.Selected != "en" || len(l.Options) != 1 || l.Options[0].Name != "English" || l.Note == "" {
+		t.Errorf("Parakeet v2's language %+v, want English, locked", l)
+	}
+	if sh.settings.Detected() != "" {
+		t.Errorf("detected %q still shown for another model", sh.settings.Detected())
+	}
+}

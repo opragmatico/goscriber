@@ -26,7 +26,7 @@ func TestDefaultCatalog(t *testing.T) {
 	}
 
 	nemo, _ := c.Model("nemotron-3.5-asr-streaming-0.6b")
-	if !nemo.Capabilities.Streaming || !nemo.Capabilities.LanguageDetection || !nemo.Capabilities.Timestamps {
+	if !nemo.Capabilities.Streaming || !nemo.Capabilities.LanguageDetection || !nemo.Capabilities.LanguageSelection || !nemo.Capabilities.Timestamps {
 		t.Errorf("Nemotron capabilities %+v", nemo.Capabilities)
 	}
 	if len(nemo.Languages) != 32 || !slices.Contains(nemo.Languages, "en-US") {
@@ -34,12 +34,12 @@ func TestDefaultCatalog(t *testing.T) {
 	}
 
 	tdt, _ := c.Model("parakeet-tdt-0.6b-v2")
-	if tdt.Capabilities.Streaming || tdt.Capabilities.LanguageDetection || !slices.Equal(tdt.Languages, []string{"en"}) {
+	if tdt.Capabilities.Streaming || tdt.Capabilities.LanguageDetection || tdt.Capabilities.LanguageSelection || !slices.Equal(tdt.Languages, []string{"en"}) {
 		t.Errorf("Parakeet TDT v2 must be English-only and batch-only: %+v %v", tdt.Capabilities, tdt.Languages)
 	}
 
 	v3, _ := c.Model("parakeet-tdt-0.6b-v3")
-	if v3.Capabilities.Streaming || !v3.Capabilities.LanguageDetection || !v3.Capabilities.Timestamps {
+	if v3.Capabilities.Streaming || !v3.Capabilities.LanguageDetection || v3.Capabilities.LanguageSelection || !v3.Capabilities.Timestamps {
 		t.Errorf("Parakeet TDT v3 must be batch-only and detect the language: %+v", v3.Capabilities)
 	}
 	if len(v3.Languages) != 25 || !slices.Contains(v3.Languages, "en") || !slices.Contains(v3.Languages, "uk") {
@@ -141,6 +141,9 @@ func TestParseRejectsBadCatalogs(t *testing.T) {
 		{"zero size", func(v map[string]any) { file(v, 0)["size"] = 0 }},
 		{"path in filename", func(v map[string]any) { file(v, 0)["filename"] = "../evil.gguf" }},
 		{"missing default quant", func(v map[string]any) { model(v, 0)["default_quant"] = "Q4_0" }},
+		{"language selection with one language", func(v map[string]any) {
+			model(v, 1)["capabilities"].(map[string]any)["language_selection"] = true
+		}},
 		{"no VAD", func(v map[string]any) { vad(v)["kind"] = "asr" }},
 		{"default model is the VAD", func(v map[string]any) { v["default_model"] = "silero-vad" }},
 	} {

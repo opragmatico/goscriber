@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strings"
@@ -165,6 +166,42 @@ func TestStreamingJoinsEndpointedUtterances(t *testing.T) {
 	r.events.waitState(t, StateIdle, 1)
 	if got := r.out.delivered(); !slices.Equal(got, []string{"first part. second part."}) {
 		t.Errorf("delivered %q", got)
+	}
+}
+
+// With automatic detection the stream is asked for "auto", and the language
+// its final reports reaches the result and the history entry.
+func TestStreamingDetectedLanguage(t *testing.T) {
+	saved := make(chan HistoryEntry, 1)
+	script := fake.Dictation("estaba una zorra", 100*time.Millisecond)
+	script.Final.Languages = []string{"es-US"}
+	r := newRig(t, rigOptions{
+		script: streaming(script),
+		stages: Stages{History: HistorySinkFunc(func(_ context.Context, e HistoryEntry) error {
+			saved <- e
+			return nil
+		})},
+	})
+	m := testModel
+	m.Language = "auto"
+	r.models.model = m
+	r.c.Start()
+	r.events.waitState(t, StateRecording, 1)
+	r.c.Stop()
+	ev := r.events.waitFor(t, "the result", func(ev Event) bool { return ev.Kind == EventResult })
+	if ev.Text != "estaba una zorra" || !slices.Equal(ev.Languages, []string{"es-US"}) {
+		t.Errorf("result %+v", ev)
+	}
+	if o := r.eng.Streams()[0].Options(); o.Language != "auto" {
+		t.Errorf("stream asked for %q, want auto", o.Language)
+	}
+	select {
+	case e := <-saved:
+		if e.Language != "auto" || !slices.Equal(e.Languages, []string{"es-US"}) {
+			t.Errorf("history entry language %q, detected %v", e.Language, e.Languages)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("nothing saved to history")
 	}
 }
 
