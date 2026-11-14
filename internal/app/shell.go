@@ -2,6 +2,7 @@ package app
 
 import (
 	"runtime"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -96,8 +97,11 @@ type shell struct {
 	// overlayActive is whether a session is in progress, for the overlay's
 	// clock; it is read off the main thread.
 	overlayActive atomic.Bool
-	// recording is what the shortcuts were last told about dictation.
+	// recording is what the shortcuts were last told about dictation, and
+	// liveSession the session the overlay last showed recording, whose
+	// interim text it shows; both main thread only.
 	recording           bool
+	liveSession         uint64
 	stopDictationEvents func()
 	hotkeys             *hotkey.Manager
 	tray                *ui.Tray // nil without a tray
@@ -158,6 +162,8 @@ func (sh *shell) start() {
 		LogsDir:      sh.rt.Paths.LogsDir(),
 	}, sh.settingsClosed)
 	sh.settings.SetModel(model)
+	sh.settings.SetLanguage(languageSetting(s))
+	sh.settings.OnLanguage(sh.pickLanguage)
 	sh.refreshPermissions()
 
 	if sh.plan.Tray {
@@ -316,6 +322,12 @@ func (sh *shell) stopFollowing() {
 func (sh *shell) applySettings(s config.Settings) {
 	model := modelName(s)
 	sh.settings.SetModel(model)
+	l := languageSetting(s)
+	if !slices.Equal(l.Options, sh.settings.Language().Options) {
+		// Another model: what the last one detected says nothing about it.
+		sh.settings.SetDetected("")
+	}
+	sh.settings.SetLanguage(l)
 	if sh.tray != nil {
 		sh.tray.SetModel(model)
 		sh.tray.SetDebug(sh.debugMode(s))

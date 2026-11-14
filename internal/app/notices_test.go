@@ -2,7 +2,6 @@ package app
 
 import (
 	"errors"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -130,23 +129,19 @@ func TestAccessibilityNotice(t *testing.T) {
 		t.Errorf("opened %v, want System Settings at Accessibility", a.opened)
 	}
 
-	// started watches the permission on macOS only, the one OS that has it.
-	// The watcher works the same everywhere, so elsewhere start it directly.
-	if runtime.GOOS == "darwin" {
-		sh.started()
-	} else {
-		sh.following.Go(sh.watchPermissions)
-	}
+	// started watches the permissions on macOS only, and there also asks
+	// the real system for them. The watcher works the same everywhere, so
+	// start it directly.
+	sh.following.Go(sh.watchPermissions)
 	testShortcuts.setFail(nil)
 	mu.Lock()
 	trusted = true
 	mu.Unlock()
 	testShortcuts.waitLog(t, "!"+talk, "+"+talk)
-	// The watcher keeps posting Permissions page refreshes, so runNext would
-	// never see the queue go quiet: run updates until the notice ends.
-	q.waitUI(t, "granting the permission to end the notice", func() bool {
-		return sh.tray.Alert() == nil && sh.notices.Count(notice.CodePermissionMissing) == 0
-	})
+	q.runNext(t)
+	if sh.tray.Alert() != nil || sh.notices.Count(notice.CodePermissionMissing) != 0 {
+		t.Error("granting the permission should end the notice")
+	}
 }
 
 // With the permission in place, a shortcut that cannot register is the

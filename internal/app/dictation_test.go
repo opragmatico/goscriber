@@ -41,6 +41,7 @@ type testRecorder struct {
 
 	mu        sync.Mutex
 	recording bool
+	frames    []chan []float32 // of the recording in progress, closed by Stop
 	starts    int
 	opens     int
 	device    string
@@ -65,6 +66,10 @@ func (r *testRecorder) Stop() []float32 {
 		return nil
 	}
 	r.recording = false
+	for _, ch := range r.frames {
+		close(ch)
+	}
+	r.frames = nil
 	p := make([]float32, 16000)
 	for i := range p {
 		p[i] = float32(0.1 * math.Sin(2*math.Pi*220*float64(i)/16000))
@@ -72,7 +77,17 @@ func (r *testRecorder) Stop() []float32 {
 	return p
 }
 
-func (r *testRecorder) SampleRate() int            { return 16000 }
+func (r *testRecorder) SampleRate() int { return 16000 }
+
+// Frames delivers no audio: the recording is only known once it stops.
+func (r *testRecorder) Frames() <-chan []float32 {
+	ch := make(chan []float32)
+	r.mu.Lock()
+	r.frames = append(r.frames, ch)
+	r.mu.Unlock()
+	return ch
+}
+
 func (r *testRecorder) Levels() <-chan audio.Level { return r.levels }
 
 func (r *testRecorder) Open() error {
@@ -407,5 +422,100 @@ func TestLatestKeepsOnlyTheNewest(t *testing.T) {
 	l.post(func() { got = append(got, 5) })
 	if len(q) != 0 {
 		t.Errorf("%d updates queued within the interval", len(q))
+	}
+}
+
+func TestLatestTrailingDelaysInsteadOfDropping(t *testing.T) {
+	q := make(uiQueue, 8)
+	l := &latest{do: q.do, every: 50 * time.Millisecond, trailing: true}
+	var got []int
+	l.post(func() { got = append(got, 0) })
+	(<-q)()
+	// Within the interval the update waits, and a newer one replaces it.
+	l.post(func() { got = append(got, 1) })
+	l.post(func() { got = append(got, 2) })
+	if len(q) != 0 {
+		t.Fatal("an update within the interval ran at once")
+	}
+	select {
+	case f := <-q:
+		f()
+	case <-time.After(time.Second):
+		t.Fatal("the delayed update never came")
+	}
+	if !slices.Equal(got, []int{0, 2}) {
+		t.Errorf("ran %v, want the first and the newest", got)
+	}
+}
+
+// Interim text reaches the live overlay split into its settled start and
+// changing end; text from a session that is over is ignored.
+func TestInterimTextReachesTheOverlay(t *testing.T) {
+	home := isolate(t)
+	testShortcuts.reset()
+	writeSettings(t, home, `{"schema_version": 1, "selected_model": "m", "overlay_style": "live"}`)
+	a := &trayApp{plainApp: plainApp{App: test.NewTempApp(t)}}
+	sh, q := newTestShell(t, a, Options{})
+
+	sh.dictate(pipeline.ActionStart)
+	q.waitUI(t, "recording", func() bool { return sh.overlay.State() == ui.OverlayRecording && sh.liveSession != 0 })
+	sh.showInterim(pipeline.Event{Kind: pipeline.EventInterim, Session: sh.liveSession, Text: "ask not what", Stable: len("ask not ")})
+	if stable, tail := sh.overlay.InterimParts(); stable != "ask not " || tail != "what" {
+		t.Errorf("overlay shows %q + %q", stable, tail)
+	}
+	sh.showInterim(pipeline.Event{Kind: pipeline.EventInterim, Session: sh.liveSession - 1, Text: "an old session"})
+	sh.showInterim(pipeline.Event{Kind: pipeline.EventInterim, Session: sh.liveSession, Text: "odd", Stable: 99})
+	if stable, tail := sh.overlay.InterimParts(); stable != "odd" || tail != "" {
+		t.Errorf("overlay shows %q + %q, want an old session ignored and Stable clamped", stable, tail)
+	}
+
+	sh.dictate(pipeline.ActionCancel)
+	q.waitUI(t, "the overlay to hide", func() bool { return sh.overlay.State() == ui.OverlayHidden })
+	sh.showInterim(pipeline.Event{Kind: pipeline.EventInterim, Session: sh.liveSession, Text: "late"})
+	if sh.overlay.Interim() != "" {
+		t.Errorf("a late interim %q shown after the session ended", sh.overlay.Interim())
+	}
+}
+
+// The Models page offers the selected model's languages and saves the one
+// picked; a model with a fixed language shows it locked; and the language a
+// dictation was detected in is shown until the model changes.
+func TestLanguagePicker(t *testing.T) {
+	home := isolate(t)
+	testShortcuts.reset()
+	writeSettings(t, home, `{"schema_version": 1, "selected_model": "nemotron-3.5-asr-streaming-0.6b"}`)
+	a := &trayApp{plainApp: plainApp{App: test.NewTempApp(t)}}
+	sh, q := newTestShell(t, a, Options{})
+
+	l := sh.settings.Language()
+	if l.Locked || l.Selected != "auto" || len(l.Options) != 33 || l.Options[0] != (ui.LanguageOption{Code: "auto", Name: "Automatic"}) {
+		t.Fatalf("Nemotron's languages %+v", l)
+	}
+	sh.settings.Show(ui.PageModels)
+	sh.settings.PickLanguage("es-ES")
+	q.runNext(t)
+	if got := sh.rt.Settings.Get().Language; got != "es-ES" {
+		t.Errorf("language setting %q after picking Spanish (Spain)", got)
+	}
+	if sh.settings.Language().Selected != "es-ES" {
+		t.Errorf("picker shows %q", sh.settings.Language().Selected)
+	}
+
+	sh.dictationEvent(pipeline.Event{Kind: pipeline.EventResult, Text: "hola", Languages: []string{"es-US"}})
+	if got := sh.settings.Detected(); got != "Spanish (US)" {
+		t.Errorf("detected %q", got)
+	}
+
+	// Parakeet TDT v2 is English only.
+	if err := sh.rt.Settings.Update(func(s *config.Settings) { s.SelectedModel = "parakeet-tdt-0.6b-v2" }); err != nil {
+		t.Fatal(err)
+	}
+	q.runNext(t)
+	l = sh.settings.Language()
+	if !l.Locked || l.Selected != "en" || len(l.Options) != 1 || l.Options[0].Name != "English" || l.Note == "" {
+		t.Errorf("Parakeet v2's language %+v, want English, locked", l)
+	}
+	if sh.settings.Detected() != "" {
+		t.Errorf("detected %q still shown for another model", sh.settings.Detected())
 	}
 }

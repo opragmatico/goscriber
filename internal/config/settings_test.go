@@ -44,6 +44,9 @@ func TestDefaultsAreValidAndSelectNoModel(t *testing.T) {
 	if d.ModelUnloadTimeout != 30 {
 		t.Errorf("ModelUnloadTimeout = %d, want 30 seconds", d.ModelUnloadTimeout)
 	}
+	if d.StreamingLatency != LatencyBalanced || !d.LongFormChunking {
+		t.Errorf("live transcription defaults: latency %q, chunking %v", d.StreamingLatency, d.LongFormChunking)
+	}
 }
 
 func TestCloneIsDeep(t *testing.T) {
@@ -67,15 +70,17 @@ func TestNormalizeResetsInvalidValues(t *testing.T) {
 	s.OverlayStyle = ""
 	s.LogLevel = "trace"
 	s.TranscribeShortcut = ""
+	s.StreamingLatency = "instant"
 
 	fixed := s.normalize(def)
-	want := []string{"transcribe_shortcut", "activation_mode", "hold_threshold_ms", "audio_feedback_volume", "overlay_style", "log_level"}
+	want := []string{"transcribe_shortcut", "activation_mode", "hold_threshold_ms", "streaming_latency", "audio_feedback_volume", "overlay_style", "log_level"}
 	if !slices.Equal(fixed, want) {
 		t.Errorf("fixed = %v, want %v", fixed, want)
 	}
 	if s.ActivationMode != def.ActivationMode || s.HoldThresholdMS != def.HoldThresholdMS ||
 		s.AudioFeedbackVolume != def.AudioFeedbackVolume || s.OverlayStyle != def.OverlayStyle ||
-		s.LogLevel != def.LogLevel || s.TranscribeShortcut != def.TranscribeShortcut {
+		s.LogLevel != def.LogLevel || s.TranscribeShortcut != def.TranscribeShortcut ||
+		s.StreamingLatency != def.StreamingLatency {
 		t.Errorf("invalid values were not reset: %+v", s)
 	}
 }

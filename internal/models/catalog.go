@@ -66,6 +66,10 @@ type Capabilities struct {
 	Streaming bool `json:"streaming"`
 	// LanguageDetection: the model takes "auto" and detects the language.
 	LanguageDetection bool `json:"language_detection"`
+	// LanguageSelection: the model transcribes the language it is asked for,
+	// one of Languages, so the user can choose it (Nemotron's language
+	// prompts). A model without it ignores the language it is given.
+	LanguageSelection bool `json:"language_selection"`
 	// Timestamps: the model reports when each word was spoken.
 	Timestamps bool `json:"timestamps"`
 }
@@ -145,6 +149,9 @@ func (c *Catalog) validate() error {
 		}
 		if len(m.Files) == 0 {
 			bad("no files")
+		}
+		if m.Capabilities.LanguageSelection && len(m.Languages) < 2 {
+			bad("language_selection needs at least two languages")
 		}
 		if _, ok := m.File(m.DefaultQuant); !ok || m.DefaultQuant == "" {
 			bad("default quant %q has no file", m.DefaultQuant)
