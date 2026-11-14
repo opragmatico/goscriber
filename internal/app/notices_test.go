@@ -2,7 +2,6 @@ package app
 
 import (
 	"errors"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -130,13 +129,10 @@ func TestAccessibilityNotice(t *testing.T) {
 		t.Errorf("opened %v, want System Settings at Accessibility", a.opened)
 	}
 
-	// started watches the permission on macOS only, the one OS that has it.
-	// The watcher works the same everywhere, so elsewhere start it directly.
-	if runtime.GOOS == "darwin" {
-		sh.started()
-	} else {
-		sh.following.Go(sh.watchAccessibility)
-	}
+	// started watches the permissions on macOS only, and there also asks
+	// the real system for them. The watcher works the same everywhere, so
+	// start it directly.
+	sh.following.Go(sh.watchPermissions)
 	testShortcuts.setFail(nil)
 	mu.Lock()
 	trusted = true
