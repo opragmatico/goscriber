@@ -19,6 +19,7 @@
       "capabilities": {
         "streaming": true,
         "language_detection": true,
+        "language_selection": true,
         "timestamps": true
       },
       "default_quant": "Q8_0",

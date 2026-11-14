@@ -13,6 +13,8 @@ import (
 const (
 	fixtureWAV  = "../../../testdata/audio/jfk.wav"
 	fixtureText = "../../../testdata/audio/jfk.txt"
+	spanishWAV  = "../../../testdata/audio/es.wav"
+	spanishText = "../../../testdata/audio/es.txt"
 )
 
 // readWAV reads a PCM 16-bit WAV file as mono float32 samples, averaging the
@@ -58,14 +60,27 @@ func readWAV(path string) (samples []float32, rate int, err error) {
 	return nil, 0, fmt.Errorf("%s: no data chunk", path)
 }
 
-// fixture returns the shared test clip and its reference transcript.
+// fixture returns the shared English test clip and its reference
+// transcript.
 func fixture(t testing.TB) (samples []float32, rate int, transcript string) {
 	t.Helper()
-	samples, rate, err := readWAV(fixtureWAV)
+	return readFixture(t, fixtureWAV, fixtureText)
+}
+
+// spanishFixture returns the shared Spanish test clip and its reference
+// transcript.
+func spanishFixture(t testing.TB) (samples []float32, rate int, transcript string) {
+	t.Helper()
+	return readFixture(t, spanishWAV, spanishText)
+}
+
+func readFixture(t testing.TB, wav, txt string) (samples []float32, rate int, transcript string) {
+	t.Helper()
+	samples, rate, err := readWAV(wav)
 	if err != nil {
 		t.Fatal(err)
 	}
-	text, err := os.ReadFile(fixtureText)
+	text, err := os.ReadFile(txt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,5 +152,9 @@ func TestReadWAVFixture(t *testing.T) {
 	}
 	if _, _, err := readWAV(fixtureText); err == nil {
 		t.Error("readWAV accepted a text file")
+	}
+	samples, rate, text = spanishFixture(t)
+	if rate != 16000 || len(samples) != 168000 || text == "" {
+		t.Errorf("Spanish fixture: %d samples at %d Hz, transcript %q", len(samples), rate, text)
 	}
 }

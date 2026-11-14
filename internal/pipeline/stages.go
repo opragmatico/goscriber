@@ -57,7 +57,12 @@ type SessionInfo struct {
 	Session uint64
 	// Model is the catalog ID of the model that transcribed it.
 	Model string
-	// Languages are the languages the model selected or detected.
+	// Language is the language the model was asked for: a locale such as
+	// "es-ES", "auto", or "" for a model whose language is fixed.
+	Language string
+	// Languages are the languages the model selected or detected, such as
+	// "es-US" when asked for "auto" or even "es-ES". Empty when the model
+	// reports none.
 	Languages []string
 	// Duration is how long the recording lasted.
 	Duration time.Duration

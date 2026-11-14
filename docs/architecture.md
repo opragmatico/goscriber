@@ -235,6 +235,26 @@ The `Coordinator` (`internal/pipeline/coordinator.go`) owns a single state machi
 
 Until onboarding (#31) and the Models page (#30) exist, choose the model by setting `selected_model` in `settings.json` to a downloaded model's id, for example `"nemotron-3.5-asr-streaming-0.6b"` after `goscriber models pull nemotron-3.5-asr-streaming-0.6b`.
 
+### Language
+
+The language picker on the settings window's Models page offers what the selected model takes, from the catalog, by readable name (`internal/models/languages.go`):
+
+- **Nemotron Streaming 3.5**: Automatic, the default, then its 32 locales (English (US), Spanish (Spain), Portuguese (Brazil)…). The catalog marks it `language_selection`: it transcribes the locale it is asked for, through a language prompt. The pick is saved as `language` and passed as `language_code` in every recognition request, whole or streamed. A saved language the model does not take falls back to Automatic.
+- **Parakeet TDT 0.6B v2**: English, locked: it transcribes nothing else and is given no language.
+- **Parakeet TDT 0.6B v3**: Automatic, locked: it detects the language itself and ignores a language it is given.
+
+The language the model detected (`nemo_speech_asr_result_language_code`) comes back in the result's `Languages`. The coordinator hands it on with the delivered result (`EventResult.Languages`), to the text stages and history (`SessionInfo.Languages`, next to `SessionInfo.Language`, the language asked for), and to the log line of each dictation. The Models page shows the language of the last dictation under the picker until the model changes.
+
+What NeMo-Speech.cpp v0.3.0 does with languages, checked with `testdata/audio/es.wav`, a Spanish LibriVox reading:
+
+- **Automatic works for streams.** Handy's engine must fix a stream's language before any audio arrives. Nemotron's `auto` is a prompt of its own (index 101 of the GGUF's `asr.rnnt.prompt_dictionary`), with which the model detects the language from the audio and tags its transcript. Streamed with `auto`, the fixture comes back word for word, the same as with `es-ES` and as decoded whole, so live transcription uses the language setting as it is, with no fallback to a last detected language.
+- **The tag is what the model heard.** The fixture is tagged `es-US` whether the model was asked for `es-ES` or `auto`.
+- **Only finals carry it.** Interim results report no language, so the overlay cannot show it while the user speaks.
+- **A wrong language costs the transcript.** Asked for `en-US`, the Spanish fixture comes back empty, which the coordinator treats as no speech. Automatic is the safer choice for anyone who dictates in more than one language.
+- **Synthetic speech is unreliable.** Some macOS voices reading Spanish lose most of a sentence with `es-ES`, while others transcribe fully. That is why the fixture is a human reading.
+
+The GGUF's prompt dictionary holds more than 100 locales and bare language codes, but the catalog lists only the 32 the model card supports.
+
 ### Live transcription
 
 From the moment recording starts, the coordinator hands the recorder's 10 ms frames (`Recorder.Frames`) to a pump on the engine goroutine, queued behind the model load, so audio that arrives while the model loads waits in the recorder and nothing is lost. What the pump does depends on the model the load reported (`internal/pipeline/live.go`):

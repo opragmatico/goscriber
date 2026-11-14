@@ -47,6 +47,33 @@ type SettingsWindow struct {
 	modelLabel  *widget.Label
 	permissions []PermissionRow
 	permBox     *fyne.Container
+
+	language       LanguageSetting
+	detected       string
+	onLanguage     func(code string)
+	languageBox    *fyne.Container
+	languageSelect *widget.Select
+	languageNote   *widget.Label
+	detectedLabel  *widget.Label
+	settingSelect  bool // the window itself is changing the selection
+}
+
+// LanguageOption is a language the user can pick: its code, such as
+// "es-ES", and its readable name.
+type LanguageOption struct {
+	Code, Name string
+}
+
+// LanguageSetting is what the Models page's language picker shows.
+type LanguageSetting struct {
+	// Options are the languages to pick from. None hides the picker.
+	Options []LanguageOption
+	// Selected is the code of the language picked.
+	Selected string
+	// Locked shows the language without letting it change: the model's
+	// language is fixed. Note says why.
+	Locked bool
+	Note   string
 }
 
 // PermissionRow is one permission on the Permissions page.
@@ -156,6 +183,99 @@ func (s *SettingsWindow) SetModel(name string) {
 	}
 }
 
+// Language is what the language picker shows.
+func (s *SettingsWindow) Language() LanguageSetting { return s.language }
+
+// SetLanguage sets what the language picker shows.
+func (s *SettingsWindow) SetLanguage(l LanguageSetting) {
+	s.language = l
+	s.refreshLanguage()
+}
+
+// OnLanguage sets what runs when the user picks a language, on the main
+// thread, with the language's code.
+func (s *SettingsWindow) OnLanguage(f func(code string)) { s.onLanguage = f }
+
+// Detected is the readable name of the language the last dictation was
+// detected in, or "".
+func (s *SettingsWindow) Detected() string { return s.detected }
+
+// SetDetected shows the language the last dictation was detected in, by its
+// readable name; "" shows none.
+func (s *SettingsWindow) SetDetected(name string) {
+	s.detected = name
+	s.refreshLanguage()
+}
+
+// PickLanguage picks a language by code as the user would, as if chosen in
+// the picker.
+func (s *SettingsWindow) PickLanguage(code string) {
+	for _, o := range s.language.Options {
+		if o.Code == code && s.languageSelect != nil && !s.language.Locked {
+			s.languageSelect.SetSelected(o.Name)
+		}
+	}
+}
+
+func (s *SettingsWindow) languageView() fyne.CanvasObject {
+	s.languageSelect = widget.NewSelect(nil, s.languagePicked)
+	s.languageNote = paragraph("")
+	s.detectedLabel = paragraph("")
+	row := container.NewBorder(nil, nil, widget.NewLabel("Language"), nil, s.languageSelect)
+	s.languageBox = container.NewVBox(row, s.languageNote, s.detectedLabel)
+	s.refreshLanguage()
+	return s.languageBox
+}
+
+// refreshLanguage brings the picker in line with the language setting.
+func (s *SettingsWindow) refreshLanguage() {
+	if s.languageBox == nil {
+		return
+	}
+	l := s.language
+	if len(l.Options) == 0 {
+		s.languageBox.Hide()
+		return
+	}
+	names := make([]string, len(l.Options))
+	selected := ""
+	for i, o := range l.Options {
+		names[i] = o.Name
+		if o.Code == l.Selected {
+			selected = o.Name
+		}
+	}
+	s.settingSelect = true
+	s.languageSelect.SetOptions(names)
+	s.languageSelect.SetSelected(selected)
+	s.settingSelect = false
+	if l.Locked {
+		s.languageSelect.Disable()
+	} else {
+		s.languageSelect.Enable()
+	}
+	s.languageNote.SetText(l.Note)
+	s.languageNote.Hidden = l.Note == ""
+	s.detectedLabel.SetText("Detected in the last dictation: " + s.detected)
+	s.detectedLabel.Hidden = s.detected == ""
+	s.languageBox.Show()
+	s.languageBox.Refresh()
+}
+
+func (s *SettingsWindow) languagePicked(name string) {
+	if s.settingSelect || s.language.Locked {
+		return
+	}
+	for _, o := range s.language.Options {
+		if o.Name == name && o.Code != s.language.Selected {
+			s.language.Selected = o.Code
+			if s.onLanguage != nil {
+				s.onLanguage(o.Code)
+			}
+		}
+	}
+}
+
 func (s *SettingsWindow) modelText() string {
 	if s.model == "" {
 		return "No model is downloaded yet. Choosing and downloading a model will happen on this page."
@@ -171,7 +291,7 @@ func (s *SettingsWindow) create() {
 			paragraph("Settings are saved in:"),
 			path(s.info.SettingsFile),
 		)),
-		container.NewTabItem("Models", page("Models", s.modelLabel)),
+		container.NewTabItem("Models", page("Models", s.modelLabel, s.languageView())),
 		container.NewTabItem("Permissions", page("Permissions", s.permissionsView())),
 		container.NewTabItem("About", page("Goscriber",
 			paragraph("Offline push-to-talk speech-to-text."),
