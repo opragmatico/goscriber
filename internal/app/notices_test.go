@@ -135,17 +135,18 @@ func TestAccessibilityNotice(t *testing.T) {
 	if runtime.GOOS == "darwin" {
 		sh.started()
 	} else {
-		sh.following.Go(sh.watchAccessibility)
+		sh.following.Go(sh.watchPermissions)
 	}
 	testShortcuts.setFail(nil)
 	mu.Lock()
 	trusted = true
 	mu.Unlock()
 	testShortcuts.waitLog(t, "!"+talk, "+"+talk)
-	q.runNext(t)
-	if sh.tray.Alert() != nil || sh.notices.Count(notice.CodePermissionMissing) != 0 {
-		t.Error("granting the permission should end the notice")
-	}
+	// The watcher keeps posting Permissions page refreshes, so runNext would
+	// never see the queue go quiet: run updates until the notice ends.
+	q.waitUI(t, "granting the permission to end the notice", func() bool {
+		return sh.tray.Alert() == nil && sh.notices.Count(notice.CodePermissionMissing) == 0
+	})
 }
 
 // With the permission in place, a shortcut that cannot register is the
