@@ -100,10 +100,12 @@ type Overlay struct {
 	position config.OverlayPosition
 	onCancel func()
 
-	state   OverlayState
-	since   time.Time
-	levels  []float32 // the meter, oldest first, each 0 to 1
-	interim string
+	state  OverlayState
+	since  time.Time
+	levels []float32 // the meter, oldest first, each 0 to 1
+	// The interim text: its settled start and the end that may still
+	// change.
+	stable, tail string
 
 	win     fyne.Window
 	native  any // the driver's native window context, once created
@@ -116,7 +118,10 @@ type Overlay struct {
 	clock   *canvas.Text
 	status  *canvas.Text
 	cancel  *overlayCancel
-	text    *widget.Label
+	text    *widget.RichText
+	// The interim text's settled start, in full ink, and its changing end,
+	// dimmed: the text's two segments.
+	textStable, textTail *widget.TextSegment
 }
 
 // NewOverlay prepares the overlay. Nothing is on screen until SetState asks
@@ -146,10 +151,17 @@ func (o *Overlay) Elapsed() string {
 
 // Interim is the interim text shown, or "" when none is.
 func (o *Overlay) Interim() string {
-	if o.text == nil || !o.text.Visible() {
-		return ""
+	stable, tail := o.InterimParts()
+	return stable + tail
+}
+
+// InterimParts is the interim text shown, split into its settled start and
+// its changing end, or two empty strings when none is shown.
+func (o *Overlay) InterimParts() (stable, tail string) {
+	if o.text == nil || !o.shown || !o.text.Visible() {
+		return "", ""
 	}
-	return o.text.Text
+	return o.textStable.Text, o.textTail.Text
 }
 
 // Levels returns the meter's bars, oldest first, from 0 to 1.
@@ -188,7 +200,7 @@ func (o *Overlay) SetState(s OverlayState, now time.Time) {
 	if s == OverlayRecording || prev == OverlayHidden {
 		o.since = now
 		clear(o.levels)
-		o.interim = ""
+		o.stable, o.tail = "", ""
 	}
 	o.refresh(now)
 	o.show()
@@ -203,12 +215,14 @@ func (o *Overlay) SetLevel(l audio.Level) {
 	}
 }
 
-// SetInterim shows the transcript so far, in the live style.
-func (o *Overlay) SetInterim(text string) {
-	if text == o.interim {
+// SetInterim shows the transcript so far, in the live style: stable, the
+// words that are settled, then tail, the words that may still change, which
+// are dimmed.
+func (o *Overlay) SetInterim(stable, tail string) {
+	if stable == o.stable && tail == o.tail {
 		return
 	}
-	o.interim = text
+	o.stable, o.tail = stable, tail
 	if o.shown {
 		o.refresh(time.Now())
 		o.resize()
@@ -255,8 +269,9 @@ func (o *Overlay) refresh(now time.Time) {
 	o.clock.Text = formatElapsed(now.Sub(o.since))
 	o.clock.Refresh()
 
-	if text := interimText(o.interim); o.style == config.OverlayLive && text != "" {
-		o.text.SetText(text)
+	if stable, tail := interimText(o.stable, o.tail); o.style == config.OverlayLive && stable+tail != "" {
+		o.textStable.Text, o.textTail.Text = stable, tail
+		o.text.Refresh()
 		o.text.Show()
 	} else {
 		o.text.Hide()
@@ -296,7 +311,9 @@ func (o *Overlay) create() {
 	o.status = canvas.NewText(LabelTranscribingOverlay, overlayInk)
 	o.status.TextSize = 12
 	o.cancel = newOverlayCancel(o.cancelTapped)
-	o.text = widget.NewLabel("")
+	o.textStable = &widget.TextSegment{Style: widget.RichTextStyle{Inline: true, ColorName: theme.ColorNameForeground}}
+	o.textTail = &widget.TextSegment{Style: widget.RichTextStyle{Inline: true, ColorName: theme.ColorNamePlaceHolder}}
+	o.text = widget.NewRichText(o.textStable, o.textTail)
 	o.text.Wrapping = fyne.TextWrapWord
 	o.text.Hide()
 
@@ -420,13 +437,20 @@ func formatElapsed(d time.Duration) string {
 }
 
 // interimText is the end of the interim text, as much as the live overlay
-// shows.
-func interimText(s string) string {
-	if utf8.RuneCountInString(s) <= interimTail {
-		return s
+// shows, still split into its settled start and changing end. What is cut
+// off the front is replaced by an ellipsis.
+func interimText(stable, tail string) (string, string) {
+	n, nt := utf8.RuneCountInString(stable), utf8.RuneCountInString(tail)
+	if n+nt <= interimTail {
+		return stable, tail
 	}
-	r := []rune(s)
-	return "…" + string(r[len(r)-interimTail+1:])
+	keep := interimTail - 1 // the ellipsis takes one
+	if nt >= keep {
+		r := []rune(tail)
+		return "", "…" + string(r[len(r)-keep:])
+	}
+	r := []rune(stable)
+	return "…" + string(r[len(r)-(keep-nt):]), tail
 }
 
 // darkTheme is the default theme in its dark variant whatever the system

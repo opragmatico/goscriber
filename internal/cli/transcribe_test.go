@@ -283,17 +283,6 @@ func TestTranscribeUsage(t *testing.T) {
 	}
 }
 
-func TestJoinFinals(t *testing.T) {
-	r := joinFinals([]engine.Result{
-		{Text: "one.", Confidence: 1, Languages: []string{"en-US"}, AudioProcessed: time.Second, Words: []engine.Word{{Text: "one."}}},
-		{Text: "", Confidence: 0},
-		{Text: "two.", Confidence: 0.5, Languages: []string{"en-US", "de-DE"}, AudioProcessed: 2 * time.Second, Words: []engine.Word{{Text: "two."}}},
-	})
-	if r.Text != "one. two." || len(r.Words) != 2 || r.AudioProcessed != 2*time.Second || len(r.Languages) != 2 || r.Confidence != 0.5 {
-		t.Errorf("joined %+v", r)
-	}
-}
-
 func TestTranscribeVADThresholdsFromSettings(t *testing.T) {
 	s := newTranscribe(t, fake.Script{})
 	paths, _ := config.ResolvePaths()

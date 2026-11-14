@@ -19,7 +19,8 @@ import (
 	"github.com/opragmatico/goscriber/internal/output"
 )
 
-// fakeRecorder hands back the samples it was given for every recording.
+// fakeRecorder hands back the samples it was given for every recording. Its
+// Frames deliver them all, in 10 ms chunks, as soon as the recording starts.
 type fakeRecorder struct {
 	levels chan audio.Level
 
@@ -28,6 +29,7 @@ type fakeRecorder struct {
 	rate      int
 	startErr  error
 	recording bool
+	frames    chan []float32 // of the recording in progress
 	starts    int
 	stops     int
 	trace     *tracer // records starts, stops and pre-roll drops, if set
@@ -69,6 +71,11 @@ func (r *fakeRecorder) Start() error {
 	}
 	r.recording = true
 	r.starts++
+	n := max(1, r.rate/100)
+	r.frames = make(chan []float32, len(r.samples)/n+1)
+	for off := 0; off < len(r.samples); off += n {
+		r.frames <- slices.Clone(r.samples[off:min(off+n, len(r.samples))])
+	}
 	return nil
 }
 
@@ -81,7 +88,19 @@ func (r *fakeRecorder) Stop() []float32 {
 	r.trace.add("stop recording")
 	r.recording = false
 	r.stops++
+	close(r.frames)
 	return slices.Clone(r.samples)
+}
+
+func (r *fakeRecorder) Frames() <-chan []float32 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.recording {
+		ch := make(chan []float32)
+		close(ch)
+		return ch
+	}
+	return r.frames
 }
 
 func (r *fakeRecorder) SampleRate() int {

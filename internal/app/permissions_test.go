@@ -186,6 +186,9 @@ func TestPermissionsPage(t *testing.T) {
 
 func TestPermissionTrayAlert(t *testing.T) {
 	sh, a, q := newPermissionShell(t, perms{platform.PermMicrophone: platform.StatusDenied}, nil)
+	// Only the microphone is missing, whatever the machine running the test
+	// has granted.
+	sh.trusted = func() bool { return true }
 	sh.askPermissions()
 	q.drain()
 	alert := sh.tray.Alert()

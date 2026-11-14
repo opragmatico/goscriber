@@ -6,7 +6,7 @@ Press a shortcut, speak, release, and your words are pasted into whatever app yo
 
 Goscriber is a Go re-implementation of [Handy](https://github.com/cjpais/Handy) by CJ Pais. Handy is a Tauri (Rust + React) app that runs many model families through `transcribe.cpp`. Goscriber keeps Handy's dictation behaviour but deliberately narrows the speech stack to **three NVIDIA models running in-process through [NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) via CGo**, and ships a single native binary with a [Fyne](https://fyne.io) UI.
 
-> **Status: early development.** `goscriber` runs as a menu bar / tray icon: the shortcut or the tray records, transcribes the whole recording once you stop, and pastes the text. There is no onboarding or Models page yet, so pick a downloaded model by setting `selected_model` in `settings.json` (see [Dictation pipeline](docs/architecture.md#dictation-pipeline)). `goscriber transcribe` transcribes WAV files from the command line. See the [roadmap](#roadmap) and the [issue tracker](https://github.com/opragmatico/goscriber/issues).
+> **Status: early development.** `goscriber` runs as a menu bar / tray icon: the shortcut or the tray records, transcribes while you speak (Nemotron shows the words in the overlay as you say them; Parakeet decodes the recording in chunks at your pauses), and pastes the text the moment you stop. There is no onboarding or Models page yet, so pick a downloaded model by setting `selected_model` in `settings.json` (see [Dictation pipeline](docs/architecture.md#dictation-pipeline)). `goscriber transcribe` transcribes WAV files from the command line. See the [roadmap](#roadmap) and the [issue tracker](https://github.com/opragmatico/goscriber/issues).
 
 ## Supported models
 
@@ -39,7 +39,7 @@ No other models or engines are planned. Whisper, Canary, Moonshine and the rest 
 ## How it will work
 
 1. **Press** a global shortcut: hold to record and release to stop (push-to-talk), or tap to toggle.
-2. **Speak**. A small overlay shows that Goscriber is listening and, with Nemotron Streaming 3.5, the words as they are recognised.
+2. **Speak**. A small overlay shows that Goscriber is listening and the words as they are recognised: with Nemotron Streaming 3.5 within a fraction of a second, with Parakeet a sentence or so at a time.
 3. **Release**. NeMo-Speech.cpp finishes the utterance locally on Metal (Apple Silicon) or the CPU.
 4. **Get** the text pasted into the focused text field.
 
