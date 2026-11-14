@@ -21,8 +21,9 @@ const (
 	// times a second while recording. A slow subscriber gets the latest
 	// level rather than a backlog.
 	EventLevel
-	// EventInterim: Text is the transcript so far, while recording. Only
-	// live transcription (#24) produces it.
+	// EventInterim: Text is the transcript so far, while recording, and its
+	// first Stable bytes are settled; the rest may still change. A slow
+	// subscriber gets the latest transcript rather than a backlog.
 	EventInterim
 	// EventResult: Text is the transcript that was delivered to the
 	// focused app.
@@ -60,10 +61,16 @@ type Event struct {
 	Level audio.Level
 	// Text is the transcript, for EventInterim and EventResult.
 	Text string
+	// Stable is how many bytes at the start of Text are settled, for
+	// EventInterim: the words a streaming model will not change, or the
+	// chunks an offline model has decoded.
+	Stable int
 }
 
 // subscriber is an unbounded queue in front of a channel, so publishing never
-// blocks. A level replaces a level still waiting at the end of the queue.
+// blocks. A level replaces a level still waiting at the end of the queue, and
+// an interim replaces the session's interim still waiting since its last
+// state change.
 type subscriber struct {
 	mu     sync.Mutex
 	queue  []Event
@@ -80,13 +87,35 @@ func newSubscriber() *subscriber {
 
 func (s *subscriber) push(ev Event) {
 	s.mu.Lock()
-	if n := len(s.queue); ev.Kind == EventLevel && n > 0 && s.queue[n-1].Kind == EventLevel {
-		s.queue[n-1] = ev
-	} else {
+	if !s.coalesceLocked(ev) {
 		s.queue = append(s.queue, ev)
 	}
 	s.mu.Unlock()
 	signal(s.wake)
+}
+
+// coalesceLocked puts ev in place of an older event that it supersedes,
+// and reports whether it did.
+func (s *subscriber) coalesceLocked(ev Event) bool {
+	n := len(s.queue)
+	switch ev.Kind {
+	case EventLevel:
+		if n > 0 && s.queue[n-1].Kind == EventLevel {
+			s.queue[n-1] = ev
+			return true
+		}
+	case EventInterim:
+		for i := n - 1; i >= 0; i-- {
+			switch q := s.queue[i]; {
+			case q.Kind == EventInterim && q.Session == ev.Session:
+				s.queue[i] = ev
+				return true
+			case q.Kind != EventLevel && q.Kind != EventInterim:
+				return false
+			}
+		}
+	}
+	return false
 }
 
 func (s *subscriber) close() {

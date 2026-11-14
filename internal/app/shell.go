@@ -96,8 +96,11 @@ type shell struct {
 	// overlayActive is whether a session is in progress, for the overlay's
 	// clock; it is read off the main thread.
 	overlayActive atomic.Bool
-	// recording is what the shortcuts were last told about dictation.
+	// recording is what the shortcuts were last told about dictation, and
+	// liveSession the session the overlay last showed recording, whose
+	// interim text it shows; both main thread only.
 	recording           bool
+	liveSession         uint64
 	stopDictationEvents func()
 	hotkeys             *hotkey.Manager
 	tray                *ui.Tray // nil without a tray

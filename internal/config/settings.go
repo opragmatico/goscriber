@@ -133,6 +133,18 @@ const (
 	AcceleratorCPU  Accelerator = "cpu"
 )
 
+// StreamingLatency trades how soon a streaming model shows words against how
+// accurate they are: the model looks further ahead in the audio before
+// deciding on each word. Offline models ignore it.
+type StreamingLatency string
+
+// Streaming latency presets. They map to engine.Latency.
+const (
+	LatencyLow      StreamingLatency = "low"      // words soonest, at some cost in accuracy
+	LatencyBalanced StreamingLatency = "balanced" // the model's own trade-off
+	LatencyAccurate StreamingLatency = "accurate" // the most accurate text, shown latest
+)
+
 // LogLevel is the minimum level written to the logs.
 type LogLevel string
 
@@ -163,6 +175,14 @@ type Settings struct {
 	Language           string        `json:"language"`
 	Accelerator        Accelerator   `json:"accelerator"`
 	ModelUnloadTimeout UnloadTimeout `json:"model_unload_timeout"` // the next dictation reloads an unloaded model
+
+	// Live transcription. A streaming model (Nemotron) always decodes while
+	// the user speaks, looking ahead as far as StreamingLatency says. With
+	// LongFormChunking an offline model (Parakeet TDT) decodes the recording
+	// in pieces cut at pauses while it goes on, so only the last piece is
+	// left when it stops; off, it decodes the whole recording once it stops.
+	StreamingLatency StreamingLatency `json:"streaming_latency"`
+	LongFormChunking bool             `json:"long_form_chunking"`
 
 	// Speech detection. With VADEnabled the Silero VAD masks silence in
 	// streamed audio before the model sees it: a frame enters speech when
@@ -234,6 +254,8 @@ func defaultsFor(goos string) Settings {
 		Language:            "auto",
 		Accelerator:         AcceleratorAuto,
 		ModelUnloadTimeout:  30,
+		StreamingLatency:    LatencyBalanced,
+		LongFormChunking:    true,
 		VADEnabled:          true,
 		VADOnset:            0.5,
 		VADOffset:           0.3,
@@ -304,6 +326,8 @@ func (s *Settings) normalize(def Settings) []string {
 	check("accelerator", oneOf(s.Accelerator, AcceleratorAuto, AcceleratorCPU), func() { s.Accelerator = def.Accelerator })
 	check("model_unload_timeout", s.ModelUnloadTimeout.valid(),
 		func() { s.ModelUnloadTimeout = def.ModelUnloadTimeout })
+	check("streaming_latency", oneOf(s.StreamingLatency, LatencyLow, LatencyBalanced, LatencyAccurate),
+		func() { s.StreamingLatency = def.StreamingLatency })
 	check("vad_onset", s.VADOnset > 0 && s.VADOnset < 1, func() { s.VADOnset = def.VADOnset })
 	// The offset must not exceed the onset, or a frame could be in and out of
 	// speech at once.
