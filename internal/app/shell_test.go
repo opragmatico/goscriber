@@ -52,7 +52,8 @@ type uiQueue chan func()
 func (q uiQueue) do(f func()) { q <- f }
 
 // runNext waits for a UI update and runs it, together with any others that
-// arrive right after it (such as a notice raised at startup).
+// arrive right after it (such as a notice raised at startup), for at most a
+// second: a poller, such as the permission watcher, posts one after another.
 func (q uiQueue) runNext(t *testing.T) {
 	t.Helper()
 	select {
@@ -61,11 +62,13 @@ func (q uiQueue) runNext(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("no UI update after the settings change")
 	}
-	for {
+	for end := time.After(time.Second); ; {
 		select {
 		case f := <-q:
 			f()
 		case <-time.After(50 * time.Millisecond):
+			return
+		case <-end:
 			return
 		}
 	}
