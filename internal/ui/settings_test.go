@@ -209,3 +209,53 @@ func TestSettingsPermissionsPage(t *testing.T) {
 		t.Error("the button should open System Settings")
 	}
 }
+
+func TestSettingsLanguagePicker(t *testing.T) {
+	a := test.NewTempApp(t)
+	s := NewSettingsWindow(a, info, nil)
+	var picked []string
+	s.OnLanguage(func(code string) { picked = append(picked, code) })
+	s.SetLanguage(LanguageSetting{
+		Options:  []LanguageOption{{"auto", "Automatic"}, {"en-US", "English (US)"}, {"es-ES", "Spanish (Spain)"}},
+		Selected: "auto",
+	})
+	s.Show(PageModels)
+	if !s.languageBox.Visible() || s.languageSelect.Selected != "Automatic" || len(s.languageSelect.Options) != 3 {
+		t.Fatalf("picker visible %v, selected %q, options %v", s.languageBox.Visible(), s.languageSelect.Selected, s.languageSelect.Options)
+	}
+	if len(picked) != 0 {
+		t.Errorf("showing the setting reported a pick: %v", picked)
+	}
+	s.PickLanguage("es-ES")
+	if !slices.Equal(picked, []string{"es-ES"}) || s.Language().Selected != "es-ES" {
+		t.Errorf("picked %v, setting %+v", picked, s.Language())
+	}
+	if s.detectedLabel.Visible() {
+		t.Error("no detected language yet")
+	}
+	s.SetDetected("Spanish (US)")
+	if !s.detectedLabel.Visible() || !strings.Contains(pageText(s, PageModels), "Detected in the last dictation: Spanish (US)") {
+		t.Errorf("page text %q", pageText(s, PageModels))
+	}
+
+	// A fixed language is shown but cannot change.
+	s.SetLanguage(LanguageSetting{
+		Options:  []LanguageOption{{"en", "English"}},
+		Selected: "en",
+		Locked:   true,
+		Note:     "Parakeet TDT 0.6B v2 transcribes English only.",
+	})
+	if !s.languageSelect.Disabled() || s.languageSelect.Selected != "English" || !strings.Contains(pageText(s, PageModels), "English only") {
+		t.Errorf("locked picker: disabled %v, selected %q", s.languageSelect.Disabled(), s.languageSelect.Selected)
+	}
+	s.PickLanguage("en")
+	if len(picked) != 1 {
+		t.Errorf("a locked picker reported a pick: %v", picked)
+	}
+
+	// No model, no picker.
+	s.SetLanguage(LanguageSetting{})
+	if s.languageBox.Visible() {
+		t.Error("the picker shows without a model")
+	}
+}

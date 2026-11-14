@@ -25,8 +25,9 @@ type Model struct {
 	Spec engine.LoadSpec
 	// Name is the model's display name, for notices.
 	Name string
-	// Language is the recognition language to ask for: the setting, or ""
-	// for a model with one fixed language.
+	// Language is the recognition language to ask for: the setting when the
+	// model takes a choice of language (or "auto" when the setting is not
+	// one of them), or "" for a model whose language is fixed.
 	Language string
 }
 
@@ -43,8 +44,9 @@ type ModelSource interface {
 
 // CatalogModels resolves the selected model through the model manager: the
 // selected_model setting, in the model_quant quantisation when the model has
-// it, with the Silero VAD when vad_enabled and it is downloaded, and for a
-// streaming model the streaming_latency preset.
+// it, with the Silero VAD when vad_enabled and it is downloaded, for a
+// streaming model the streaming_latency preset, and for a model that takes a
+// choice of language the language setting.
 type CatalogModels struct {
 	Manager *models.Manager
 }
@@ -78,17 +80,12 @@ func (c CatalogModels) Resolve(s config.Settings) (Model, error) {
 			CPU:  s.Accelerator == config.AcceleratorCPU,
 		},
 		Name:     m.Name,
-		Language: s.Language,
+		Language: m.ResolveLanguage(s.Language),
 	}
 	// Only streaming models look ahead; leaving the preset out of an offline
 	// model's spec keeps a change to it from reloading the model.
 	if m.Capabilities.Streaming {
 		out.Spec.Latency = engine.Latency(s.StreamingLatency)
-	}
-	// A model with one language ignores the setting; asking for another
-	// language could only make it fail.
-	if !m.Capabilities.LanguageDetection && len(m.Languages) <= 1 {
-		out.Language = ""
 	}
 	if vad := cat.VAD(); s.VADEnabled && vad != nil {
 		if p, err := c.Manager.Path(vad.ID, ""); err == nil {

@@ -713,6 +713,7 @@ func (c *Coordinator) finish(s *session, res engine.Result, samples []float32, r
 	info := SessionInfo{
 		Session:   s.id,
 		Model:     s.model.Spec.ID,
+		Language:  s.model.Language,
 		Languages: slices.Clone(res.Languages),
 		Duration:  s.timings.recording,
 	}
@@ -765,7 +766,7 @@ func (c *Coordinator) finish(s *session, res engine.Result, samples []float32, r
 	current := c.sess == s
 	if current {
 		if delivered {
-			c.emitLocked(Event{Kind: EventResult, Session: s.id, State: StateOutputting, Text: text})
+			c.emitLocked(Event{Kind: EventResult, Session: s.id, State: StateOutputting, Text: text, Languages: slices.Clone(res.Languages)})
 		}
 		if outErr != nil {
 			c.log.Warn("the transcript could not be delivered", "session", s.id, "err", outErr)
@@ -778,7 +779,7 @@ func (c *Coordinator) finish(s *session, res engine.Result, samples []float32, r
 	if !current {
 		return
 	}
-	c.logFinished(s, len([]rune(text)), delivered)
+	c.logFinished(s, len([]rune(text)), delivered, res.Languages)
 
 	if c.stages.History != nil {
 		entry := HistoryEntry{
@@ -808,9 +809,10 @@ func (c *Coordinator) advance(s *session, from, to State) bool {
 	return true
 }
 
-func (c *Coordinator) logFinished(s *session, chars int, delivered bool) {
+func (c *Coordinator) logFinished(s *session, chars int, delivered bool, detected []string) {
 	t := s.timings
 	c.log.Info("dictation finished", "session", s.id, "delivered", delivered, "chars", chars,
+		"language", s.model.Language, "detected", detected,
 		"total", time.Since(s.started).Round(time.Millisecond))
 	c.log.Debug("dictation timings", "session", s.id,
 		"recording", round(t.recording), "load", round(t.load), "transcribe", round(t.transcribe),

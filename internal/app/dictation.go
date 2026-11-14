@@ -183,6 +183,10 @@ func (sh *shell) dictationEvent(ev pipeline.Event) {
 		}
 		sh.overlay.SetState(overlayState(ev.State), time.Now())
 		sh.syncRecording(ev.State == pipeline.StateRecording, false)
+	case pipeline.EventResult:
+		if len(ev.Languages) > 0 {
+			sh.showDetected(ev.Languages)
+		}
 	case pipeline.EventRefused:
 		// The shortcut assumed its press would start or stop a recording;
 		// tell it what happened instead.
