@@ -113,21 +113,26 @@ func TestStreamingCancelAndNoSpeechCloseTheStream(t *testing.T) {
 	r.events.waitFor(t, "an interim", func(ev Event) bool { return ev.Kind == EventInterim })
 	r.c.Cancel()
 	r.events.waitState(t, StateIdle, 1)
-	waitClosed := func(n int) {
+	// waitStream waits until the engine has opened n streams and, when
+	// closed is set, the last of them is closed.
+	waitStream := func(n int, closed bool) {
 		t.Helper()
 		deadline := time.Now().Add(3 * time.Second)
 		for {
 			streams := r.eng.Streams()
-			if len(streams) == n && streams[n-1].Closed() {
+			if len(streams) == n && (!closed || streams[n-1].Closed()) {
 				return
 			}
 			if time.Now().After(deadline) {
-				t.Fatalf("stream %d not closed", n)
+				if closed {
+					t.Fatalf("stream %d not closed", n)
+				}
+				t.Fatalf("stream %d not opened", n)
 			}
 			time.Sleep(5 * time.Millisecond)
 		}
 	}
-	waitClosed(1)
+	waitStream(1, true)
 	if r.eng.Streams()[0].Finished() || len(r.out.delivered()) != 0 || len(r.eng.Recognitions()) != 0 {
 		t.Error("a cancelled stream was finished or transcribed")
 	}
@@ -137,9 +142,12 @@ func TestStreamingCancelAndNoSpeechCloseTheStream(t *testing.T) {
 	r.rec.samples = tone(100*time.Millisecond, 0.1)
 	r.c.Start()
 	r.events.waitState(t, StateRecording, 2)
+	// The engine goroutine opens the stream after the recording starts, and
+	// a session that ends first never opens one: Stop ends this one at once.
+	waitStream(2, false)
 	r.c.Stop()
 	r.events.waitState(t, StateIdle, 2)
-	waitClosed(2)
+	waitStream(2, true)
 	if len(r.out.delivered()) != 0 {
 		t.Errorf("delivered %q", r.out.delivered())
 	}

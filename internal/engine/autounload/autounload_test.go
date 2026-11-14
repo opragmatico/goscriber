@@ -429,49 +429,67 @@ func TestIdleUnloadAndReloadAreLogged(t *testing.T) {
 }
 
 // TestConcurrentCallsAcrossIdleUnloads runs on the real clock with a tiny
-// timeout, so the race detector sees idle unloads interleave with calls.
+// timeout, so the race detector sees idle unloads interleave with calls. A
+// pause in each round lets the model go idle among the calls when the
+// goroutines happen to pause together. Between rounds every call has ended,
+// and the test waits for the idle unload, so each round unloads the model
+// and the next one reloads it however the goroutines were scheduled.
 func TestConcurrentCallsAcrossIdleUnloads(t *testing.T) {
 	inner := fake.New(fake.Script{Model: engine.ModelInfo{Streaming: true}})
 	e := autounload.New(inner, time.Millisecond, quiet)
 	if _, err := e.Load(t.Context(), spec); err != nil {
 		t.Fatal(err)
 	}
-	var wg sync.WaitGroup
-	for g := range 8 {
-		wg.Go(func() {
-			for i := range 50 {
-				switch (g + i) % 3 {
-				case 0:
-					if _, err := e.Recognize(t.Context(), audio, 16000, engine.Options{}); err != nil {
-						t.Error(err)
+	const rounds, workers, calls = 5, 8, 10
+	for r := range rounds {
+		var wg sync.WaitGroup
+		for g := range workers {
+			wg.Go(func() {
+				for i := range calls {
+					switch (g + i) % 3 {
+					case 0:
+						if _, err := e.Recognize(t.Context(), audio, 16000, engine.Options{}); err != nil {
+							t.Error(err)
+						}
+					case 1:
+						s, err := e.StartStream(t.Context(), engine.Options{})
+						if err != nil {
+							t.Error(err)
+							continue
+						}
+						if err := s.Push(audio, 16000); err != nil {
+							t.Error(err)
+						}
+						s.Close()
+					case 2:
+						release, err := e.Acquire(t.Context())
+						if err != nil {
+							t.Error(err)
+							continue
+						}
+						release()
 					}
-				case 1:
-					s, err := e.StartStream(t.Context(), engine.Options{})
-					if err != nil {
-						t.Error(err)
-						continue
+					if i == 0 {
+						time.Sleep(2 * time.Millisecond) // let the model go idle
 					}
-					if err := s.Push(audio, 16000); err != nil {
-						t.Error(err)
-					}
-					s.Close()
-				case 2:
-					release, err := e.Acquire(t.Context())
-					if err != nil {
-						t.Error(err)
-						continue
-					}
-					release()
 				}
-				if i%10 == 0 {
-					time.Sleep(2 * time.Millisecond) // let the model go idle
-				}
-			}
-		})
+			})
+		}
+		wg.Wait()
+		waitIdleUnload(t, e, inner, r)
 	}
-	wg.Wait()
-	if inner.Unloads() == 0 {
-		t.Error("the model never unloaded; the test did not exercise idle unloads")
+}
+
+// waitIdleUnload waits for the idle timer to unload the model, once no call
+// is running.
+func waitIdleUnload(t *testing.T, e *autounload.Engine, inner *fake.Engine, round int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for e.Resident() || inner.Loaded() {
+		if time.Now().After(deadline) {
+			t.Fatalf("round %d: the model was still loaded 5s after the last call ended", round)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
