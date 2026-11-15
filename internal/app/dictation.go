@@ -30,6 +30,8 @@ type services struct {
 	// page.
 	files    ui.ModelFiles
 	feedback feedback
+	// player plays saved recordings, for the History page.
+	player recordingPlayer
 }
 
 // feedback plays the cues and mutes other audio around recordings.
@@ -71,6 +73,7 @@ func systemServices(rt *Runtime, opts Options, notices *notice.Hub) services {
 		models:   pipeline.CatalogModels{Manager: files},
 		files:    files,
 		feedback: audio.NewFeedback(audio.NewPlayer(), platform.MuteOutput, rt.Log.Logger),
+		player:   audio.NewPlayer(),
 	}
 }
 
@@ -109,7 +112,7 @@ func (sh *shell) startDictation() {
 		Settings:         sh.rt.Settings.Get,
 		Feedback:         sh.svc.feedback,
 		MicrophoneAccess: microphoneAccess,
-		Stages:           pipeline.Stages{Cleanup: pipeline.CleanupStage{}},
+		Stages:           pipeline.Stages{Cleanup: pipeline.CleanupStage{}, History: sh.historySink()},
 		Log:              sh.rt.Log.Logger,
 	})
 	events, stop := sh.dictation.Subscribe()
@@ -244,11 +247,16 @@ func (sh *shell) applyDictationSettings(s config.Settings) {
 	}
 }
 
-// stopDictation ends dictation and releases the microphone and the model.
-// It runs from stop, after the app has quit.
+// stopDictation ends dictation and releases the microphone, the model and
+// the history. It runs from stop, after the app has quit.
 func (sh *shell) stopDictation() {
 	if sh.dictation != nil {
 		sh.dictation.Close()
+	}
+	if sh.history != nil {
+		if err := sh.history.Close(); err != nil {
+			sh.rt.Log.Warn("closing the history failed", "err", err)
+		}
 	}
 	sh.svc.feedback.Close()
 	if err := sh.svc.engine.Unload(); err != nil {
