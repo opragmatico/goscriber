@@ -253,6 +253,12 @@ type Settings struct {
 	StartHidden  bool     `json:"start_hidden"`
 	ShowTrayIcon bool     `json:"show_tray_icon"`
 	Autostart    bool     `json:"autostart"`
+
+	// EngineInProcess runs the speech engine inside the app instead of in a
+	// worker process, for profiling: a crash in the engine then takes the
+	// app down. A debug toggle; it applies at the next launch, and
+	// --engine-in-process turns it on for one session.
+	EngineInProcess bool `json:"engine_in_process"`
 }
 
 // Defaults returns the settings for a fresh install on this OS.

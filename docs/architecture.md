@@ -156,11 +156,9 @@ The app shell routes each new notice once: an OS notification (`fyne.App.SendNot
 | `paste_failed` | error | no | | a failed delivery (`notice.ForPasteError`) |
 | `microphone_unavailable` | error | no | | the recorder's notifications, and a microphone that will not open at Start |
 | `model_corrupt` | error | no | Download again → Models page | a model that fails to load or verify |
-| `engine_crashed` | error | no | | the engine worker (#28) |
-| `engine_cpu_fallback` | warning | no | | the engine worker (#28) |
+| `engine_crashed` | error | no | | the engine supervisor, when a worker process crashes or stops answering ([process isolation](#process-isolation)) |
+| `engine_cpu_fallback` | warning | no | | the engine supervisor, when a worker crashes or hangs while it loads or decodes on the GPU, and the engine moves to the CPU |
 | `transcription_failed` | error | no | | the coordinator, when a decode fails or a model will not load for a reason other than a damaged file |
-
-`engine_crashed` and `engine_cpu_fallback` have constructors and tests but no producer until the engine worker (#28) exists.
 
 ## Output
 
@@ -198,7 +196,37 @@ The binding needs `cgo` and the NeMo-Speech.cpp SDK (headers and shared librarie
 
 ### Process isolation
 
-A `GGML_ASSERT`, a GPU driver fault or an `abort()` inside C++ takes the whole Go process with it. Following Handy's `engine_supervisor`, the native engine runs in a child process: the same `goscriber` binary started with a hidden `engine-worker` subcommand. The parent's `engine/worker` supervisor implements the same `Engine` interface over a framed stdin/stdout protocol (load, unload, recognize, stream push / next / finish, cancel), restarts a crashed worker, and retries on the CPU when the GPU backend was at fault. A worker lives exactly as long as its loaded model, so unloading returns all native memory to the OS.
+A `GGML_ASSERT`, a GPU driver fault or an `abort()` inside C++ takes the whole Go process with it. Following Handy's `engine_supervisor`, the desktop app runs the native engine in a child process: the same `goscriber` executable started with the hidden `engine-worker` subcommand. `engine/worker.Supervisor` implements `engine.Engine` by talking to it, so the coordinator and the idle unloader see the same interface as before. `goscriber transcribe` keeps the engine in its own process: it is a one-shot command whose crash ends only itself.
+
+**Protocol.** Each message is a frame on the worker's stdin or stdout: a little-endian `uint32` length and JSON, then a little-endian `uint32` length and the audio as raw little-endian `float32` samples (empty for most requests). The requests mirror the interface: hello (protocol version and process ID, so a worker from a rebuilt executable is refused), ping, load, unload, recognize, and stream start, push, next, endpoint, finish and close. Each carries an ID and gets one response; requests may overlap, and the worker answers each on its own goroutine, so it answers pings while it decodes. Errors cross as the engine's error kinds, so `errors.Is(err, engine.ErrModelNotFound)` works through the worker. In the worker, file descriptor 1 is pointed at stderr and the protocol uses a copy of it, so nothing the native code prints can corrupt it.
+
+**Lifetime.** `Load` starts a worker and loads the model into it; `Unload`, or a `Load` of another model, closes its stdin, and the worker unloads and exits (it is killed after 2 s). One worker holds one model, and unloading returns all the engine's memory to the OS. With `model_unload_timeout`, `engine/autounload` sits on top of the supervisor, so an idle model's worker exits too and the next dictation starts a new one. The worker ignores Ctrl-C, which a terminal sends to the whole process group, and exits when its stdin closes, so it never outlives the app.
+
+**Crashes and hangs.** A worker is lost when its process exits, when a request is not answered in time (3 min for a load; for a decode, 60 s or ten times the audio's length, and four times that on the CPU; 30 s for a stream call), or when it misses a heartbeat (pinged every 2 s, 10 s to answer; since pings are answered while a decode runs, a missed one means the whole process is stuck). Then the supervisor:
+
+- logs the exit status and the worker's last 20 lines of stderr, where an assertion's message lands just before the abort;
+- publishes `engine_crashed`, or `engine_cpu_fallback` for a GPU fault (below);
+- starts a new worker with the same model at the next call, and retries the request that was waiting once, unless it was a decode that hung on the CPU, which is slow rather than broken;
+- fails the calls of a stream that was open: a stream's state cannot be replayed, so the coordinator closes it and, on `Stop`, decodes the whole recording with `Recognize`, which runs in the new worker. The user gets the transcript and the notice.
+
+**GPU faults.** A worker that dies or hangs while it loads or decodes on the GPU is a GPU fault. The supervisor publishes `engine_cpu_fallback` once and loads the model in every later worker on the CPU (`LoadSpec.CPU`, `gpu = -1`) until the app restarts; a load that crashed is retried on the CPU at once. A worker that dies before it is given a model, or while idle, is not blamed on the GPU. Errors the engine reports, such as a damaged model file or a runtime error, are not faults: they are passed on, and the coordinator turns them into `model_corrupt` or `transcription_failed` as before. A CPU worker still links ggml's Metal backend; only the model runs on the CPU.
+
+**Cancel.** NeMo-Speech.cpp cannot stop a decode. A cancelled `Recognize` (the user cancelled while a recording or a chunk was decoding) gives the worker 500 ms to finish, then ends it; the next call starts a new one. A cancelled load ends its worker at once.
+
+**Logs.** The worker writes its own log as JSON lines on stderr and the native engine prints its own lines there (`[asr] model=… backend=MTL0`). The supervisor re-logs each line through `log/slog` with the worker's process ID as the `worker` attribute: the worker's own lines keep their level, the native ones are debug, or warnings when they read like a failure.
+
+**Cost.** Measured on an M4 Max with Metal (`TestWorkerIPCOverhead` in `internal/engine/nemo`), the fastest of 15 runs each:
+
+| | In process | Through the worker | Overhead |
+| --- | --- | --- | --- |
+| Parakeet TDT 0.6B v2, `Recognize` of a 10 s clip | 57.9 ms | 58.3 ms | 0.35 ms |
+| Nemotron Streaming 3.5, `Recognize` of a 10 s clip | 75.7 ms | 75.3 ms | within noise |
+| Sending a 10 s clip (one `Push`, no decode) | 0.01 ms | 0.17 ms | 0.16 ms |
+| Streaming 10 s in 10 ms pushes, with a `Next` after each | 496 ms | 543 ms | 47 µs per 10 ms of audio |
+
+The GPU's own run-to-run variation is a few milliseconds, more than the hop. Starting a worker and loading a model takes 70 to 120 ms once ggml's Metal shaders are compiled; the first load after a new build compiles them, which can take 15 to 20 s, within the load timeout.
+
+**Profiling.** `engine_in_process` (a debug setting that applies at the next launch) or `--engine-in-process` runs the engine inside the app again, as before #28, so a profiler sees it; a crash in the engine then ends the app.
 
 ### Idle unload
 
@@ -333,6 +361,7 @@ The output then waits `paste_delay_ms` (60 ms) before pressing the paste key.
 - **Hotkey goroutine**: owns the shortcut registrations and turns key-down / key-up events into coordinator actions, which it hands straight to the coordinator: its actions never block.
 - **Coordinator goroutine**: runs the actions in order (opening the microphone, stopping it, refusing what does not fit the state) and owns the session's state with a mutex.
 - **Engine goroutine**: one goroutine owns the engine client and serialises load, acquire and recognition. While recording it pumps the recorder's frames into the live decode (`Push` / `Next`, or `Recognize` per chunk); on `Stop` it finishes the decode.
+- **Engine worker process**: runs NeMo-Speech.cpp. In the app, the supervisor has a goroutine per worker reading its responses, one re-logging its stderr and one sending heartbeats; calls wait for their response on the caller's goroutine.
 - **Session goroutine**: per session, runs the text stages, the delivery and the history save, so a slow paste, LLM or hook never holds up a cancel.
 - **Background goroutines**: model downloads, history I/O, LLM requests.
 

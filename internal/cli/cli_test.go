@@ -81,6 +81,7 @@ func TestRunsAppWithFlags(t *testing.T) {
 		{[]string{"--start-hidden"}, AppOptions{StartHidden: true}},
 		{[]string{"--no-tray"}, AppOptions{NoTray: true}},
 		{[]string{"--no-tray", "--start-hidden", "--debug"}, AppOptions{Debug: true, StartHidden: true, NoTray: true}},
+		{[]string{"--engine-in-process"}, AppOptions{EngineInProcess: true}},
 	} {
 		var got *AppOptions
 		var out, errOut bytes.Buffer
@@ -95,6 +96,24 @@ func TestRunsAppWithFlags(t *testing.T) {
 		if *got != tt.want {
 			t.Errorf("%v: app options %+v, want %+v", tt.args, *got, tt.want)
 		}
+	}
+}
+
+// The engine worker is the app's own business: hidden from the usage, and
+// refused by a build without the engine.
+func TestEngineWorkerSubcommand(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := Run([]string{"--help"}, Env{Stdout: &out, Stderr: &errOut}); code != 0 || strings.Contains(out.String(), "engine-worker") {
+		t.Errorf("the usage mentions the engine worker: %q", out.String())
+	}
+	errOut.Reset()
+	if code := Run([]string{"engine-worker"}, Env{Stdout: &out, Stderr: &errOut}); code != 1 ||
+		!strings.Contains(errOut.String(), "no speech engine") {
+		t.Errorf("without an engine: exit %d, stderr %q", code, errOut.String())
+	}
+	errOut.Reset()
+	if code := Run([]string{"engine-worker", "extra"}, Env{Stdout: &out, Stderr: &errOut}); code != 2 {
+		t.Errorf("with an argument: exit %d, stderr %q", code, errOut.String())
 	}
 }
 

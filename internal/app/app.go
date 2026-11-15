@@ -19,8 +19,13 @@ type Options struct {
 	Version     string    // shown in the startup log line
 	Stderr      io.Writer // nil means os.Stderr
 	// NewEngine returns the speech engine dictation transcribes with. Nil
-	// means this build has none: dictation records, then says so.
+	// means this build has none: dictation records, then says so. The app
+	// runs it in a worker process (the engine-worker subcommand of this
+	// executable), unless EngineInProcess or the engine_in_process setting
+	// asks for it inside the app.
 	NewEngine func() engine.Engine
+	// EngineInProcess: --engine-in-process, for profiling.
+	EngineInProcess bool
 }
 
 // Runtime is what every part of the app shares: where files live, the
