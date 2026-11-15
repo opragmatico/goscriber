@@ -91,7 +91,7 @@ One clip per length, made of consecutive LibriSpeech test-clean utterances. *Col
 
 The second table is the peak physical footprint (`/usr/bin/time -l`), what macOS charges the process. It leaves out the GGUF itself: NeMo-Speech.cpp memory-maps it, and its pages are clean file pages that macOS can drop and read again.
 
-- **Dictation-length audio is fast on both backends.** The first decode after a load costs 40 ms extra on Metal, which a warm-up decode at load can absorb ([#29](https://github.com/opragmatico/goscriber/issues/29)).
+- **Dictation-length audio is fast on both backends.** The first decode after a load costs 40 ms extra on Metal, which the app's warm-up at load absorbs ([model lifecycle](../architecture.md#model-lifecycle)).
 - **F16 brings nothing.** It is as fast as Q8_0 on Metal, slower on the CPU, larger on disk and in memory, and no more accurate.
 - **The CPU is a usable fallback**, 2.5–4× slower than Metal, but its memory grows with the clip length.
 

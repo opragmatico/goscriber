@@ -63,6 +63,7 @@ const (
 	LabelCancel         = "Cancel"
 	LabelNoModel        = "No model: Download…"
 	LabelModelPrefix    = "Model: "
+	LabelLoadingPrefix  = "Loading " // then the model's name and "…"
 	LabelSettings       = "Settings…"
 	LabelDebug          = "Debug"
 	LabelTrayIconPrefix = "Tray Icon: "
@@ -106,6 +107,7 @@ type Tray struct {
 	actions TrayActions
 	state   TrayState
 	model   string
+	loading string // the model loading, or ""
 	debug   bool
 	alert   *TrayAlert
 	menu    *fyne.Menu
@@ -166,6 +168,20 @@ func (t *Tray) SetModel(name string) {
 	t.refreshMenu()
 }
 
+// SetLoading shows that model (a display name) is loading, or with "" that
+// none is. Dictation stays available meanwhile: a recording started during
+// the load is transcribed once it ends.
+func (t *Tray) SetLoading(model string) {
+	if model == t.loading {
+		return
+	}
+	t.loading = model
+	t.refreshMenu()
+}
+
+// Loading is the model the menu shows loading, or "".
+func (t *Tray) Loading() string { return t.loading }
+
 // SetDebug shows or hides the Debug submenu.
 func (t *Tray) SetDebug(on bool) {
 	if on == t.debug {
@@ -222,6 +238,13 @@ func (t *Tray) buildMenu() *fyne.Menu {
 		cancel,
 		fyne.NewMenuItemSeparator(),
 		model,
+	)
+	if t.loading != "" {
+		loading := fyne.NewMenuItem(LabelLoadingPrefix+t.loading+"…", nil)
+		loading.Disabled = true
+		items = append(items, loading)
+	}
+	items = append(items,
 		fyne.NewMenuItemSeparator(),
 		settings,
 	)
