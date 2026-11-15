@@ -47,6 +47,9 @@ func TestDefaultsAreValidAndSelectNoModel(t *testing.T) {
 	if d.StreamingLatency != LatencyBalanced || !d.LongFormChunking {
 		t.Errorf("live transcription defaults: latency %q, chunking %v", d.StreamingLatency, d.LongFormChunking)
 	}
+	if !d.FillerWordRemoval || d.CustomFillerWords != nil {
+		t.Errorf("filler words: removal %v, custom list %q; want Handy's built-in lists, on", d.FillerWordRemoval, d.CustomFillerWords)
+	}
 }
 
 func TestCloneIsDeep(t *testing.T) {

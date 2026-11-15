@@ -697,7 +697,7 @@ func TestStages(t *testing.T) {
 			mu.Lock()
 			order = append(order, name)
 			mu.Unlock()
-			if info.Session != 1 || info.Model != "asr" || info.Duration <= 0 {
+			if info.Session != 1 || info.Model != "asr" || info.Duration <= 0 || info.TextLanguage != "en-US" {
 				t.Errorf("%s: info %+v", name, info)
 			}
 			return f(text)

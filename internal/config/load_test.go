@@ -131,6 +131,29 @@ func TestLoadMigratesV0Fixture(t *testing.T) {
 	}
 }
 
+// v1 files hold filler_word_removal false, saved while it did nothing;
+// v2 turns it on. From v2 on, false is the user's choice and stays.
+func TestLoadMigratesV1FillerWordRemoval(t *testing.T) {
+	path := settingsPath(t)
+	writeFile(t, path, `{"schema_version": 1, "filler_word_removal": false, "history_limit": 7}`)
+	got, rep, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep.Migrated || rep.FromVersion != 1 || !got.FillerWordRemoval || got.HistoryLimit != 7 || got.SchemaVersion != SchemaVersion {
+		t.Errorf("v1: got %+v / %+v, want filler_word_removal on and the rest kept", got, rep)
+	}
+
+	writeFile(t, path, `{"schema_version": 2, "filler_word_removal": false}`)
+	got, rep, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Migrated || got.FillerWordRemoval {
+		t.Errorf("v2: got %+v / %+v, want the user's false kept", got, rep)
+	}
+}
+
 func TestLoadRunsMigrationsInOrder(t *testing.T) {
 	path := settingsPath(t)
 	writeFile(t, path, `{"schema_version": 1, "old_limit": 42}`)

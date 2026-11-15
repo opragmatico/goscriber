@@ -67,6 +67,11 @@ type SessionInfo struct {
 	// "es-US" when asked for "auto" or even "es-ES". Empty when the model
 	// reports none.
 	Languages []string
+	// TextLanguage is the transcript's language as best known: the first
+	// detected, else the one asked for, else the model's only language. It
+	// is "" when unknown, as with a model that detects the language without
+	// reporting it (Parakeet TDT 0.6B v3).
+	TextLanguage string
 	// Duration is how long the recording lasted.
 	Duration time.Duration
 	// Boosted reports whether the model was asked to favour the custom

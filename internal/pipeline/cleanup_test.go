@@ -36,6 +36,56 @@ func TestCleanupStageCorrectsCustomWords(t *testing.T) {
 	}
 }
 
+func TestCleanupStageRemovesFillers(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		in       string
+		language string
+		edit     func(*config.Settings)
+		want     string
+	}{
+		{"English", "Um, so I was, uh, thinking.", "en-US", nil, "So I was, thinking."},
+		{"unknown language keeps um", "Um, so I was, uh, thinking.", "", nil, "Um, so I was, thinking."},
+		{"Portuguese", "Eu tenho um carro, uh.", "pt-BR", nil, "Eu tenho um carro."},
+		{"off", "Um, so  I was, uh, thinking.", "en-US", func(s *config.Settings) { s.FillerWordRemoval = false }, "Um, so I was, uh, thinking."},
+		{"the user's list", "Um, it basically works.", "en-US", func(s *config.Settings) { s.CustomFillerWords = []string{"basically"} }, "Um, it works."},
+		{"the user removed every filler", "Um, it works.", "en-US", func(s *config.Settings) { s.CustomFillerWords = []string{} }, "Um, it works."},
+		{"only fillers", "Uh, um.", "en-US", nil, ""},
+		{"a lone full stop", ".", "en-US", nil, ""},
+		{"corrected, then fillers removed", "Um, ask Kowalczik.", "en-US", func(s *config.Settings) { s.CustomWords = []string{"Kowalczyk"} }, "Ask Kowalczyk."},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := config.Defaults()
+			if tt.edit != nil {
+				tt.edit(&s)
+			}
+			got, err := CleanupStage{}.Process(context.Background(), tt.in, SessionInfo{TextLanguage: tt.language, Settings: s})
+			if err != nil || got != tt.want {
+				t.Errorf("Process(%q) = %q, %v; want %q", tt.in, got, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestTextLanguage(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		m        Model
+		detected []string
+		want     string
+	}{
+		{"detected", Model{Language: "es-ES"}, []string{"es-US"}, "es-US"},
+		{"asked for", Model{Language: "es-ES"}, nil, "es-ES"},
+		{"automatic, nothing detected", Model{Language: "auto"}, nil, ""},
+		{"the model's only language", Model{FixedLanguage: "en"}, nil, "en"},
+		{"unknown", Model{}, nil, ""},
+	} {
+		if got := textLanguage(tt.m, tt.detected); got != tt.want {
+			t.Errorf("%s: %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
 // A model with word boosting is asked to favour the custom words, live and
 // whole; the text stages learn that it was. One without them gets no
 // phrases, and the cleanup stage corrects its transcript instead.

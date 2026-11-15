@@ -45,7 +45,9 @@ No other models or engines are planned. Whisper, Canary, Moonshine and the rest 
 
 Names and jargon listed in the `custom_words` setting come out spelled your way: Nemotron is asked to favour them (NeMo-Speech.cpp's word boosting), and Parakeet's transcripts are corrected after the fact ([details](docs/architecture.md#custom-vocabulary)).
 
-Following Handy, Goscriber also plans transcription history, filler-word removal, an external transcription hook and optional LLM post-processing.
+Filler words ("um", "uh") are removed, with the punctuation around them, and the `filler_word_removal` and `custom_filler_words` settings turn that off or change the list ([details](docs/architecture.md#text-cleanup)).
+
+Following Handy, Goscriber also plans transcription history, an external transcription hook and optional LLM post-processing.
 
 ## Stack
 
