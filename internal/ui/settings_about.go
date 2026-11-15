@@ -63,6 +63,8 @@ func (w *SettingsWindow) aboutPage() fyne.CanvasObject {
 	return settingsPage("Goscriber",
 		paragraph("Offline push-to-talk speech-to-text. Audio never leaves your computer."),
 		version,
+		group("Setup", w.row("First-run setup", "The permissions, the model download and a first dictation, step by step.",
+			container.NewHBox(widget.NewButton(LabelRunSetup, func() { w.ShowOnboarding(StepWelcome) })))),
 		group("Licence", w.row("Goscriber", "", link("MIT", "https://github.com/opragmatico/goscriber/blob/main/LICENSE"))),
 		section("Built with", credits),
 		section("Models", paragraph("Downloaded from Hugging Face; none is bundled. Each model card has its terms."), modelCredits),

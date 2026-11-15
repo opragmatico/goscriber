@@ -59,6 +59,7 @@ func (w *SettingsWindow) show(s config.Settings) {
 		w.loadBinding(b)
 	}
 	w.syncDebugPage()
+	w.refreshOnboarding()
 }
 
 func (w *SettingsWindow) loadBinding(b *binding) {

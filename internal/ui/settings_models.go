@@ -252,6 +252,14 @@ func (w *SettingsWindow) refreshModels() {
 	for _, c := range m.cards {
 		w.refreshCard(c)
 	}
+	w.refreshOnboarding()
+}
+
+// modelReady reports whether the selected model is downloaded in the
+// quantisation it runs in, so dictation can use it.
+func (w *SettingsWindow) modelReady() bool {
+	sel, ok := w.catalog().Model(w.cur.SelectedModel)
+	return ok && w.models.ready(sel.ID, usedQuant(sel, w.cur))
 }
 
 func (w *SettingsWindow) refreshCard(c *modelCard) {
@@ -289,76 +297,15 @@ func (w *SettingsWindow) refreshCard(c *modelCard) {
 	f, _ := c.model.File(c.pick)
 	c.info.SetText(fmt.Sprintf("%s · %s · %s licence", models.FormatBytes(f.Size), f.Quant, c.model.License))
 
-	st, hasStatus := m.status(id, c.pick)
-	ready := hasStatus && st.State == models.Ready
+	ready := m.ready(id, c.pick)
 	inUse := selected && ready && strings.EqualFold(usedQuant(c.model, s), c.pick)
 
-	status := ""
-	switch {
-	case dl != nil && dl.progress.Verifying:
-		status = "Checking the download…"
-	case dl != nil:
-		p := dl.progress
-		status = "Downloading…"
-		if p.Total > 0 {
-			status = fmt.Sprintf("Downloading… %d %% (%s of %s)", p.Done*100/p.Total, models.FormatBytes(p.Done), models.FormatBytes(p.Total))
-		}
-	case m.errs[id] != "":
-		status = m.errs[id]
-	case !m.listed:
-		status = "Checking…"
-	case ready && st.FromHFCache:
-		status = "Downloaded, in your Hugging Face cache"
-	case ready:
-		status = "Downloaded"
-	case hasStatus && st.State == models.Corrupt:
-		status = "The file is damaged. Download it again."
-	case hasStatus && st.Done > 0:
-		status = fmt.Sprintf("Download stopped at %d %%; downloading resumes it.", st.Percent())
-	case w.opts.Models == nil:
-		status = "Not downloaded. Use goscriber models pull to download it."
-	default:
-		status = "Not downloaded"
-	}
+	status := w.fileStatus(id, c.pick)
 	if inUse {
 		status = "✓ " + status + " · in use"
 	}
 	c.status.SetText(status)
-
-	if dl != nil {
-		c.progress.Show()
-		if dl.progress.Total > 0 {
-			c.progress.SetValue(float64(dl.progress.Done) / float64(dl.progress.Total))
-		}
-	} else {
-		c.progress.Hide()
-	}
-
-	switch {
-	case dl != nil:
-		c.download.SetText(LabelCancelDownload)
-		c.download.SetIcon(theme.CancelIcon())
-		c.download.Importance = widget.MediumImportance
-		c.download.Show()
-	case ready:
-		c.download.Hide()
-	default:
-		c.download.SetText(LabelDownload)
-		if hasStatus && st.Done > 0 && st.State != models.Corrupt {
-			c.download.SetText("Resume download")
-		}
-		c.download.SetIcon(theme.DownloadIcon())
-		c.download.Importance = widget.HighImportance
-		c.download.Show()
-	}
-	// One download at a time: the first model's also fetches the VAD the
-	// others share.
-	if w.opts.Models == nil || !m.listed || dl == nil && len(m.downloads) > 0 {
-		c.download.Disable()
-	} else {
-		c.download.Enable()
-	}
-	c.download.Refresh()
+	w.syncDownload(id, c.pick, c.progress, c.download)
 
 	if dl == nil && m.onDisk(id) {
 		c.delete.Show()
@@ -378,6 +325,85 @@ func (w *SettingsWindow) refreshCard(c *modelCard) {
 		c.use.SetText(LabelUseModel)
 		c.use.Disable()
 	}
+}
+
+// fileStatus says where a model's file in quant stands: the download in
+// flight, the last failure, or what is on disk.
+func (w *SettingsWindow) fileStatus(id, quant string) string {
+	m := &w.models
+	dl := m.downloads[id]
+	st, hasStatus := m.status(id, quant)
+	ready := hasStatus && st.State == models.Ready
+	switch {
+	case dl != nil && dl.progress.Verifying:
+		return "Checking the download…"
+	case dl != nil:
+		p := dl.progress
+		if p.Total > 0 {
+			return fmt.Sprintf("Downloading… %d %% (%s of %s)", p.Done*100/p.Total, models.FormatBytes(p.Done), models.FormatBytes(p.Total))
+		}
+		return "Downloading…"
+	case m.errs[id] != "":
+		return m.errs[id]
+	case !m.listed:
+		return "Checking…"
+	case ready && st.FromHFCache:
+		return "Downloaded, in your Hugging Face cache"
+	case ready:
+		return "Downloaded"
+	case hasStatus && st.State == models.Corrupt:
+		return "The file is damaged. Download it again."
+	case hasStatus && st.Done > 0:
+		return fmt.Sprintf("Download stopped at %d %%; downloading resumes it.", st.Percent())
+	case w.opts.Models == nil:
+		return "Not downloaded. Use goscriber models pull to download it."
+	default:
+		return "Not downloaded"
+	}
+}
+
+// syncDownload brings a model's progress bar and download button in line
+// with its file in quant: the button downloads, resumes or cancels, and is
+// hidden once the file is ready.
+func (w *SettingsWindow) syncDownload(id, quant string, progress *widget.ProgressBar, download *widget.Button) {
+	m := &w.models
+	dl := m.downloads[id]
+	st, hasStatus := m.status(id, quant)
+
+	if dl != nil {
+		progress.Show()
+		if dl.progress.Total > 0 {
+			progress.SetValue(float64(dl.progress.Done) / float64(dl.progress.Total))
+		}
+	} else {
+		progress.Hide()
+	}
+
+	switch {
+	case dl != nil:
+		download.SetText(LabelCancelDownload)
+		download.SetIcon(theme.CancelIcon())
+		download.Importance = widget.MediumImportance
+		download.Show()
+	case hasStatus && st.State == models.Ready:
+		download.Hide()
+	default:
+		download.SetText(LabelDownload)
+		if hasStatus && st.Done > 0 && st.State != models.Corrupt {
+			download.SetText("Resume download")
+		}
+		download.SetIcon(theme.DownloadIcon())
+		download.Importance = widget.HighImportance
+		download.Show()
+	}
+	// One download at a time: the first model's also fetches the VAD the
+	// others share.
+	if w.opts.Models == nil || !m.listed || dl == nil && len(m.downloads) > 0 {
+		download.Disable()
+	} else {
+		download.Enable()
+	}
+	download.Refresh()
 }
 
 // quantPicked runs when the user picks another quantisation on a card. For

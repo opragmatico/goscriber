@@ -54,13 +54,37 @@ func TestRenderSettingsPages(t *testing.T) {
 		tw.selectPage(PageModels)
 		tw.Window().Resize(fyne.NewSize(760, 560))
 		tw.askDelete(tw.card(nemotron))
-		f, err := os.Create(filepath.Join(dir, variant.name+"-confirm.png"))
-		if err != nil {
-			t.Fatal(err)
+		capture(t, tw, filepath.Join(dir, variant.name+"-confirm.png"))
+		tw.Window().Canvas().Overlays().Top().Hide()
+
+		// Each step of onboarding, at the window's own size, with Parakeet
+		// half downloaded on the model step.
+		tw.SetPermissions([]PermissionRow{
+			{Title: "Microphone", Why: "Goscriber records your voice while you hold the shortcut.", Status: "not asked yet", ActionLabel: "Allow…", OnOpen: func() {}},
+			{Title: "Accessibility", Why: "Goscriber hears the global shortcut and pastes the transcript.", Status: "granted", OK: true},
+		})
+		for step := StepWelcome; step < stepCount; step++ {
+			tw.showOnboarding(step)
+			if step == StepModel {
+				tw.models.downloads[parakeetV2] = &modelDownload{quant: "Q8_0", cancel: func() {}}
+				tw.models.downloads[parakeetV2].progress.Done, tw.models.downloads[parakeetV2].progress.Total = 350e6, 700e6
+				tw.refreshModels()
+			}
+			capture(t, tw, filepath.Join(dir, variant.name+"-onboarding-"+step.String()+".png"))
+			delete(tw.models.downloads, parakeetV2)
 		}
-		if err := png.Encode(f, tw.Window().Canvas().Capture()); err != nil {
-			t.Fatal(err)
-		}
-		f.Close()
+	}
+}
+
+// capture writes the window as a PNG.
+func capture(t *testing.T, tw *testWindow, file string) {
+	t.Helper()
+	f, err := os.Create(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := png.Encode(f, tw.Window().Canvas().Capture()); err != nil {
+		t.Fatal(err)
 	}
 }

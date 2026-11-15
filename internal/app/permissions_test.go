@@ -147,7 +147,7 @@ func TestNoMicrophonePermissionRefusesDictation(t *testing.T) {
 }
 
 func TestPermissionsPage(t *testing.T) {
-	sh, a, _ := newPermissionShell(t, perms{
+	sh, a, q := newPermissionShell(t, perms{
 		platform.PermMicrophone:      platform.StatusGranted,
 		platform.PermAccessibility:   platform.StatusDenied,
 		platform.PermInputMonitoring: platform.StatusDenied,
@@ -171,10 +171,37 @@ func TestPermissionsPage(t *testing.T) {
 			t.Errorf("row %d: %+v, want %+v", i, r, w)
 		}
 	}
+	// Until macOS has prompted for Accessibility, which adds Goscriber to
+	// its list in System Settings, the button shows the prompt...
+	if rows[1].ActionLabel != LabelAllow {
+		t.Fatalf("Accessibility's button %q before the prompt", rows[1].ActionLabel)
+	}
+	rows[1].OnOpen()
+	q.waitUI(t, "the Accessibility prompt", func() bool { return slices.Contains(testPermissions.asked(), platform.PermAccessibility) })
+	// ...and then opens System Settings at its pane.
+	sh.refreshPermissions()
+	rows = sh.settings.Permissions()
+	if rows[1].ActionLabel != "" {
+		t.Errorf("Accessibility's button %q after the prompt", rows[1].ActionLabel)
+	}
 	rows[1].OnOpen()
 	if len(a.opened) != 1 || a.opened[0] != platform.PermAccessibility.SettingsURL() {
 		t.Errorf("opened %v", a.opened)
 	}
+
+	// A microphone not asked for yet is asked for, and its row follows the
+	// answer.
+	testPermissions.reset(perms{platform.PermMicrophone: platform.StatusNotDetermined}, perms{platform.PermMicrophone: platform.StatusGranted})
+	sh.refreshPermissions()
+	mic := sh.settings.Permissions()[0]
+	if mic.ActionLabel != LabelAllow || mic.OK {
+		t.Fatalf("microphone row %+v", mic)
+	}
+	mic.OnOpen()
+	q.waitUI(t, "the microphone row to follow the answer", func() bool {
+		rows := sh.settings.Permissions()
+		return len(rows) == 1 && rows[0].OK && rows[0].Status == "granted"
+	})
 
 	// Off macOS there is nothing to show.
 	testPermissions.reset(perms{}, nil)
