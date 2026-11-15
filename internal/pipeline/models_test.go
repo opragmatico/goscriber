@@ -30,8 +30,8 @@ func testCatalog(t *testing.T) *models.Catalog {
 			list += ", " + f
 		}
 		return fmt.Sprintf(`{"id": %q, "kind": %q, "name": "Model %s", "repo": "org/%s", "revision": "0123456789abcdef0123456789abcdef01234567",
-			"license": "MIT", "languages": [%s], "capabilities": {"language_detection": %v, "language_selection": %v, "streaming": %v}, "default_quant": "Q8_0", "files": [%s]}`,
-			id, kind, id, id, langs, detect, detect, streaming, list)
+			"license": "MIT", "languages": [%s], "capabilities": {"language_detection": %v, "language_selection": %v, "streaming": %v, "word_boosting": %v}, "default_quant": "Q8_0", "files": [%s]}`,
+			id, kind, id, id, langs, detect, detect, streaming, streaming, list)
 	}
 	cat, err := models.Parse([]byte(`{"default_model": "multi", "models": [` +
 		model("multi", "asr", `"en-US", "de-DE"`, true, file("Q8_0", "multi.q8_0.gguf"), file("F16", "multi.f16.gguf")) + ", " +
@@ -80,7 +80,7 @@ func TestCatalogModels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Model{Spec: engine.LoadSpec{ID: "multi", Path: q8, Latency: engine.LatencyBalanced}, Name: "Model multi", Language: "auto"}
+	want := Model{Spec: engine.LoadSpec{ID: "multi", Path: q8, Latency: engine.LatencyBalanced}, Name: "Model multi", Language: "auto", WordBoosting: true}
 	if m != want {
 		t.Errorf("model %+v, want %+v (no VAD downloaded yet)", m, want)
 	}
@@ -101,8 +101,9 @@ func TestCatalogModels(t *testing.T) {
 			ID: "multi", Path: f16, CPU: true, VADPath: vad, VADOnset: 0.6, VADOffset: 0.4,
 			Latency: engine.LatencyLow,
 		},
-		Name:     "Model multi",
-		Language: "de-DE",
+		Name:         "Model multi",
+		Language:     "de-DE",
+		WordBoosting: true,
 	}
 	if m != want {
 		t.Errorf("model %+v, want %+v", m, want)

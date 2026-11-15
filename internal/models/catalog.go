@@ -72,6 +72,10 @@ type Capabilities struct {
 	LanguageSelection bool `json:"language_selection"`
 	// Timestamps: the model reports when each word was spoken.
 	Timestamps bool `json:"timestamps"`
+	// WordBoosting: the model can be asked to favour words, such as the
+	// user's custom words (NeMo-Speech.cpp's speech contexts). Others
+	// ignore them, so their transcripts are corrected after the fact.
+	WordBoosting bool `json:"word_boosting"`
 }
 
 // File is one downloadable quantisation of a model.

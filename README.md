@@ -43,7 +43,9 @@ No other models or engines are planned. Whisper, Canary, Moonshine and the rest 
 3. **Release**. NeMo-Speech.cpp finishes the utterance locally on Metal (Apple Silicon) or the CPU.
 4. **Get** the text pasted into the focused text field.
 
-Following Handy, Goscriber also plans transcription history, custom vocabulary (backed by NeMo-Speech.cpp's word boosting), filler-word removal, an external transcription hook and optional LLM post-processing.
+Names and jargon listed in the `custom_words` setting come out spelled your way: Nemotron is asked to favour them (NeMo-Speech.cpp's word boosting), and Parakeet's transcripts are corrected after the fact ([details](docs/architecture.md#custom-vocabulary)).
+
+Following Handy, Goscriber also plans transcription history, filler-word removal, an external transcription hook and optional LLM post-processing.
 
 ## Stack
 

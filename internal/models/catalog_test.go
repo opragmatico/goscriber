@@ -45,6 +45,12 @@ func TestDefaultCatalog(t *testing.T) {
 	if len(v3.Languages) != 25 || !slices.Contains(v3.Languages, "en") || !slices.Contains(v3.Languages, "uk") {
 		t.Errorf("Parakeet TDT v3 languages %v, want its 25 European languages", v3.Languages)
 	}
+	// Only Nemotron's greedy RNNT decoder honours word boosting; NeMo-Speech.cpp
+	// ignores speech contexts for TDT models.
+	if !nemo.Capabilities.WordBoosting || tdt.Capabilities.WordBoosting || v3.Capabilities.WordBoosting {
+		t.Errorf("word boosting: Nemotron %v, Parakeet v2 %v, v3 %v; want Nemotron only",
+			nemo.Capabilities.WordBoosting, tdt.Capabilities.WordBoosting, v3.Capabilities.WordBoosting)
+	}
 	if v3.Repo != "nvidia/parakeet-tdt-0.6b-v3" {
 		t.Errorf("Parakeet TDT v3 repo %q, want NVIDIA's own GGUF", v3.Repo)
 	}

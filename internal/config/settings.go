@@ -145,6 +145,11 @@ const (
 	LatencyAccurate StreamingLatency = "accurate" // the most accurate text, shown latest
 )
 
+// MaxCustomWordBoost is the strongest custom_word_boost: NeMo-Speech.cpp
+// caps a word's boost there for greedy decoding. Values above about 2
+// already make Nemotron write custom words where none was said.
+const MaxCustomWordBoost = 5
+
 // LogLevel is the minimum level written to the logs.
 type LogLevel string
 
@@ -220,9 +225,18 @@ type Settings struct {
 	AutoSubmit          bool              `json:"auto_submit"`
 	AppendTrailingSpace bool              `json:"append_trailing_space"`
 
+	// Custom vocabulary: names and jargon to spell the user's way. A model
+	// with word boosting (Nemotron) is asked to favour CustomWords, by
+	// CustomWordBoost, from 0 (off) to MaxCustomWordBoost. Otherwise
+	// near-misses of them in the transcript are replaced with their
+	// spelling: words whose letters differ by less than
+	// WordCorrectionThreshold, a share from 0 (off) to 1.
+	CustomWords             []string `json:"custom_words"`
+	CustomWordBoost         float64  `json:"custom_word_boost"`
+	WordCorrectionThreshold float64  `json:"word_correction_threshold"`
+
 	// Text. A nil CustomFillerWords means the built-in list; an empty one
 	// means the user removed every filler word.
-	CustomWords       []string `json:"custom_words"`
 	FillerWordRemoval bool     `json:"filler_word_removal"`
 	CustomFillerWords []string `json:"custom_filler_words"`
 
@@ -272,6 +286,10 @@ func defaultsFor(goos string) Settings {
 		RecordingRetention:  RetentionPreserveLimit,
 		LogLevel:            LogInfo,
 		ShowTrayIcon:        true,
+
+		// Custom vocabulary, measured on Nemotron (docs/architecture.md).
+		CustomWordBoost:         1,
+		WordCorrectionThreshold: 0.18, // Handy's
 	}
 }
 
@@ -349,6 +367,10 @@ func (s *Settings) normalize(def Settings) []string {
 	check("paste_delay_ms", between(s.PasteDelayMS, 0, 5000), func() { s.PasteDelayMS = def.PasteDelayMS })
 	check("paste_delay_after_ms", between(s.PasteDelayAfterMS, 0, 5000),
 		func() { s.PasteDelayAfterMS = def.PasteDelayAfterMS })
+	check("custom_word_boost", s.CustomWordBoost >= 0 && s.CustomWordBoost <= MaxCustomWordBoost,
+		func() { s.CustomWordBoost = def.CustomWordBoost })
+	check("word_correction_threshold", s.WordCorrectionThreshold >= 0 && s.WordCorrectionThreshold <= 1,
+		func() { s.WordCorrectionThreshold = def.WordCorrectionThreshold })
 	check("history_limit", between(s.HistoryLimit, 0, 100000), func() { s.HistoryLimit = def.HistoryLimit })
 	check("recording_retention",
 		oneOf(s.RecordingRetention, RetentionNever, RetentionPreserveLimit, RetentionDays3, RetentionWeeks2, RetentionMonths3),

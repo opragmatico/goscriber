@@ -85,6 +85,34 @@ func TestNormalizeResetsInvalidValues(t *testing.T) {
 	}
 }
 
+func TestNormalizeCustomVocabulary(t *testing.T) {
+	def := Defaults()
+	if def.CustomWordBoost != 1 || def.WordCorrectionThreshold != 0.18 {
+		t.Errorf("custom vocabulary defaults: boost %v, threshold %v", def.CustomWordBoost, def.WordCorrectionThreshold)
+	}
+	for _, tc := range []struct {
+		name             string
+		boost, threshold float64
+		fixed            []string
+	}{
+		{"off", 0, 0, nil},
+		{"at the limits", MaxCustomWordBoost, 1, nil},
+		{"negative", -1, -0.1, []string{"custom_word_boost", "word_correction_threshold"}},
+		{"too high", MaxCustomWordBoost + 1, 1.5, []string{"custom_word_boost", "word_correction_threshold"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := def.Clone()
+			s.CustomWordBoost, s.WordCorrectionThreshold = tc.boost, tc.threshold
+			if fixed := s.normalize(def); !slices.Equal(fixed, tc.fixed) {
+				t.Errorf("fixed = %v, want %v", fixed, tc.fixed)
+			}
+			if tc.fixed != nil && (s.CustomWordBoost != def.CustomWordBoost || s.WordCorrectionThreshold != def.WordCorrectionThreshold) {
+				t.Errorf("not reset: boost %v, threshold %v", s.CustomWordBoost, s.WordCorrectionThreshold)
+			}
+		})
+	}
+}
+
 func TestNormalizeSpeechDetection(t *testing.T) {
 	def := Defaults()
 	if def.VADOnset != 0.5 || def.VADOffset != 0.3 || def.MinRecordingMS != 250 || def.SilenceThresholdDB != -60 {

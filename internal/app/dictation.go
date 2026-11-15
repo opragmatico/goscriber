@@ -94,6 +94,7 @@ func (sh *shell) startDictation() {
 		Settings:         sh.rt.Settings.Get,
 		Feedback:         sh.svc.feedback,
 		MicrophoneAccess: microphoneAccess,
+		Stages:           pipeline.Stages{Cleanup: pipeline.CleanupStage{}},
 		Log:              sh.rt.Log.Logger,
 	})
 	events, stop := sh.dictation.Subscribe()

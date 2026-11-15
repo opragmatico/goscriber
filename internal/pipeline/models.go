@@ -29,6 +29,9 @@ type Model struct {
 	// model takes a choice of language (or "auto" when the setting is not
 	// one of them), or "" for a model whose language is fixed.
 	Language string
+	// WordBoosting reports whether the model can be asked to favour the
+	// custom words. Without it they are corrected in the transcript.
+	WordBoosting bool
 }
 
 // ModelSource says which model dictation uses. The coordinator asks at every
@@ -45,8 +48,8 @@ type ModelSource interface {
 // CatalogModels resolves the selected model through the model manager: the
 // selected_model setting, in the model_quant quantisation when the model has
 // it, with the Silero VAD when vad_enabled and it is downloaded, for a
-// streaming model the streaming_latency preset, and for a model that takes a
-// choice of language the language setting.
+// streaming model the streaming_latency preset, for a model that takes a
+// choice of language the language setting, and whether it boosts words.
 type CatalogModels struct {
 	Manager *models.Manager
 }
@@ -79,8 +82,9 @@ func (c CatalogModels) Resolve(s config.Settings) (Model, error) {
 			Path: path,
 			CPU:  s.Accelerator == config.AcceleratorCPU,
 		},
-		Name:     m.Name,
-		Language: m.ResolveLanguage(s.Language),
+		Name:         m.Name,
+		Language:     m.ResolveLanguage(s.Language),
+		WordBoosting: m.Capabilities.WordBoosting,
 	}
 	// Only streaming models look ahead; leaving the preset out of an offline
 	// model's spec keeps a change to it from reloading the model.

@@ -41,7 +41,7 @@ func newFakeModels(t *testing.T) *fakeModels {
 	rev := strings.Repeat("c", 40)
 	cat, err := models.Parse([]byte(`{"default_model": "asr", "models": [
 		{"id": "asr", "kind": "asr", "name": "ASR", "repo": "org/asr", "revision": "` + rev + `", "license": "MIT",
-		 "languages": ["en-US", "de-DE"], "capabilities": {"streaming": true, "language_detection": true}, "default_quant": "Q8_0",
+		 "languages": ["en-US", "de-DE"], "capabilities": {"streaming": true, "language_detection": true, "word_boosting": true}, "default_quant": "Q8_0",
 		 "files": [` + file("Q8_0", "asr.q8_0.gguf") + `, ` + file("F16", "asr.f16.gguf") + `]},
 		{"id": "batch", "kind": "asr", "name": "Batch", "repo": "org/batch", "revision": "` + rev + `", "license": "MIT",
 		 "languages": ["en"], "capabilities": {"timestamps": true}, "default_quant": "Q8_0",

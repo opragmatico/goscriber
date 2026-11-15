@@ -298,3 +298,41 @@ func TestTranscribeVADThresholdsFromSettings(t *testing.T) {
 		t.Errorf("load spec %+v: want the VAD with onset 0.6 and offset 0.45", spec)
 	}
 }
+
+// Custom words, from the settings and --word, are boosted by a model that
+// can favour words and corrected in the transcript of one that cannot.
+func TestTranscribeCustomWords(t *testing.T) {
+	s := newTranscribe(t, fake.Script{Replies: []fake.Reply{
+		fake.Transcript("I found Quequeg's arm."), fake.Transcript("I found Quequeg's arm."),
+	}})
+	paths, _ := config.ResolvePaths()
+	settings := config.Defaults()
+	settings.CustomWords = []string{"Queequeg", " "}
+	settings.CustomWordBoost = 2
+	if err := config.Save(paths.SettingsFile(), settings); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, stderr := runWith(t, s.env, "transcribe", "--model", "asr", "--word", "NVIDIA", fixture)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, stderr)
+	}
+	o := s.eng.Recognitions()[0].Options
+	if strings.Join(o.Phrases, ",") != "Queequeg,NVIDIA" || o.Boost != 2 {
+		t.Errorf("boosting model: phrases %q boost %v", o.Phrases, o.Boost)
+	}
+	if stdout != "I found Quequeg's arm.\n" {
+		t.Errorf("boosting model: stdout %q, want the model's own transcript", stdout)
+	}
+
+	code, stdout, stderr = runWith(t, s.env, "transcribe", "--model", "batch", "--word", "NVIDIA", fixture)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, stderr)
+	}
+	if o := s.eng.Recognitions()[1].Options; o.Phrases != nil {
+		t.Errorf("model without boosting given phrases %q", o.Phrases)
+	}
+	if stdout != "I found Queequeg's arm.\n" {
+		t.Errorf("model without boosting: stdout %q, want the custom word corrected", stdout)
+	}
+}
