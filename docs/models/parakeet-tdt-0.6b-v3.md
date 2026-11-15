@@ -12,7 +12,7 @@
 | Punctuation, capitalisation, timestamps? | All three, as with v2. |
 | Streaming? | Refused, as for v2: `transcribe --stream` stops with "does not stream". |
 | VAD? | Silero VAD loads as its companion and leaves the JFK transcript unchanged. |
-| Custom vocabulary? | Not expected to work: the file has no embedded SentencePiece tokenizer (`asr.tokenizer.spm_model`), which word boosting needs. |
+| Custom vocabulary? | By correction only, as for v2: NeMo-Speech.cpp ignores word boosting for TDT models, and this file also lacks the embedded SentencePiece tokenizer (`asr.tokenizer.spm_model`) boosting would need. |
 | Speed? | Like v2. JFK (11 s) decodes in 68 ms on Metal (161× real time) and 281 ms on the CPU (39×); v2 takes 67 ms and 278 ms. |
 
 Measured on an M4 Max (36 GB) with macOS 15.8, NeMo-Speech.cpp v0.3.0 built by `make deps`, through Goscriber's binding (`nemo-eval` and `goscriber transcribe`).

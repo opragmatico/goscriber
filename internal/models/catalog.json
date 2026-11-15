@@ -20,7 +20,8 @@
         "streaming": true,
         "language_detection": true,
         "language_selection": true,
-        "timestamps": true
+        "timestamps": true,
+        "word_boosting": true
       },
       "default_quant": "Q8_0",
       "files": [

@@ -3,6 +3,8 @@ package pipeline
 import (
 	"context"
 	"time"
+
+	"github.com/opragmatico/goscriber/internal/config"
 )
 
 // TextStage is an optional step between recognition and output, such as
@@ -41,7 +43,8 @@ func (f HistorySinkFunc) Save(ctx context.Context, e HistoryEntry) error { retur
 // Stages are the pluggable steps of a session. A nil stage is skipped, which
 // is how each one starts until its issue lands.
 type Stages struct {
-	// Cleanup tidies the transcript: filler words, spacing (#27).
+	// Cleanup tidies the transcript: custom-word correction, filler words,
+	// spacing. CleanupStage is the app's.
 	Cleanup TextStage
 	// LLM post-processes the transcript with a language model (#39).
 	LLM TextStage
@@ -66,6 +69,12 @@ type SessionInfo struct {
 	Languages []string
 	// Duration is how long the recording lasted.
 	Duration time.Duration
+	// Boosted reports whether the model was asked to favour the custom
+	// words, so the transcript already spells them as the user does.
+	Boosted bool
+	// Settings are the settings the session started with, which the text
+	// stages follow.
+	Settings config.Settings
 }
 
 // HistoryEntry is a finished dictation.

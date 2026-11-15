@@ -144,16 +144,23 @@ func dictate(t *testing.T, e engine.Engine, spec engine.LoadSpec, samples []floa
 // dictateIn is dictate in another language.
 func dictateIn(t *testing.T, e engine.Engine, spec engine.LoadSpec, lang string, samples []float32, rate int, speed float64) dictation {
 	t.Helper()
+	return dictateWith(t, e, pipeline.Model{Spec: spec, Name: "test", Language: lang}, config.Defaults(), samples, rate, speed)
+}
+
+// dictateWith is dictate with the model and settings given, and the app's
+// cleanup stage.
+func dictateWith(t *testing.T, e engine.Engine, m pipeline.Model, settings config.Settings, samples []float32, rate int, speed float64) dictation {
+	t.Helper()
 	play := &playback{samples: samples, rate: rate, speed: speed, levels: make(chan audio.Level)}
 	out := &timedOutput{}
-	settings := config.Defaults()
 	c := pipeline.New(pipeline.Options{
 		Recorder: play,
 		Engine:   e,
-		Models:   oneModel{pipeline.Model{Spec: spec, Name: "test", Language: lang}},
+		Models:   oneModel{m},
 		Output:   out,
 		Notices:  noNotices{t},
 		Settings: func() config.Settings { return settings },
+		Stages:   pipeline.Stages{Cleanup: pipeline.CleanupStage{}},
 		Log:      slog.New(slog.DiscardHandler),
 	})
 	defer c.Close()

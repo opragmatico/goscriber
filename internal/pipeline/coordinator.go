@@ -15,6 +15,7 @@ import (
 	"github.com/opragmatico/goscriber/internal/engine"
 	"github.com/opragmatico/goscriber/internal/notice"
 	"github.com/opragmatico/goscriber/internal/output"
+	"github.com/opragmatico/goscriber/internal/text"
 )
 
 // State is where dictation stands.
@@ -221,6 +222,7 @@ type session struct {
 	cancel   context.CancelFunc
 	settings config.Settings
 	model    Model
+	phrases  []string // custom words the model is asked to favour
 	started  time.Time
 	frames   <-chan []float32 // the recording's audio as it arrives
 	rate     int              // of the recording
@@ -429,6 +431,7 @@ func (c *Coordinator) start() {
 		cancel:   cancel,
 		settings: settings,
 		model:    model,
+		phrases:  boostedWords(model, settings),
 		started:  time.Now(),
 		frames:   frames,
 		rate:     rate,
@@ -716,6 +719,8 @@ func (c *Coordinator) finish(s *session, res engine.Result, samples []float32, r
 		Language:  s.model.Language,
 		Languages: slices.Clone(res.Languages),
 		Duration:  s.timings.recording,
+		Boosted:   len(s.phrases) > 0,
+		Settings:  s.settings.Clone(),
 	}
 	text := res.Text
 	for _, st := range []struct {
@@ -875,7 +880,20 @@ func (c *Coordinator) emitLocked(ev Event) {
 
 // options are the session's recognition options.
 func (s *session) options() engine.Options {
-	return engine.Options{Language: s.model.Language}
+	o := engine.Options{Language: s.model.Language}
+	if len(s.phrases) > 0 {
+		o.Phrases, o.Boost = s.phrases, float32(s.settings.CustomWordBoost)
+	}
+	return o
+}
+
+// boostedWords are the custom words to ask the model to favour: none when
+// it cannot boost words or custom_word_boost is 0.
+func boostedWords(m Model, s config.Settings) []string {
+	if !m.WordBoosting || s.CustomWordBoost <= 0 {
+		return nil
+	}
+	return text.Vocabulary(s.CustomWords)
 }
 
 // hold keeps the engine acquired until the session ends.

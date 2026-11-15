@@ -10,6 +10,7 @@ import (
 	"math"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/opragmatico/goscriber/internal/config"
 	"github.com/opragmatico/goscriber/internal/engine"
 	"github.com/opragmatico/goscriber/internal/models"
+	"github.com/opragmatico/goscriber/internal/text"
 )
 
 const transcribeUsage = `Usage:
@@ -41,6 +43,13 @@ Flags:
                       timings, language and durations
       --bench         print load time, real-time factor and finalisation
                       latency to stderr, after an untimed warm-up decode
+      --word WORD     a custom word (a name, jargon) to spell this way, on top
+                      of the settings' custom_words; repeat for more
+
+Custom words are boosted by models that can favour words (Nemotron), with
+the settings' custom_word_boost. Other models' transcripts are corrected:
+near-misses of the words, by word_correction_threshold, take their spelling.
+With --json, "text" is corrected and "words" are as the model wrote them.
 
 Nothing is downloaded: fetch the model first with 'goscriber models pull'.
 The voice activity detector is used when it is downloaded and enabled in
@@ -57,6 +66,17 @@ type transcribeFlags struct {
 	languageSet            bool
 	stream, cpu, json      bool
 	bench                  bool
+	words                  wordList
+}
+
+// wordList collects repeated --word flags.
+type wordList []string
+
+func (w *wordList) String() string { return strings.Join(*w, ",") }
+
+func (w *wordList) Set(v string) error {
+	*w = append(*w, v)
+	return nil
 }
 
 func runTranscribe(args []string, env Env) int {
@@ -69,6 +89,7 @@ func runTranscribe(args []string, env Env) int {
 	c.fs.BoolVar(&fl.cpu, "cpu", false, "run on the CPU")
 	c.fs.BoolVar(&fl.json, "json", false, "JSON output")
 	c.fs.BoolVar(&fl.bench, "bench", false, "benchmark")
+	c.fs.Var(&fl.words, "word", "custom word")
 	files, code, ok := c.parse(args)
 	if !ok {
 		return code
@@ -126,6 +147,10 @@ type transcriber struct {
 	opts  engine.Options
 	// The VAD's speech thresholds, from the settings.
 	vadOnset, vadOffset float32
+	// correct are the custom words to correct transcripts with, when the
+	// model does not boost them, by threshold.
+	correct   []string
+	threshold float64
 
 	eng      engine.Engine
 	info     engine.ModelInfo
@@ -204,6 +229,14 @@ func newTranscriber(env Env, fl transcribeFlags) (*transcriber, error) {
 		file:  f,
 		path:  path,
 		opts:  engine.Options{Language: lang, WordTimestamps: fl.json},
+	}
+	words := text.Vocabulary(append(slices.Clone(settings.CustomWords), fl.words...))
+	switch {
+	case len(words) == 0:
+	case model.Capabilities.WordBoosting && settings.CustomWordBoost > 0:
+		t.opts.Phrases, t.opts.Boost = words, float32(settings.CustomWordBoost)
+	default:
+		t.correct, t.threshold = words, settings.WordCorrectionThreshold
 	}
 	if vad := cat.VAD(); settings.VADEnabled && vad != nil {
 		if p, err := m.Path(vad.ID, ""); err == nil {
@@ -335,6 +368,7 @@ func (t *transcriber) transcribe(ctx context.Context, file string, many bool) er
 	if err != nil {
 		return err
 	}
+	res.Text = text.CorrectWords(res.Text, t.correct, t.threshold)
 	dur := time.Duration(float64(len(samples)) / float64(rate) * float64(time.Second))
 
 	if t.fl.bench {

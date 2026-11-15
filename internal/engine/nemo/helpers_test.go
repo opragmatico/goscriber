@@ -15,6 +15,9 @@ const (
 	fixtureText = "../../../testdata/audio/jfk.txt"
 	spanishWAV  = "../../../testdata/audio/es.wav"
 	spanishText = "../../../testdata/audio/es.txt"
+	// A rare name both models misspell: "Queequeg".
+	queequegWAV  = "../../../testdata/audio/queequeg.wav"
+	queequegText = "../../../testdata/audio/queequeg.txt"
 )
 
 // readWAV reads a PCM 16-bit WAV file as mono float32 samples, averaging the
@@ -72,6 +75,13 @@ func fixture(t testing.TB) (samples []float32, rate int, transcript string) {
 func spanishFixture(t testing.TB) (samples []float32, rate int, transcript string) {
 	t.Helper()
 	return readFixture(t, spanishWAV, spanishText)
+}
+
+// queequegFixture returns the clip with a rare name and its reference
+// transcript.
+func queequegFixture(t testing.TB) (samples []float32, rate int, transcript string) {
+	t.Helper()
+	return readFixture(t, queequegWAV, queequegText)
 }
 
 func readFixture(t testing.TB, wav, txt string) (samples []float32, rate int, transcript string) {
@@ -156,5 +166,9 @@ func TestReadWAVFixture(t *testing.T) {
 	samples, rate, text = spanishFixture(t)
 	if rate != 16000 || len(samples) != 168000 || text == "" {
 		t.Errorf("Spanish fixture: %d samples at %d Hz, transcript %q", len(samples), rate, text)
+	}
+	samples, rate, text = queequegFixture(t)
+	if rate != 16000 || len(samples) != 167200 || !strings.Contains(text, "Queequeg's") {
+		t.Errorf("Queequeg fixture: %d samples at %d Hz, transcript %q", len(samples), rate, text)
 	}
 }

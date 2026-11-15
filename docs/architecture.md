@@ -229,7 +229,7 @@ The `Coordinator` (`internal/pipeline/coordinator.go`) owns a single state machi
 - **Model**: every `Start` resolves the selected model through a `ModelSource` (`CatalogModels` over the models manager: `selected_model`, in `model_quant` when the model has it, on the CPU when `accelerator` says so, with the Silero VAD when enabled and downloaded). With no model ready, `Start` records nothing and raises `no_model` afresh, so every press is answered; a damaged file raises `model_corrupt`. The engine goroutine loads the model when recording starts, if the engine does not hold it already, and `Acquire`s it until the transcript is out.
 - **Decode**: the recording is decoded while it goes on ([live transcription](#live-transcription)). On `Stop`, the speech gate runs first (too short or too quiet ends the session quietly), then the engine goroutine finishes the decode: the stream's final, or the chunk still open, or the whole clip when neither applies.
 - **Session IDs**: each session has an ID and a context. A cancel ends the context (the decode, a text stage or the paste may stop early) and anything that finishes afterwards for that session is dropped, even while the next session is recording.
-- **Stages**: `Stages{Cleanup, LLM, Hook, History}` run after recognition, each optional and nil until its issue lands (#27, #39, #38, #32). A failing text stage passes its input on; empty output pastes nothing. History saves after delivery, off the critical path.
+- **Stages**: `Stages{Cleanup, LLM, Hook, History}` run after recognition, each optional; the app sets `Cleanup` to `CleanupStage` ([custom vocabulary](#custom-vocabulary)), and the others are nil until their issues land (#39, #38, #32). Each text stage gets the session's `SessionInfo`, with the settings the session started with. A failing text stage passes its input on; empty output pastes nothing. History saves after delivery, off the critical path.
 - **Failures**: an engine error ends in `idle` with `transcription_failed`, `model_corrupt` or `no_model`; a failed delivery with `paste_failed` or `permission_missing`. Each is raised before the state returns to idle. No speech is not a failure.
 - **Timings**: each stage's duration is logged at debug level, and a summary line per session (`dictation timings`); the info-level line says only whether something was delivered and how many characters, never the text.
 
@@ -254,6 +254,24 @@ What NeMo-Speech.cpp v0.3.0 does with languages, checked with `testdata/audio/es
 - **Synthetic speech is unreliable.** Some macOS voices reading Spanish lose most of a sentence with `es-ES`, while others transcribe fully. That is why the fixture is a human reading.
 
 The GGUF's prompt dictionary holds more than 100 locales and bare language codes, but the catalog lists only the 32 the model card supports.
+
+### Custom vocabulary
+
+Names and jargon in `custom_words` come out spelled the way the user writes them, by one of two mechanisms, depending on what the model can do (the catalog's `word_boosting` capability):
+
+- **Word boosting** (Nemotron Streaming 3.5). Every recognition request, whole or streamed, carries the custom words as one NeMo-Speech.cpp speech context, boosted by `custom_word_boost` (1 by default, 0 to 5). The cache-aware RNNT's greedy decoder adds that score each time it emits the start of a boosted word, so it prefers them over what it would otherwise hear. The transcript is then left alone.
+- **Correction** (Parakeet TDT, and Nemotron with the boost at 0). NeMo-Speech.cpp ignores speech contexts for TDT models, so the cleanup stage corrects the transcript instead (`internal/text/words.go`, after Handy's): each word, or run of up to three words (the model may split "ChargeBee" into "Charge B"), is compared with each custom word by their letters and digits in lower case. The score is the edit distance divided by the longer length, and 30 % of that when it is at most a third and both have the same Soundex code. A candidate scoring under `word_correction_threshold` (0.18 by default, Handy's; 0 turns correction off) takes the closest custom word's spelling, keeping the punctuation around it and an English possessive ("Quequeg's" → "Queequeg's"). Lengths that differ by more than a quarter (and more than one letter) are never compared, and runs never cross punctuation. A custom word written with capitals keeps them; one in lower case takes a sentence's capital.
+
+Correction is skipped after boosting, as in Handy: the boosted transcript already spells the words, and a second pass would only add the chance of turning an ordinary word into a custom one. The custom words are trimmed and de-duplicated (ignoring case) first. `goscriber transcribe` applies them the same way, with `--word` adding more.
+
+Measured with `testdata/audio/queequeg.wav`, a LibriVox reading of *Moby-Dick* (`TestNemotronBoostsCustomWords`, `TestParakeetCorrectsCustomWords` in `internal/engine/nemo`):
+
+| Model | Without custom words | With "Queequeg" among ten custom words |
+| --- | --- | --- |
+| Nemotron Streaming 3.5 | "I found Quig's arm" | "I found Queequeg's arm", whole, streamed and dictated, by boosting; the rest of the transcript unchanged |
+| Parakeet TDT 0.6B v2 | "I found Quequeg's arm" | the same with boosting at any strength; "I found Queequeg's arm" after correction |
+
+**Choosing the boost.** Higher is not better. On the fixture with ten custom words, Nemotron spells the name from a boost of 1. At 2.5 it starts writing custom words that were never said ("I had been his wife" became "Ishmael's wife"); at 4 it drops words, and at 5 the name replaces half the sentence. Over 90 s of the same reading, 1.25 already turned "I suppose" into "Ishmael", while 1 changed nothing but the name and, oddly, the capitals of "sun and shade". Hence the default of 1, and the cap at 5, which is also where NeMo-Speech.cpp clamps a boost for greedy decoding.
 
 ### Live transcription
 

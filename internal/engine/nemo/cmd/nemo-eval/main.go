@@ -13,6 +13,11 @@
 // NeMo's names too, with the hypothesis in "pred_text", so scripts/wer.py can
 // score them. Audio must be 16-bit PCM WAV; convert other formats first, for
 // example with ffmpeg.
+//
+// -phrase (repeatable) and -boost favour words, as the custom_words setting
+// does, to check whether a model honours word boosting:
+//
+//	go run -tags nemo ./internal/engine/nemo/cmd/nemo-eval -model MODEL.gguf -phrase Queequeg -boost 2 FILE.wav
 package main
 
 import (
@@ -26,6 +31,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/opragmatico/goscriber/internal/engine"
@@ -68,6 +74,10 @@ func run() error {
 	runs := flag.Int("runs", 1, "decode each file this many times and keep the fastest")
 	warmup := flag.Bool("warmup", true, "decode the first file once, untimed, before measuring")
 	stream := flag.Bool("stream", false, "only try to open a stream, and report the result")
+	language := flag.String("language", "", "language to ask for, such as en-US or auto (Nemotron)")
+	var phrases phraseList
+	flag.Var(&phrases, "phrase", "a word or phrase to favour; repeat the flag for more")
+	boost := flag.Float64("boost", 2, "how strongly -phrase words are favoured")
 	flag.Parse()
 	if *model == "" || *runs < 1 {
 		flag.Usage()
@@ -108,7 +118,7 @@ func run() error {
 		return nil
 	}
 
-	opts := engine.Options{WordTimestamps: *words}
+	opts := engine.Options{WordTimestamps: *words, Language: *language, Phrases: phrases, Boost: float32(*boost)}
 	if *warmup {
 		samples, rate, err := readWAV(entries[0].Audio)
 		if err != nil {
@@ -160,6 +170,16 @@ func run() error {
 	}
 	fmt.Fprintf(os.Stderr, "%d files, %.1f s of audio decoded in %.2f s on %s: RTFx %.0f\n",
 		len(entries), audio.Seconds(), decode.Seconds(), backend, audio.Seconds()/decode.Seconds())
+	return nil
+}
+
+// phraseList collects repeated -phrase flags.
+type phraseList []string
+
+func (p *phraseList) String() string { return strings.Join(*p, ",") }
+
+func (p *phraseList) Set(v string) error {
+	*p = append(*p, v)
 	return nil
 }
 

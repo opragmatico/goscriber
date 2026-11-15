@@ -18,7 +18,7 @@ NVIDIA publishes a ready-to-run Q8_0 GGUF next to the `.nemo`, so Goscriber does
 
 ## Parakeet TDT 0.6B v3: NVIDIA's own file
 
-NVIDIA publishes a ready-to-run Q8_0 GGUF next to the `.nemo` here too, and NeMo-Speech.cpp v0.3.0 lists the model in its own index at the same revision, `541d1f99c6b0` (2026-08-05), which is still the repository's latest. Goscriber does not re-host it. The file predates the tokenizer re-conversion described above: it carries the 8,192-token vocabulary but not `asr.tokenizer.spm_model`, so custom vocabulary ([#26](https://github.com/opragmatico/goscriber/issues/26)) should not be expected to work with v3 until NVIDIA re-converts it or Goscriber converts its own. [Parakeet TDT 0.6B v3 checks](parakeet-tdt-0.6b-v3.md) records how it ran in Goscriber.
+NVIDIA publishes a ready-to-run Q8_0 GGUF next to the `.nemo` here too, and NeMo-Speech.cpp v0.3.0 lists the model in its own index at the same revision, `541d1f99c6b0` (2026-08-05), which is still the repository's latest. Goscriber does not re-host it. The file predates the tokenizer re-conversion described above: it carries the 8,192-token vocabulary but not `asr.tokenizer.spm_model`. That costs nothing today, because NeMo-Speech.cpp v0.3.0 ignores word boosting for TDT models whatever the file holds; Goscriber corrects their transcripts with the custom words instead ([custom vocabulary](../architecture.md#custom-vocabulary)). [Parakeet TDT 0.6B v3 checks](parakeet-tdt-0.6b-v3.md) records how it ran in Goscriber.
 
 ## Parakeet TDT 0.6B v2 and Silero VAD: converted by Goscriber
 
