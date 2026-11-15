@@ -15,9 +15,14 @@ var version string
 // CGO_ENABLED=0 build has no desktop app and leaves it nil.
 var runApp func(cli.AppOptions) error
 
-// newEngine returns the speech engine for `goscriber transcribe`. It is set in
-// engine.go for builds with the NeMo-Speech.cpp SDK; other builds leave it nil.
-var newEngine func() engine.Engine
+// newEngine returns the speech engine for `goscriber transcribe`, and
+// engineVersion its version for the settings window's About page. They are
+// set in engine.go for builds with the NeMo-Speech.cpp SDK; other builds
+// leave them nil.
+var (
+	newEngine     func() engine.Engine
+	engineVersion func() string
+)
 
 // newOutput reaches the clipboard and keyboard for `goscriber debug paste`.
 // It is set in output.go for CGo builds; other builds leave it nil.

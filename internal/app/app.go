@@ -26,6 +26,9 @@ type Options struct {
 	NewEngine func() engine.Engine
 	// EngineInProcess: --engine-in-process, for profiling.
 	EngineInProcess bool
+	// EngineVersion returns the speech engine's version, for the About
+	// page. Nil means this build has no engine.
+	EngineVersion func() string
 }
 
 // Runtime is what every part of the app shares: where files live, the

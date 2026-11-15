@@ -11,4 +11,5 @@ import (
 // build tag, which `make build` adds when the SDK is there.
 func init() {
 	newEngine = func() engine.Engine { return nemo.New() }
+	engineVersion = nemo.Version
 }

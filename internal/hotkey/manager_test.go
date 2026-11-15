@@ -381,6 +381,31 @@ func TestManagerCloseUnregistersEverything(t *testing.T) {
 	h.m.Apply(cfg(config.ActivationToggle)) // after Close: ignored, no panic
 }
 
+// While the settings window records a shortcut, every shortcut is given back
+// to the OS; a change applied meanwhile registers once the suspension ends.
+func TestManagerSuspend(t *testing.T) {
+	h := newHarness(t)
+	h.m.Apply(cfg(config.ActivationToggle))
+	h.m.SetRecording(true)
+	h.wantLog("+"+talk, "+escape")
+
+	h.m.Suspend(true)
+	h.m.Suspend(true) // twice is once
+	h.wantLog("+"+talk, "+escape", "-"+talk, "-escape")
+	next := cfg(config.ActivationToggle)
+	next.Transcribe = "ctrl+shift+d"
+	h.m.Apply(next)
+	h.m.SetRecording(true)
+	h.wantLog("+"+talk, "+escape", "-"+talk, "-escape") // nothing while suspended
+
+	h.m.Suspend(false)
+	h.wantLog("+"+talk, "+escape", "-"+talk, "-escape", "+ctrl+shift+d", "+escape")
+	h.m.SetRecording(false)
+	h.sync()
+	h.be.send(t, "ctrl+shift+d", KeyDown)
+	h.wantAction(ActionStart)
+}
+
 func TestConfigFrom(t *testing.T) {
 	s := config.Defaults()
 	s.TranscribeShortcut, s.CancelShortcut = "f5", "shift+escape"

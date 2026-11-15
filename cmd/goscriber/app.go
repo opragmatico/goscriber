@@ -16,6 +16,7 @@ func init() {
 			Version:         o.Version,
 			NewEngine:       newEngine,
 			EngineInProcess: o.EngineInProcess,
+			EngineVersion:   engineVersion,
 		})
 	}
 }
