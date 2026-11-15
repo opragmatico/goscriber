@@ -311,8 +311,8 @@ func TestSettingsWindowPages(t *testing.T) {
 			t.Errorf("About is missing %q:\n%s", s, about)
 		}
 	}
-	if !strings.Contains(tw.pageText(PageHistory), HistoryPlaceholder) {
-		t.Error("History should say what it will hold")
+	if !strings.Contains(tw.pageText(PageHistory), HistoryUnavailable) {
+		t.Error("History without a store should say dictations are not being saved")
 	}
 
 	noEngine := newTestWindow(t, func(o *SettingsOptions) { o.Info.EngineVersion = "" })

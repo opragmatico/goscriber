@@ -35,6 +35,7 @@ func init() {
 			models:   testModels{},
 			files:    models.NewManager(rt.Paths.ModelsDir(), models.Options{}),
 			feedback: &testFeedback{},
+			player:   &testPlayer{},
 		}
 	}
 	listDevices = func() ([]audio.Device, []audio.Device, error) { return nil, nil, nil }

@@ -991,3 +991,56 @@ func TestNoMicrophonePermissionRecordsNothing(t *testing.T) {
 		t.Errorf("trace %v: no cue without the microphone", got)
 	}
 }
+
+// A saved recording is decoded again whole, with the selected model loaded
+// once, and tidied by the cleanup stage; nothing is delivered.
+func TestRetranscribe(t *testing.T) {
+	r := newRig(t, rigOptions{
+		script: fake.Script{Replies: []fake.Reply{fake.Transcript("um again"), fake.Transcript("")}},
+		stages: Stages{Cleanup: TextStageFunc(func(_ context.Context, text string, info SessionInfo) (string, error) {
+			if info.Model != "asr" || info.Duration != time.Second {
+				t.Errorf("cleanup info %+v", info)
+			}
+			return strings.TrimPrefix(text, "um "), nil
+		})},
+	})
+	samples := tone(time.Second, 0.1)
+
+	got, err := r.c.Retranscribe(context.Background(), samples, rate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (Retranscription{Text: "again", RawText: "um again", Model: "asr", Language: "en-US"}); got != want {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+	recs := r.eng.Recognitions()
+	if len(recs) != 1 || recs[0].Samples != len(samples) || recs[0].Options.Language != "en-US" {
+		t.Errorf("recognitions %+v", recs)
+	}
+
+	// The model stays loaded; a recording without speech says so.
+	if _, err := r.c.Retranscribe(context.Background(), samples, rate); !errors.Is(err, ErrNoSpeech) {
+		t.Errorf("an empty transcript: %v", err)
+	}
+	if loads := r.eng.Loads(); len(loads) != 1 {
+		t.Errorf("%d loads, want the model loaded once", len(loads))
+	}
+	if len(r.out.delivered()) != 0 || len(r.events.states()) != 0 {
+		t.Error("a re-transcription delivers nothing and leaves dictation idle")
+	}
+
+	r.models.mu.Lock()
+	r.models.err = ErrNoModel
+	r.models.mu.Unlock()
+	if _, err := r.c.Retranscribe(context.Background(), samples, rate); !errors.Is(err, ErrNoModel) {
+		t.Errorf("without a model: %v", err)
+	}
+
+	r.c.Close()
+	r.models.mu.Lock()
+	r.models.err = nil
+	r.models.mu.Unlock()
+	if _, err := r.c.Retranscribe(context.Background(), samples, rate); !errors.Is(err, ErrClosed) {
+		t.Errorf("after Close: %v", err)
+	}
+}
