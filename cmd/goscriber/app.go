@@ -10,11 +10,12 @@ import (
 func init() {
 	runApp = func(o cli.AppOptions) error {
 		return app.Run(app.Options{
-			Debug:       o.Debug,
-			StartHidden: o.StartHidden,
-			NoTray:      o.NoTray,
-			Version:     o.Version,
-			NewEngine:   newEngine,
+			Debug:           o.Debug,
+			StartHidden:     o.StartHidden,
+			NoTray:          o.NoTray,
+			Version:         o.Version,
+			NewEngine:       newEngine,
+			EngineInProcess: o.EngineInProcess,
 		})
 	}
 }

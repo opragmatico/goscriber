@@ -1,6 +1,6 @@
 # The NeMo-Speech.cpp SDK
 
-Goscriber runs speech recognition in-process through the [NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) C ABI (`nemo_speech/asr.h`), linked with CGo. This page covers how that SDK is pinned and built, how Go links it, and what the linking choice means for packaging.
+Goscriber runs speech recognition through the [NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) C ABI (`nemo_speech/asr.h`), linked with CGo into the `goscriber` executable. The desktop app runs it in a worker process, the same executable started as `goscriber engine-worker`, so a crash in the engine cannot take the app down ([process isolation](architecture.md#process-isolation)); `goscriber transcribe` runs it in its own process. This page covers how that SDK is pinned and built, how Go links it, and what the linking choice means for packaging.
 
 ## Quick start
 

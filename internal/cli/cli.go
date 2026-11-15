@@ -1,5 +1,6 @@
 // Package cli parses Goscriber's command line: the desktop app's flags, the
-// transcribe, models and debug subcommands, and later engine-worker and the
+// transcribe, models and debug subcommands, the hidden engine-worker
+// subcommand the app runs its speech engine in, and later the
 // remote-control flags that are forwarded to a running instance.
 package cli
 
@@ -13,6 +14,7 @@ import (
 
 	"github.com/opragmatico/goscriber/internal/config"
 	"github.com/opragmatico/goscriber/internal/engine"
+	"github.com/opragmatico/goscriber/internal/engine/worker"
 	"github.com/opragmatico/goscriber/internal/models"
 	"github.com/opragmatico/goscriber/internal/output"
 )
@@ -86,7 +88,10 @@ type AppOptions struct {
 	Debug       bool
 	StartHidden bool // open no window at launch, whatever the start_hidden setting says
 	NoTray      bool // run without the tray icon, whatever the show_tray_icon setting says
-	Version     string
+	// EngineInProcess runs the speech engine inside the app rather than in
+	// a worker process, whatever the engine_in_process setting says.
+	EngineInProcess bool
+	Version         string
 }
 
 const usage = `Goscriber: offline push-to-talk speech-to-text.
@@ -107,6 +112,9 @@ Run 'goscriber COMMAND --help' for a command's flags.
 
 Flags:
       --debug          verbose logging and debug mode for this session
+      --engine-in-process
+                       run the speech engine inside the app, for profiling;
+                       a crash in the engine then ends the app
   -h, --help           show this help and exit
       --no-tray        run without the tray icon; the settings window opens instead
       --start-hidden   open no window at launch
@@ -130,6 +138,8 @@ func Run(args []string, env Env) int {
 			return runTranscribe(args[1:], env)
 		case "debug":
 			return runDebug(args[1:], env)
+		case worker.Command:
+			return runEngineWorker(args[1:], env)
 		case "help":
 			fmt.Fprint(env.Stdout, usage)
 			return 0
@@ -143,6 +153,7 @@ func Run(args []string, env Env) int {
 	debug := fs.Bool("debug", false, "verbose logging and debug mode for this session")
 	startHidden := fs.Bool("start-hidden", false, "open no window at launch")
 	noTray := fs.Bool("no-tray", false, "run without the tray icon")
+	inProcess := fs.Bool("engine-in-process", false, "run the speech engine inside the app")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -168,10 +179,11 @@ func Run(args []string, env Env) int {
 		return 0
 	}
 	opts := AppOptions{
-		Debug:       *debug,
-		StartHidden: *startHidden,
-		NoTray:      *noTray,
-		Version:     ResolveVersion(env.Version),
+		Debug:           *debug,
+		StartHidden:     *startHidden,
+		NoTray:          *noTray,
+		EngineInProcess: *inProcess,
+		Version:         ResolveVersion(env.Version),
 	}
 	if err := env.RunApp(opts); err != nil {
 		fmt.Fprintf(env.Stderr, "goscriber: %v\n", err)

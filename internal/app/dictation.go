@@ -10,6 +10,7 @@ import (
 	"github.com/opragmatico/goscriber/internal/config"
 	"github.com/opragmatico/goscriber/internal/engine"
 	"github.com/opragmatico/goscriber/internal/engine/autounload"
+	"github.com/opragmatico/goscriber/internal/engine/worker"
 	"github.com/opragmatico/goscriber/internal/models"
 	"github.com/opragmatico/goscriber/internal/notice"
 	"github.com/opragmatico/goscriber/internal/output"
@@ -59,20 +60,31 @@ func systemServices(rt *Runtime, opts Options, notices *notice.Hub) services {
 		AlwaysOn: s.AlwaysOnMicrophone,
 		Notify:   func(msg string) { notices.Publish(notice.MicrophoneUnavailable(msg)) },
 	})
-	var inner engine.Engine = noEngine{}
-	if opts.NewEngine != nil {
-		inner = opts.NewEngine()
-	} else {
-		rt.Log.Warn("this build has no speech engine, so dictation cannot transcribe; build it with 'make deps build'")
-	}
 	return services{
 		recorder: rec,
-		engine:   autounload.New(inner, s.ModelUnloadTimeout.Duration(), rt.Log.Logger),
+		engine:   autounload.New(speechEngine(rt, opts, s, notices), s.ModelUnloadTimeout.Duration(), rt.Log.Logger),
 		output:   output.New(platform.GeneralPasteboard(), platform.Keyboard{}, rt.Log.Logger),
 		models: pipeline.CatalogModels{Manager: models.NewManager(rt.Paths.ModelsDir(), models.Options{
 			HFCache: models.HFCacheDir(os.Getenv),
 		})},
 		feedback: audio.NewFeedback(audio.NewPlayer(), platform.MuteOutput, rt.Log.Logger),
+	}
+}
+
+// speechEngine is the engine dictation transcribes with: the build's engine
+// in a supervised worker process, so a crash in NeMo-Speech.cpp cannot take
+// the app down, or inside the app when engine_in_process or
+// --engine-in-process asks for it, for profiling.
+func speechEngine(rt *Runtime, opts Options, s config.Settings, notices *notice.Hub) engine.Engine {
+	switch {
+	case opts.NewEngine == nil:
+		rt.Log.Warn("this build has no speech engine, so dictation cannot transcribe; build it with 'make deps build'")
+		return noEngine{}
+	case s.EngineInProcess || opts.EngineInProcess:
+		rt.Log.Info("the speech engine runs inside the app, so a crash in it ends the app (engine_in_process)")
+		return opts.NewEngine()
+	default:
+		return worker.New(worker.Options{Notices: notices, Log: rt.Log.Logger})
 	}
 }
 
