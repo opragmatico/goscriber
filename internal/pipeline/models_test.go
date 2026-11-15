@@ -127,7 +127,7 @@ func TestCatalogModels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Spec.Path != eng || m.Language != "" || m.Spec.Latency != "" {
+	if m.Spec.Path != eng || m.Language != "" || m.Spec.Latency != "" || m.FixedLanguage != "en" || m.WordBoosting {
 		t.Errorf("model %+v", m)
 	}
 

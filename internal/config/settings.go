@@ -235,8 +235,10 @@ type Settings struct {
 	CustomWordBoost         float64  `json:"custom_word_boost"`
 	WordCorrectionThreshold float64  `json:"word_correction_threshold"`
 
-	// Text. A nil CustomFillerWords means the built-in list; an empty one
-	// means the user removed every filler word.
+	// Filler words ("um", "uh") are removed from transcripts with
+	// FillerWordRemoval. A nil CustomFillerWords means the built-in lists,
+	// chosen by the transcript's language; a list replaces them, and an
+	// empty one means the user removed every filler word.
 	FillerWordRemoval bool     `json:"filler_word_removal"`
 	CustomFillerWords []string `json:"custom_filler_words"`
 
@@ -290,6 +292,8 @@ func defaultsFor(goos string) Settings {
 		// Custom vocabulary, measured on Nemotron (docs/architecture.md).
 		CustomWordBoost:         1,
 		WordCorrectionThreshold: 0.18, // Handy's
+
+		FillerWordRemoval: true,
 	}
 }
 

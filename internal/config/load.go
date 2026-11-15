@@ -12,7 +12,7 @@ import (
 
 // SchemaVersion is the settings layout this build reads and writes. Bump it
 // only together with a new entry in migrations.
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 // A migration upgrades a raw settings document by one schema version, in place.
 type migration func(doc map[string]json.RawMessage) error
@@ -23,6 +23,14 @@ var migrations = []migration{
 	// v0 is any file written without a schema_version. Its layout is the v1
 	// layout, so there is nothing to move.
 	func(map[string]json.RawMessage) error { return nil },
+	// v1 -> v2: filler_word_removal now removes filler words, and is on by
+	// default, as in Handy. v1 files hold false, the old default, saved
+	// while the setting did nothing and had no control, so nobody chose
+	// it: turn it on.
+	func(doc map[string]json.RawMessage) error {
+		doc["filler_word_removal"] = json.RawMessage("true")
+		return nil
+	},
 }
 
 // LoadReport tells the caller what Load had to do, so the app can tell the user.

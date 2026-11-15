@@ -229,7 +229,7 @@ The `Coordinator` (`internal/pipeline/coordinator.go`) owns a single state machi
 - **Model**: every `Start` resolves the selected model through a `ModelSource` (`CatalogModels` over the models manager: `selected_model`, in `model_quant` when the model has it, on the CPU when `accelerator` says so, with the Silero VAD when enabled and downloaded). With no model ready, `Start` records nothing and raises `no_model` afresh, so every press is answered; a damaged file raises `model_corrupt`. The engine goroutine loads the model when recording starts, if the engine does not hold it already, and `Acquire`s it until the transcript is out.
 - **Decode**: the recording is decoded while it goes on ([live transcription](#live-transcription)). On `Stop`, the speech gate runs first (too short or too quiet ends the session quietly), then the engine goroutine finishes the decode: the stream's final, or the chunk still open, or the whole clip when neither applies.
 - **Session IDs**: each session has an ID and a context. A cancel ends the context (the decode, a text stage or the paste may stop early) and anything that finishes afterwards for that session is dropped, even while the next session is recording.
-- **Stages**: `Stages{Cleanup, LLM, Hook, History}` run after recognition, each optional; the app sets `Cleanup` to `CleanupStage` ([custom vocabulary](#custom-vocabulary)), and the others are nil until their issues land (#39, #38, #32). Each text stage gets the session's `SessionInfo`, with the settings the session started with. A failing text stage passes its input on; empty output pastes nothing. History saves after delivery, off the critical path.
+- **Stages**: `Stages{Cleanup, LLM, Hook, History}` run after recognition, each optional; the app sets `Cleanup` to `CleanupStage` ([text cleanup](#text-cleanup)), and the others are nil until their issues land (#39, #38, #32). Each text stage gets the session's `SessionInfo`, with the settings the session started with. A failing text stage passes its input on; empty output pastes nothing. History saves after delivery, off the critical path.
 - **Failures**: an engine error ends in `idle` with `transcription_failed`, `model_corrupt` or `no_model`; a failed delivery with `paste_failed` or `permission_missing`. Each is raised before the state returns to idle. No speech is not a failure.
 - **Timings**: each stage's duration is logged at debug level, and a summary line per session (`dictation timings`); the info-level line says only whether something was delivered and how many characters, never the text.
 
@@ -272,6 +272,26 @@ Measured with `testdata/audio/queequeg.wav`, a LibriVox reading of *Moby-Dick* (
 | Parakeet TDT 0.6B v2 | "I found Quequeg's arm" | the same with boosting at any strength; "I found Queequeg's arm" after correction |
 
 **Choosing the boost.** Higher is not better. On the fixture with ten custom words, Nemotron spells the name from a boost of 1. At 2.5 it starts writing custom words that were never said ("I had been his wife" became "Ishmael's wife"); at 4 it drops words, and at 5 the name replaces half the sentence. Over 90 s of the same reading, 1.25 already turned "I suppose" into "Ishmael", while 1 changed nothing but the name and, oddly, the capitals of "sun and shade". Hence the default of 1, and the cap at 5, which is also where NeMo-Speech.cpp clamps a boost for greedy decoding.
+
+### Text cleanup
+
+`CleanupStage` (`internal/pipeline/cleanup.go`) tidies every transcript with the pure functions of `internal/text`, in order: custom-word correction ([above](#custom-vocabulary)), filler-word removal, then whitespace.
+
+**Filler words** go with `filler_word_removal`, on by default as in Handy. The built-in lists follow Handy's, in two tiers: hesitations that are no word in any language the models write (`uh`, `uhm`, `umm`, `hmm`, `mmm`…) always go, while those that are words elsewhere go only from a transcript known to be in their language: `um`, `ah` and `eh` from English (`um` is "a" in Portuguese), `äh` and `ähm` from German, `euh` from French. The transcript's language (`SessionInfo.TextLanguage`) is the one the model detected, else the one it was asked for, else the model's only language (Parakeet TDT v2: English); with none known (Parakeet TDT v3, which reports nothing) only the first tier applies. `custom_filler_words` replaces both tiers when set, and an empty list removes nothing; entries may be phrases ("you know").
+
+A filler matches whole words only, ignoring case, and also drawn out ("ummm"). The punctuation around it is tidied rather than left behind:
+
+| Transcript | Cleaned |
+| --- | --- |
+| `Um, so I think we should ship it.` | `So I think we should ship it.` (the filler's comma goes, and its capital passes on) |
+| `So I was, uh, thinking about this.` | `So I was, thinking about this.` (only the filler's own comma goes) |
+| `It works, um.` | `It works.` (a sentence end moves to the word before, replacing its comma) |
+| `Well, I think, uh. that's right` | `Well, I think, that's right` (but not before a word in lower case) |
+| `It was (um) fine.` / `“Um, hello,” she said.` | `It was fine.` / `“Hello,” she said.` (brackets around the filler go; a quote it opened stays) |
+
+**Whitespace** is collapsed to single spaces and trimmed, and a transcript with no letter or digit left (a lone "." from a short clip, or nothing but fillers) becomes empty, so nothing is pasted. `append_trailing_space` is applied by the output, not here, so the space is added once.
+
+Settings files from before schema version 2 hold `filler_word_removal: false`, saved while the setting did nothing; the v2 migration turns it on.
 
 ### Live transcription
 

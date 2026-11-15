@@ -29,6 +29,9 @@ type Model struct {
 	// model takes a choice of language (or "auto" when the setting is not
 	// one of them), or "" for a model whose language is fixed.
 	Language string
+	// FixedLanguage is the model's only language, such as "en" for
+	// Parakeet TDT 0.6B v2, or "" when it takes or detects several.
+	FixedLanguage string
 	// WordBoosting reports whether the model can be asked to favour the
 	// custom words. Without it they are corrected in the transcript.
 	WordBoosting bool
@@ -85,6 +88,9 @@ func (c CatalogModels) Resolve(s config.Settings) (Model, error) {
 		Name:         m.Name,
 		Language:     m.ResolveLanguage(s.Language),
 		WordBoosting: m.Capabilities.WordBoosting,
+	}
+	if fixed := m.FixedLanguage(); fixed != models.LanguageAuto {
+		out.FixedLanguage = fixed
 	}
 	// Only streaming models look ahead; leaving the preset out of an offline
 	// model's spec keeps a change to it from reloading the model.

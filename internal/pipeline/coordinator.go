@@ -13,6 +13,7 @@ import (
 	"github.com/opragmatico/goscriber/internal/audio"
 	"github.com/opragmatico/goscriber/internal/config"
 	"github.com/opragmatico/goscriber/internal/engine"
+	"github.com/opragmatico/goscriber/internal/models"
 	"github.com/opragmatico/goscriber/internal/notice"
 	"github.com/opragmatico/goscriber/internal/output"
 	"github.com/opragmatico/goscriber/internal/text"
@@ -714,13 +715,14 @@ func (c *Coordinator) failureNotice(s *session, err error) notice.Notice {
 // session to history, on its own goroutine.
 func (c *Coordinator) finish(s *session, res engine.Result, samples []float32, rate int) {
 	info := SessionInfo{
-		Session:   s.id,
-		Model:     s.model.Spec.ID,
-		Language:  s.model.Language,
-		Languages: slices.Clone(res.Languages),
-		Duration:  s.timings.recording,
-		Boosted:   len(s.phrases) > 0,
-		Settings:  s.settings.Clone(),
+		Session:      s.id,
+		Model:        s.model.Spec.ID,
+		Language:     s.model.Language,
+		Languages:    slices.Clone(res.Languages),
+		TextLanguage: textLanguage(s.model, res.Languages),
+		Duration:     s.timings.recording,
+		Boosted:      len(s.phrases) > 0,
+		Settings:     s.settings.Clone(),
 	}
 	text := res.Text
 	for _, st := range []struct {
@@ -885,6 +887,19 @@ func (s *session) options() engine.Options {
 		o.Phrases, o.Boost = s.phrases, float32(s.settings.CustomWordBoost)
 	}
 	return o
+}
+
+// textLanguage is the language of a transcript m wrote, as best known (see
+// SessionInfo.TextLanguage).
+func textLanguage(m Model, detected []string) string {
+	switch {
+	case len(detected) > 0:
+		return detected[0]
+	case m.Language != "" && m.Language != models.LanguageAuto:
+		return m.Language
+	default:
+		return m.FixedLanguage
+	}
 }
 
 // boostedWords are the custom words to ask the model to favour: none when
