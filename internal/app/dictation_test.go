@@ -524,3 +524,68 @@ func TestLanguagePicker(t *testing.T) {
 		t.Errorf("detected %q still shown for another model", sh.settings.Detected())
 	}
 }
+
+// newTestShellWith starts a shell after set has changed the settings, as if
+// they had been saved by an earlier run.
+func newTestShellWith(t *testing.T, a fyne.App, set func(*config.Settings)) (*shell, uiQueue) {
+	t.Helper()
+	rt := start(t, Options{})
+	if err := rt.Settings.Update(set); err != nil {
+		t.Fatal(err)
+	}
+	sh := newShell(rt, a, Options{})
+	q := make(uiQueue, 32)
+	sh.do = q.do
+	sh.start()
+	t.Cleanup(sh.stop)
+	return sh, q
+}
+
+// With a model selected, the app loads it at launch, showing the load in the
+// tray, and loads another one in the background when it is selected.
+func TestModelLoadsAtLaunchAndOnSwitch(t *testing.T) {
+	isolate(t)
+	a := &trayApp{plainApp: plainApp{App: test.NewTempApp(t)}}
+	sh, q := newTestShellWith(t, a, func(s *config.Settings) { s.SelectedModel = "parakeet-tdt-0.6b-v2" })
+	eng := sh.svc.engine.(*fake.Engine)
+
+	q.waitUI(t, "the tray to show the model loading", func() bool { return sh.tray.Loading() == "parakeet-tdt-0.6b-v2" })
+	item(t, a.menu, ui.LabelLoadingPrefix+"parakeet-tdt-0.6b-v2…")
+	q.waitUI(t, "the load to end", func() bool { return sh.tray.Loading() == "" })
+	if loads := eng.Loads(); len(loads) != 1 || loads[0].ID != "parakeet-tdt-0.6b-v2" {
+		t.Fatalf("loads %+v, want the selected model at launch", loads)
+	}
+
+	if err := sh.rt.Settings.Update(func(s *config.Settings) { s.SelectedModel = "nemotron-3.5-asr-streaming-0.6b" }); err != nil {
+		t.Fatal(err)
+	}
+	q.waitUI(t, "the new model to load", func() bool { return len(eng.Loads()) == 2 && sh.tray.Loading() == "" })
+	if loads := eng.Loads(); loads[1].ID != "nemotron-3.5-asr-streaming-0.6b" {
+		t.Errorf("loads %+v, want the new model second", loads)
+	}
+	if eng.Unloads() != 1 {
+		t.Errorf("%d unloads, want the old model unloaded", eng.Unloads())
+	}
+}
+
+// With preload_model off, nothing loads until the first dictation.
+func TestModelLoadsLazilyWithoutPreload(t *testing.T) {
+	isolate(t)
+	a := &trayApp{plainApp: plainApp{App: test.NewTempApp(t)}}
+	sh, q := newTestShellWith(t, a, func(s *config.Settings) {
+		s.SelectedModel, s.PreloadModel = "parakeet-tdt-0.6b-v2", false
+	})
+	q.drain()
+	eng := sh.svc.engine.(*fake.Engine)
+	if n := len(eng.Loads()); n != 0 {
+		t.Fatalf("%d loads at launch with preload_model off", n)
+	}
+
+	sh.dictate(pipeline.ActionStart)
+	q.waitUI(t, "recording", func() bool { return sh.tray.State() == ui.TrayRecording })
+	sh.dictate(pipeline.ActionStop)
+	q.waitUI(t, "the transcript", func() bool { return len(sh.svc.output.(*testOutput).delivered()) == 1 })
+	if n := len(eng.Loads()); n != 1 {
+		t.Errorf("%d loads, want the first dictation's", n)
+	}
+}

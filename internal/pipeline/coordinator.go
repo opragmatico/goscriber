@@ -114,6 +114,11 @@ type Acquirer interface {
 	Acquire(ctx context.Context) (release func(), err error)
 }
 
+// residentReporter is an engine that knows whether its model is in memory
+// now, such as *autounload.Engine, which unloads an idle one but keeps it
+// selected.
+type residentReporter interface{ Resident() bool }
+
 // Feedback plays the start and stop cues and mutes other audio while
 // recording. *audio.Feedback implements it.
 type Feedback interface {
@@ -143,9 +148,10 @@ func FeedbackOptions(s config.Settings) audio.FeedbackOptions {
 // is required.
 type Options struct {
 	Recorder Recorder
-	// Engine transcribes. The coordinator loads the model into it on the
-	// first recording and whenever the selected model changes, and holds it
-	// with Acquire when the engine is an Acquirer.
+	// Engine transcribes. The coordinator loads the model into it at a
+	// recording that needs another model than the one loaded, and in the
+	// background from SyncModel, and holds it with Acquire when the engine
+	// is an Acquirer.
 	Engine engine.Engine
 	Models ModelSource
 	Output Output
@@ -174,10 +180,10 @@ type Options struct {
 //
 // Its actions never block, so they are safe on the UI thread. They run in
 // order on the coordinator's own goroutine; the model loads and decodes on a
-// second goroutine that owns the engine; the text stages and the delivery
-// run on a third, per session. Every session has an ID, and anything that
-// finishes after its session was cancelled is dropped. Follow the state with
-// Subscribe.
+// second goroutine that owns the engine, which also loads the model in the
+// background (SyncModel); the text stages and the delivery run on a third,
+// per session. Every session has an ID, and anything that finishes after its
+// session was cancelled is dropped. Follow the state with Subscribe.
 //
 // Recordings are transcribed while they go on. A streaming model decodes the
 // audio through a stream as it arrives, and its interim results are
@@ -202,6 +208,9 @@ type Coordinator struct {
 	jobs    *serial // the engine goroutine: loads and decodes, in order
 	done    chan struct{}
 	tasks   sync.WaitGroup // the level forwarder and the per-session finishers
+	// bg is the context of background loads; Close cancels it.
+	bg     context.Context
+	stopBg context.CancelFunc
 
 	mu     sync.Mutex // guards what follows
 	state  State
@@ -209,11 +218,17 @@ type Coordinator struct {
 	lastID uint64
 	subs   map[*subscriber]struct{}
 	closed bool
+	// syncQueued: a syncModel job waits on the engine goroutine.
+	// syncPending: one found a session in progress, so the session's end
+	// queues another.
+	syncQueued, syncPending bool
 
 	// loaded is the spec the engine holds, or nil, and info what the model
-	// can do. Only the engine goroutine touches them.
+	// can do. failed is the spec a background load last failed on, which
+	// only a recording tries again. Only the engine goroutine touches them.
 	loaded *engine.LoadSpec
 	info   engine.ModelInfo
+	failed *engine.LoadSpec
 }
 
 // session is one dictation, from Start to idle.
@@ -265,6 +280,7 @@ func New(opts Options) *Coordinator {
 		done:     make(chan struct{}),
 		subs:     map[*subscriber]struct{}{},
 	}
+	c.bg, c.stopBg = context.WithCancel(context.Background())
 	levels := c.rec.Levels()
 	c.tasks.Go(func() { c.forwardLevels(levels) })
 	return c
@@ -310,6 +326,123 @@ func (c *Coordinator) do(a Action) {
 	})
 }
 
+// SyncModel brings the engine in line with the model the settings select, in
+// the background, so a recording need not wait for a load. Call it at launch
+// and after the settings change.
+//
+// With preload_model, and an unload timeout other than 0 (the model would
+// unload at once), it loads the selected model unless the engine holds it
+// already: at launch, and when another model, quantisation or accelerator is
+// selected. A model it failed to load is left to the next recording. Without preloading it only replaces a model the engine holds in
+// memory, so a switch frees the old model at once and the next recording
+// finds the new one ready, while an idle model that was unloaded stays
+// unloaded until the next recording. When no model is ready to load, it
+// unloads the one the engine holds. It never downloads anything.
+//
+// The load runs on the engine goroutine, as a recording's does: a recording
+// started meanwhile records, and is transcribed once the model is ready. No
+// load starts while a session is in progress; the session's end brings the
+// engine in line instead. EventModel follows each load.
+func (c *Coordinator) SyncModel() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.queueSyncLocked()
+}
+
+// queueSyncLocked queues a syncModel job unless one is waiting already.
+func (c *Coordinator) queueSyncLocked() {
+	if c.closed || c.syncQueued {
+		return
+	}
+	c.syncQueued = true
+	c.jobs.post(c.syncModel)
+}
+
+// syncModel runs SyncModel's work on the engine goroutine.
+func (c *Coordinator) syncModel() {
+	c.mu.Lock()
+	c.syncQueued = false
+	if c.closed {
+		c.mu.Unlock()
+		return
+	}
+	if c.sess != nil {
+		c.syncPending = true
+		c.mu.Unlock()
+		return
+	}
+	c.mu.Unlock()
+
+	settings := c.settings()
+	model, err := c.models.Resolve(settings)
+	if err != nil {
+		if c.loaded != nil {
+			c.log.Info("unloading the model: no model is ready to replace it", "model", c.loaded.ID, "reason", err)
+			c.loaded, c.info = nil, engine.ModelInfo{}
+			if err := c.eng.Unload(); err != nil {
+				c.log.Warn("unloading the model failed", "err", err)
+			}
+		}
+		return
+	}
+	if (c.loaded != nil && *c.loaded == model.Spec) || (c.failed != nil && *c.failed == model.Spec) {
+		return
+	}
+	if !preloads(settings) && !c.holdsModel() {
+		return
+	}
+	start := time.Now()
+	if err := c.loadModel(c.bg, 0, model); err != nil {
+		if c.bg.Err() == nil {
+			spec := model.Spec
+			c.failed = &spec
+			c.log.Warn("loading the model in the background failed; the next dictation tries again", "model", model.Spec.ID, "err", err)
+		}
+		return
+	}
+	c.log.Info("model loaded in the background", "model", model.Spec.ID, "cpu", model.Spec.CPU, "took", round(time.Since(start)))
+}
+
+// preloads reports whether the settings ask for the selected model to be
+// loaded before it is needed.
+func preloads(s config.Settings) bool {
+	return s.PreloadModel && s.ModelUnloadTimeout != 0
+}
+
+// holdsModel reports whether the engine has a model in memory. Engine
+// goroutine only.
+func (c *Coordinator) holdsModel() bool {
+	if c.loaded == nil {
+		return false
+	}
+	r, ok := c.eng.(residentReporter)
+	return !ok || r.Resident()
+}
+
+// loadModel loads m into the engine and publishes EventModel as the load
+// starts and ends, for session id, or 0 for a background load. It runs on
+// the engine goroutine.
+func (c *Coordinator) loadModel(ctx context.Context, id uint64, m Model) error {
+	name := displayName(m)
+	c.emitModel(id, name, ModelLoading)
+	info, err := c.eng.Load(ctx, m.Spec)
+	if err != nil {
+		c.loaded, c.info = nil, engine.ModelInfo{}
+		c.emitModel(id, name, ModelFailed)
+		return err
+	}
+	spec := m.Spec
+	c.loaded, c.info, c.failed = &spec, info, nil
+	c.emitModel(id, name, ModelReady)
+	return nil
+}
+
+func (c *Coordinator) emitModel(id uint64, name string, l ModelLoad) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.emitLocked(Event{Kind: EventModel, Session: id, State: c.state, Model: name, Load: l})
+}
+
 // State returns the current state.
 func (c *Coordinator) State() State {
 	c.mu.Lock()
@@ -342,9 +475,10 @@ func (c *Coordinator) Subscribe() (<-chan Event, func()) {
 	}
 }
 
-// Close discards the session in progress, waits for the coordinator's
-// goroutines and ends every subscription. A decode in progress may not stop
-// at once: Close waits for it. Actions after Close do nothing.
+// Close discards the session in progress, cancels a background load, waits
+// for the coordinator's goroutines and ends every subscription. A decode or
+// load in progress may not stop at once: Close waits for it. Actions after
+// Close do nothing.
 func (c *Coordinator) Close() {
 	c.mu.Lock()
 	if c.closed {
@@ -353,6 +487,7 @@ func (c *Coordinator) Close() {
 	}
 	c.closed = true
 	c.mu.Unlock()
+	c.stopBg()
 
 	c.actions.close()
 	c.mu.Lock()
@@ -544,19 +679,16 @@ func (c *Coordinator) prepare(s *session) {
 	if s.ctx.Err() != nil {
 		return
 	}
-	spec := s.model.Spec
-	if c.loaded == nil || *c.loaded != spec {
+	if c.loaded == nil || *c.loaded != s.model.Spec {
 		start := time.Now()
-		info, err := c.eng.Load(s.ctx, spec)
+		err := c.loadModel(s.ctx, s.id, s.model)
 		s.timings.load = time.Since(start)
 		if err != nil {
-			c.loaded, c.info = nil, engine.ModelInfo{}
 			if s.ctx.Err() == nil {
 				s.prepErr = &loadError{err: err}
 			}
 			return
 		}
-		c.loaded, c.info = &spec, info
 		c.stageDone(s, "load", s.timings.load)
 	}
 	if a, ok := c.eng.(Acquirer); ok {
@@ -863,10 +995,16 @@ func (c *Coordinator) refuseLocked(a Action, why string) {
 	c.emitLocked(Event{Kind: EventRefused, Session: id, State: c.state, Action: a})
 }
 
-// endLocked returns to idle from session s, which must be the current one.
+// endLocked returns to idle from session s, which must be the current one,
+// and brings the engine in line with the settings if a SyncModel waited for
+// the session to end.
 func (c *Coordinator) endLocked(s *session) {
 	c.sess = nil
 	c.setStateLocked(StateIdle, s.id)
+	if c.syncPending {
+		c.syncPending = false
+		c.queueSyncLocked()
+	}
 }
 
 func (c *Coordinator) setStateLocked(st State, id uint64) {

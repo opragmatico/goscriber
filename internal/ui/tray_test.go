@@ -177,6 +177,44 @@ func TestTrayModelCanComeAndGo(t *testing.T) {
 	}
 }
 
+// While a model loads, a disabled item under the model says so, and
+// dictation stays available.
+func TestTrayShowsTheModelLoading(t *testing.T) {
+	host, c := &fakeHost{}, calls{}
+	tray := NewTray(host, TrayOptions{Actions: c.actions(), Model: "parakeet-tdt-0.6b-v2"})
+
+	tray.SetLoading("Parakeet TDT 0.6B v2")
+	want := []string{LabelStartDictation, LabelCancel, "---", "Model: parakeet-tdt-0.6b-v2", "Loading Parakeet TDT 0.6B v2…", "---", LabelSettings, "---", LabelQuit}
+	if got := labels(host.menu); strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("menu = %v, want %v", got, want)
+	}
+	if !findItem(t, host.menu, LabelLoadingPrefix).Disabled {
+		t.Error("the loading item is only a status")
+	}
+	if tray.Loading() != "Parakeet TDT 0.6B v2" {
+		t.Errorf("Loading() = %q", tray.Loading())
+	}
+	click(t, findItem(t, host.menu, LabelStartDictation))
+	if c["start"] != 1 {
+		t.Errorf("calls = %v; dictation should stay available while the model loads", c)
+	}
+
+	tray.SetState(TrayRecording)
+	if !hasItem(host.menu, "Loading Parakeet TDT 0.6B v2…") {
+		t.Error("the loading item should stay while recording")
+	}
+
+	menu := host.menu
+	tray.SetLoading("Parakeet TDT 0.6B v2")
+	if host.menu != menu {
+		t.Error("an unchanged loading model should not rebuild the menu")
+	}
+	tray.SetLoading("")
+	if hasItem(host.menu, "Loading Parakeet TDT 0.6B v2…") {
+		t.Error("the loading item should go once the load ends")
+	}
+}
+
 func TestTrayQuit(t *testing.T) {
 	host, c := &fakeHost{}, calls{}
 	NewTray(host, TrayOptions{Actions: c.actions()})

@@ -35,7 +35,7 @@ type streamRun struct {
 // push as a live caller would, then finishes the stream, drains it to
 // io.EOF and closes it. endpointAt, when positive, forces an endpoint once
 // that much audio is in.
-func streamClip(t *testing.T, e *Engine, samples []float32, rate int, chunk, endpointAt time.Duration, opts engine.Options) streamRun {
+func streamClip(t *testing.T, e engine.Engine, samples []float32, rate int, chunk, endpointAt time.Duration, opts engine.Options) streamRun {
 	t.Helper()
 	s, err := e.StartStream(context.Background(), opts)
 	if err != nil {

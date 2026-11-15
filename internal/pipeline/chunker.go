@@ -24,6 +24,11 @@ type chunkPlan struct {
 	history    time.Duration // the audio the pause threshold follows
 }
 
+// LongestChunk is the longest piece of a recording that an offline model
+// decodes at once with long_form_chunking. The app warms models up on that
+// much silence, so their compute buffers fit every chunk.
+const LongestChunk = 25 * time.Second
+
 // defaultChunkPlan keeps chunks between 3 and 25 s. Parakeet TDT decodes
 // 25 s in about 140 ms on an M4 Max with Metal, so the chunk still open
 // when the user stops is decoded well within the release budget, and no
@@ -33,7 +38,7 @@ var defaultChunkPlan = chunkPlan{
 	window:     20 * time.Millisecond,
 	minChunk:   3 * time.Second,
 	fullChunk:  15 * time.Second,
-	maxChunk:   25 * time.Second,
+	maxChunk:   LongestChunk,
 	longPause:  700 * time.Millisecond,
 	shortPause: 250 * time.Millisecond,
 	search:     10 * time.Second,
