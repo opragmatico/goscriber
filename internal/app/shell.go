@@ -69,6 +69,9 @@ type launch struct {
 	Tray   bool // install the tray icon and menu
 	Window bool // open the settings window at launch
 	Hidden bool // start_hidden or --start-hidden asked for no window at launch
+	// Onboarding opens the window on onboarding, where the user left it,
+	// in place of the settings pages.
+	Onboarding bool
 }
 
 // planLaunch follows Handy: the tray is shown when the desktop supports one,
@@ -76,12 +79,17 @@ type launch struct {
 // the app opens no window until one is asked for (so start_hidden has nothing
 // to hide yet). Without one the settings window is the only way in, so it
 // opens even when starting hidden, and macOS keeps the Dock icon.
-func planLaunch(s config.Settings, opts Options, traySupported bool) launch {
+//
+// Onboarding that is not finished opens at launch, unless the app starts
+// hidden with a tray: the tray's "No model: Download…" leads back to it.
+func planLaunch(s config.Settings, opts Options, traySupported, onboarding bool) launch {
 	tray := traySupported && s.ShowTrayIcon && !opts.NoTray
+	hidden := s.StartHidden || opts.StartHidden
 	return launch{
-		Tray:   tray,
-		Window: !tray,
-		Hidden: s.StartHidden || opts.StartHidden,
+		Tray:       tray,
+		Window:     !tray,
+		Hidden:     hidden,
+		Onboarding: onboarding && (!tray || !hidden),
 	}
 }
 
@@ -121,6 +129,11 @@ type shell struct {
 	stopNotices  func()
 	hasModel     bool // the last settings named a model
 	modelChecked bool // followModel has run
+	// onboardingStep is where onboarding resumes at launch.
+	onboardingStep ui.OnboardingStep
+	// askedPermissions asks for the permissions once per launch: at launch,
+	// or once onboarding, whose permissions step asks instead, is over.
+	askedPermissions sync.Once
 
 	unsubscribe func()
 	following   sync.WaitGroup
@@ -133,16 +146,18 @@ type shell struct {
 
 func newShell(rt *Runtime, a fyne.App, opts Options) *shell {
 	desk, traySupported := a.(desktop.App)
+	step, onboarding := pendingOnboarding(a.Preferences(), rt.Settings.Get())
 	sh := &shell{
-		rt:      rt,
-		app:     a,
-		opts:    opts,
-		plan:    planLaunch(rt.Settings.Get(), opts, traySupported),
-		do:      fyne.Do,
-		desk:    desk,
-		quit:    make(chan struct{}),
-		notices: notice.NewHub(notice.Options{Log: rt.Log.Logger}),
-		trusted: accessibilityTrusted,
+		rt:             rt,
+		app:            a,
+		opts:           opts,
+		plan:           planLaunch(rt.Settings.Get(), opts, traySupported, onboarding),
+		onboardingStep: step,
+		do:             fyne.Do,
+		desk:           desk,
+		quit:           make(chan struct{}),
+		notices:        notice.NewHub(notice.Options{Log: rt.Log.Logger}),
+		trusted:        accessibilityTrusted,
 	}
 	sh.svc = newServices(rt, opts, sh.notices)
 	sh.permissionRows = &latest{do: func(f func()) { sh.do(f) }}
@@ -169,7 +184,7 @@ func (sh *shell) start() {
 				StartDictation: func() { sh.dictate(pipeline.ActionStart) },
 				StopDictation:  func() { sh.dictate(pipeline.ActionStop) },
 				Cancel:         func() { sh.dictate(pipeline.ActionCancel) },
-				OpenModels:     func() { sh.settings.Show(ui.PageModels) },
+				OpenModels:     sh.openModels,
 				OpenSettings:   func() { sh.settings.Show(ui.PageGeneral) },
 				Quit:           sh.app.Quit,
 			},
@@ -205,22 +220,30 @@ func (sh *shell) start() {
 		"tray", sh.plan.Tray,
 		"window_at_launch", sh.plan.Window,
 		"start_hidden", sh.plan.Hidden,
+		"onboarding", sh.plan.Onboarding,
 		"model", model,
 		"shortcut", s.TranscribeShortcut,
 		"activation", string(s.ActivationMode))
 }
 
-// started runs on the main thread once Fyne is up.
+// started runs on the main thread once Fyne is up. Onboarding asks for the
+// permissions on its own step, so the launch leaves them to it.
 func (sh *shell) started() {
 	platform.SetDockIcon(!sh.plan.Tray)
-	if sh.plan.Window {
+	switch {
+	case sh.plan.Onboarding:
+		sh.rt.Log.Info("opening onboarding", "step", sh.onboardingStep.String())
+		sh.settings.ShowOnboarding(sh.onboardingStep)
+	case sh.plan.Window:
 		sh.settings.Show(ui.PageGeneral)
 	}
 	if sh.secureInput != nil {
 		sh.following.Go(sh.watchSecureInput)
 	}
 	if runtime.GOOS == "darwin" {
-		go sh.askPermissions()
+		if !sh.plan.Onboarding {
+			sh.askPermissionsOnce()
+		}
 		sh.following.Go(sh.watchPermissions)
 	}
 	sh.following.Go(sh.openMicrophone)
@@ -293,6 +316,8 @@ func (sh *shell) newSettingsWindow() *ui.SettingsWindow {
 		// the very keys the user presses.
 		OnRecordShortcut: func(on bool) { sh.hotkeys.Suspend(on) },
 		OpenFolder:       func(dir string) { sh.openURL((&url.URL{Scheme: "file", Path: dir}).String()) },
+		OnOnboardingStep: sh.onboardingStepShown,
+		OnOnboardingDone: sh.onboardingDone,
 		Do:               func(f func()) { sh.do(f) },
 		Log:              sh.rt.Log.Logger,
 	})

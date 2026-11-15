@@ -13,9 +13,16 @@ type PermissionRow struct {
 	Status string // such as "granted" or "denied"
 	// OK is true when the permission lets Goscriber work.
 	OK bool
-	// OnOpen opens System Settings at the permission; nil shows no button.
+	// OnOpen grants the permission: it asks for it, or opens System
+	// Settings at it. Nil shows no button.
 	OnOpen func()
+	// ActionLabel is OnOpen's button; empty means LabelOpenSystemSettings.
+	ActionLabel string
 }
+
+// LabelOpenSystemSettings is a permission's button unless its row names
+// another.
+const LabelOpenSystemSettings = "Open System Settings"
 
 // PermissionsNone is what the Permissions page says on a system without
 // permissions to grant.
@@ -32,6 +39,7 @@ func (w *SettingsWindow) SetPermissions(rows []PermissionRow) {
 		w.permBox.Objects = w.permissionRows()
 		w.permBox.Refresh()
 	}
+	w.refreshOnboarding()
 }
 
 func (w *SettingsWindow) permissionsPage() fyne.CanvasObject {
@@ -52,7 +60,11 @@ func (w *SettingsWindow) permissionRows() []fyne.CanvasObject {
 		head := widget.NewLabelWithStyle(mark+" "+r.Title+": "+r.Status, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 		row := container.NewVBox(head, paragraph(r.Why))
 		if r.OnOpen != nil {
-			row.Add(container.NewHBox(widget.NewButton("Open System Settings", r.OnOpen)))
+			label := r.ActionLabel
+			if label == "" {
+				label = LabelOpenSystemSettings
+			}
+			row.Add(container.NewHBox(widget.NewButton(label, r.OnOpen)))
 		}
 		out = append(out, row)
 	}

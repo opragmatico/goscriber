@@ -64,8 +64,8 @@ func TestNoModelNotice(t *testing.T) {
 		t.Fatalf("banner %+v", b)
 	}
 	b.OnAction()
-	if !sh.settings.Visible() || sh.settings.Page() != ui.PageModels {
-		t.Error("the banner's button should open the Models page")
+	if step, on := sh.settings.Onboarding(); !sh.settings.Visible() || !on || step != ui.StepModel {
+		t.Error("with no model, the banner's button should open onboarding's model step")
 	}
 
 	if err := sh.rt.Settings.Update(func(s *config.Settings) { s.SelectedModel = "parakeet-tdt-0.6b-v2" }); err != nil {

@@ -4,13 +4,13 @@ Goscriber needs two of macOS's privacy permissions. Both live in System Settings
 
 | Permission | Why | Without it | Asked for |
 | --- | --- | --- | --- |
-| **Microphone** | Recording. | macOS hands the app silence, not an error. Dictation refuses to start and raises "Microphone access needed". | At launch, while macOS has never asked: its own prompt, once. |
-| **Accessibility** | The global shortcut (an active keyboard event tap) and pasting or typing (posted key events). | The shortcut does not register and pastes are dropped. "Permission needed" is raised. | At launch, once: macOS's dialog offering to open System Settings. Goscriber remembers it asked (in its Fyne preferences) and afterwards leaves it to the notice's button. |
+| **Microphone** | Recording. | macOS hands the app silence, not an error. Dictation refuses to start and raises "Microphone access needed". | At launch, while macOS has never asked: its own prompt, once. At the first launch, onboarding's permissions step asks instead, from its Allow… button. |
+| **Accessibility** | The global shortcut (an active keyboard event tap) and pasting or typing (posted key events). | The shortcut does not register and pastes are dropped. "Permission needed" is raised. | At launch, once: macOS's dialog offering to open System Settings. Goscriber remembers it asked (in its Fyne preferences) and afterwards leaves it to the notice's button. At the first launch, onboarding's permissions step shows the dialog instead, from its Allow… button. |
 | **Input Monitoring** | Only listen-only event taps. | Nothing today: the shortcut library's tap is an active one, which Accessibility covers. | Never. The status is reported, for a future listen-only backend (modifier-only shortcuts). |
 
 Each missing permission raises a notice whose button opens System Settings at the right pane (`x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone`, `…Privacy_Accessibility`, `…Privacy_ListenEvent`). The tray turns amber and its menu starts with the same link. Every two seconds the app checks again. Once a permission is granted its notice ends, and Accessibility also re-registers the shortcut, without a restart.
 
-The settings window's **Permissions** page shows where each one stands, with the same buttons. On other systems it says no permission is needed. The status API behind it is `platform.StatusOf`, `platform.Request` and `platform.PermissionStates`, ready for onboarding (#31).
+The settings window's **Permissions** page and onboarding's permissions step show where each one stands, live, with a button: **Allow…** shows macOS's prompt while the microphone has never been asked for or the Accessibility dialog has not been shown, and **Open System Settings** opens the pane otherwise. On other systems they say no permission is needed. The status API behind them is `platform.StatusOf`, `platform.Request` and `platform.PermissionStates`.
 
 A recording that is nothing but exact zeros, which is what macOS delivers without the permission, also logs a warning naming the permission and the input device.
 
@@ -41,4 +41,4 @@ tccutil reset Accessibility io.github.opragmatico.goscriber
 rm ~/Library/Preferences/fyne/io.github.opragmatico.goscriber/preferences.json
 ```
 
-The last one forgets that Goscriber already showed the Accessibility dialog: Fyne keeps the app's preferences in that file.
+The last one forgets that Goscriber already showed the Accessibility dialog, and that onboarding is over, so it opens again at the next launch: Fyne keeps the app's preferences in that file.

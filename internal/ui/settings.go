@@ -87,6 +87,12 @@ type SettingsOptions struct {
 	// OpenFolder shows a folder, such as the logs directory, in the file
 	// manager. Nil leaves those buttons out.
 	OpenFolder func(dir string)
+	// OnOnboardingStep runs each time onboarding shows a step, so the app
+	// can resume it there after a quit.
+	OnOnboardingStep func(step OnboardingStep)
+	// OnOnboardingDone runs when the user finishes onboarding, or skips the
+	// rest of it.
+	OnOnboardingDone func(skipped bool)
 	// Do runs f on the Fyne main thread; nil means fyne.Do. Downloads, the
 	// model list and the device list are read in the background and shown
 	// through it.
@@ -128,9 +134,10 @@ type SettingsWindow struct {
 	languageNote   *widget.Label
 	detectedLabel  *widget.Label
 
-	devices deviceState
-	models  modelsState
-	logs    logsState
+	devices    deviceState
+	models     modelsState
+	logs       logsState
+	onboarding onboardingState
 
 	// confirm asks before something that cannot be undone, such as
 	// deleting a model, with action as the button that does it; tests
@@ -182,14 +189,16 @@ func (w *SettingsWindow) log() *slog.Logger {
 	return slog.Default()
 }
 
-// Show opens the window on page p and brings it to the front. The Debug
-// page opens only in debug mode; otherwise Show opens General instead.
-// Each time, the model files and audio devices are read again, since they
-// may have changed while the window was closed.
+// Show opens the window on page p and brings it to the front, leaving
+// onboarding if it is on screen. The Debug page opens only in debug mode;
+// otherwise Show opens General instead. Each time, the model files and
+// audio devices are read again, since they may have changed while the
+// window was closed.
 func (w *SettingsWindow) Show(p Page) {
 	if w.win == nil {
 		w.create()
 	}
+	w.leaveOnboarding()
 	w.selectPage(p)
 	w.win.Show()
 	w.win.RequestFocus()
@@ -361,13 +370,20 @@ func (w *SettingsWindow) SetBanner(b *Banner) {
 	}
 }
 
-// layout puts the banner, if any, above the pages.
+// layout puts the banner, if any, above the pages, or above the step of
+// onboarding on screen.
 func (w *SettingsWindow) layout() {
+	var content fyne.CanvasObject = w.tabs
+	title := SettingsTitle
+	if w.onboarding.active {
+		content, title = w.onboarding.content, OnboardingTitle
+	}
+	w.win.SetTitle(title)
 	if w.banner == nil {
-		w.win.SetContent(w.tabs)
+		w.win.SetContent(content)
 		return
 	}
-	w.win.SetContent(container.NewBorder(bannerView(w.banner), nil, nil, nil, w.tabs))
+	w.win.SetContent(container.NewBorder(bannerView(w.banner), nil, nil, nil, content))
 }
 
 func bannerView(b *Banner) fyne.CanvasObject {
