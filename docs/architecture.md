@@ -81,7 +81,11 @@ internal/
     ├── tray.go
     ├── overlay.go
     ├── onboarding.go
-    └── settings/          # one file per settings page
+    ├── settings.go        # the settings window: sidebar, banner, debug shortcut
+    ├── settings_bind.go   # widgets bound to settings fields, row layout
+    ├── settings_*.go      # one file per page: general, models, advanced, history, debug, about…
+    ├── shortcut_input.go  # records a key combination
+    └── word_list.go       # edits custom and filler words
 packaging/
 ├── macos/Info.plist       # bundle metadata (LSUIElement: menu bar app, no Dock icon)
 └── huggingface/           # model cards of the GGUF repositories Goscriber publishes
@@ -102,6 +106,28 @@ third_party/
 - **No window at launch** while the tray is shown; windows open from the menu. Without a tray (`--no-tray`, the `show_tray_icon` setting, or a desktop with no tray) the settings window opens at launch, even with `--start-hidden`, and closing it quits, as in Handy.
 - **macOS**: with a tray the app is an accessory app with no Dock icon. The bundle's Info.plist sets `LSUIElement`, and the app also sets the activation policy at startup, because GLFW makes every app a regular one and plain `go run` builds have no Info.plist. Without a tray the Dock icon stays as the way back in.
 - **Shutdown**: Quit, SIGINT and SIGTERM all end Fyne's main loop; the app then stops following settings and closes the log.
+
+## Settings window
+
+`internal/ui`'s `SettingsWindow` is one Fyne window with a sidebar of pages, opened from the tray (Settings…; "No model: Download…" opens it on the Models page) and by notices' buttons. Light and dark follow the OS, as Fyne does by default.
+
+| Page | What it holds |
+| --- | --- |
+| **General** | the dictation and cancel shortcuts (recorded by pressing them), activation mode and hold threshold, microphone, start / stop sounds with their volume and output device, mute while recording, overlay style and position |
+| **Models** | a card per catalog model: what it does, size, licence, quantisation (Parakeet TDT v2 has two), status, and Download (with progress, cancellable), Delete (asks first) and Use. With no model downloaded the page says so. Below the cards, the [language picker](#language) |
+| **Advanced** | app (start hidden, tray icon, launch at login, unload timeout), output (paste method, clipboard, delays, trailing space, Return), transcription (accelerator, live-text latency, decoding while recording, always-on microphone, VAD and its thresholds, shortest recording, silence threshold) and text (filler words, custom words with their [boost and correction threshold](#custom-vocabulary)) |
+| **Permissions** | each macOS permission, with a button to System Settings when missing ([permissions.md](permissions.md)) |
+| **History** | how many dictations and how long recordings are kept; the list itself comes with #32 |
+| **Debug** | only in debug mode: debug mode, log level, running the engine in the app ([profiling](#process-isolation)), and a viewer over the last 400 records of the logger's in-memory ring |
+| **About** | Goscriber's version, the NeMo-Speech.cpp runtime's (or "not built in"), where settings and logs live, and the licences of what Goscriber is built with and of the models |
+
+- **Bound to the settings store.** Every widget shows one field of `config.Settings` and saves a change through `Store.Update` at once, so it applies to the running app and persists; a value the store refuses is logged and the widget shows the stored one again. The shell passes changes made elsewhere (the settings file, the tray) on with `SetSettings`. Each binding is declared in one line (`boolSetting`, `choiceSetting`, `sliderSetting`, `intEntrySetting` in `settings_bind.go`) with the field's JSON name and an accessor for it, and a test checks against the struct's tags that every field but `schema_version` has a widget on some page, and that each binding changes the field its name says. Sliders save when let go (or at each arrow-key step), not at every step of a drag.
+- **Models.** The page reads the model files through `models.Manager` in the background each time the window opens, since a file's first look hashes it. A model can be used only once downloaded. The first model downloaded, or one downloaded while the selected model is missing, is selected: the user just chose it. Deleting the model in use unselects it, so dictation asks for a model rather than failing.
+- **Shortcuts.** The shortcut field listens once clicked: hold the modifiers, press the key. It accepts what `internal/hotkey` would register for that purpose, says why otherwise (a plain letter, the other shortcut's keys), and Escape alone or clicking elsewhere stops it without a change. While it listens the global shortcuts are suspended (`hotkey.Manager.Suspend`), so pressing the current one reaches the window instead of starting dictation.
+- **Debug mode.** Cmd+Shift+D (Ctrl+Shift+D elsewhere) inside the window toggles the `debug_mode` setting, which shows or hides the Debug page and the tray's Debug menu; `--debug` keeps both shown for the run.
+- **Filler words.** A null `custom_filler_words` is the built-in list ([text cleanup](#text-cleanup)), shown as English's as the start of the user's own; removing the last word saves an empty list (remove none), and a button goes back to the built-in one.
+
+`GOSCRIBER_RENDER_DIR=dir go test -run TestRenderSettingsPages ./internal/ui` writes every page, in the light and dark themes, to PNGs through Fyne's test driver, to check the layout without running the app.
 
 ## Overlay
 
@@ -129,7 +155,7 @@ On macOS Goscriber needs the **Microphone** permission to record and **Accessibi
 
 ## Shortcuts
 
-`internal/hotkey` registers two global shortcuts from the settings: **transcribe** (`option+space` on macOS, `ctrl+space` on Windows, `ctrl+alt+space` on Linux) and **cancel** (`escape`). A shortcut is modifiers and one key, written as settings store it (`ctrl+shift+d`, `cmd+f5`); a plain letter, digit or Space is refused because a global shortcut swallows its key in every app, and only the cancel shortcut may be a plain Escape. The cancel shortcut is registered only while dictation is recording, so Escape works normally the rest of the time.
+`internal/hotkey` registers two global shortcuts from the settings (recorded on the settings window's General page): **transcribe** (`option+space` on macOS, `ctrl+space` on Windows, `ctrl+alt+space` on Linux) and **cancel** (`escape`). A shortcut is modifiers and one key, written as settings store it (`ctrl+shift+d`, `cmd+f5`); a plain letter, digit or Space is refused because a global shortcut swallows its key in every app, and only the cancel shortcut may be a plain Escape. The cancel shortcut is registered only while dictation is recording, so Escape works normally the rest of the time.
 
 Key-downs and key-ups of the transcribe shortcut drive the activation mode: **toggle** (press to start, press to stop), **push-to-talk** (hold to record) and **hold-or-toggle**, the default (a press starts recording; released after `hold_threshold_ms`, 300 ms, it was push-to-talk and stops, released sooner it was a tap and recording goes on until the next press). The manager owns the registrations on one goroutine and re-registers when the settings change, without a restart; a shortcut that cannot be registered is logged and handed to `OnError`, and the next settings change retries it.
 
@@ -261,7 +287,7 @@ The `Coordinator` (`internal/pipeline/coordinator.go`) owns a single state machi
 - **Failures**: an engine error ends in `idle` with `transcription_failed`, `model_corrupt` or `no_model`; a failed delivery with `paste_failed` or `permission_missing`. Each is raised before the state returns to idle. No speech is not a failure.
 - **Timings**: each stage's duration is logged at debug level, and a summary line per session (`dictation timings`); the info-level line says only whether something was delivered and how many characters, never the text.
 
-Until onboarding (#31) and the Models page (#30) exist, choose the model by setting `selected_model` in `settings.json` to a downloaded model's id, for example `"nemotron-3.5-asr-streaming-0.6b"` after `goscriber models pull nemotron-3.5-asr-streaming-0.6b`.
+The model is chosen on the settings window's Models page, which downloads it too. From the command line, `goscriber models pull nemotron-3.5-asr-streaming-0.6b` downloads it, and `selected_model` in `settings.json` selects it.
 
 ### Language
 

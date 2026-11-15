@@ -1,8 +1,8 @@
 package app
 
 import (
+	"net/url"
 	"runtime"
-	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -11,20 +11,24 @@ import (
 	fyneapp "fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/driver/desktop"
 
+	"github.com/opragmatico/goscriber/internal/audio"
 	"github.com/opragmatico/goscriber/internal/config"
 	"github.com/opragmatico/goscriber/internal/hotkey"
 	"github.com/opragmatico/goscriber/internal/notice"
 	"github.com/opragmatico/goscriber/internal/pipeline"
 	"github.com/opragmatico/goscriber/internal/platform"
+	"github.com/opragmatico/goscriber/internal/text"
 	"github.com/opragmatico/goscriber/internal/ui"
 )
 
-// newHotkeyBackend registers global shortcuts with the OS, and
-// accessibilityTrusted reports the macOS Accessibility permission; tests
-// replace them.
+// newHotkeyBackend registers global shortcuts with the OS,
+// accessibilityTrusted reports the macOS Accessibility permission, and
+// listDevices lists the audio devices for the settings window (nil: the
+// system's); tests replace them.
 var (
 	newHotkeyBackend     = hotkey.SystemBackend
 	accessibilityTrusted = platform.AccessibilityTrusted
+	listDevices          func() (inputs, outputs []audio.Device, err error)
 )
 
 // How often the shell checks for macOS Secure Event Input, and how long it
@@ -156,14 +160,7 @@ func (sh *shell) start() {
 
 	sh.app.SetIcon(ui.AppIcon())
 
-	sh.settings = ui.NewSettingsWindow(sh.app, ui.SettingsInfo{
-		Version:      sh.opts.Version,
-		SettingsFile: sh.rt.Settings.Path(),
-		LogsDir:      sh.rt.Paths.LogsDir(),
-	}, sh.settingsClosed)
-	sh.settings.SetModel(model)
-	sh.settings.SetLanguage(languageSetting(s))
-	sh.settings.OnLanguage(sh.pickLanguage)
+	sh.settings = sh.newSettingsWindow()
 	sh.refreshPermissions()
 
 	if sh.plan.Tray {
@@ -269,6 +266,38 @@ func (sh *shell) watchSecureInput() {
 	}
 }
 
+// newSettingsWindow prepares the settings window over the settings store,
+// the model files, the log and the shortcuts.
+func (sh *shell) newSettingsWindow() *ui.SettingsWindow {
+	engineVersion := ""
+	if sh.opts.EngineVersion != nil {
+		engineVersion = sh.opts.EngineVersion()
+	}
+	return ui.NewSettingsWindow(sh.app, ui.SettingsOptions{
+		Info: ui.SettingsInfo{
+			Version:       sh.opts.Version,
+			EngineVersion: engineVersion,
+			SettingsFile:  sh.rt.Settings.Path(),
+			LogsDir:       sh.rt.Paths.LogsDir(),
+		},
+		Store: sh.rt.Settings,
+		// The language-independent fillers and English's: the list most
+		// transcripts get.
+		DefaultFillerWords: text.Fillers("en"),
+		Models:             sh.svc.files,
+		Devices:            listDevices,
+		Logs:               sh.rt.Log.Ring().Entries,
+		ForceDebug:         sh.opts.Debug,
+		OnClose:            sh.settingsClosed,
+		// While a shortcut field listens, the global shortcuts would take
+		// the very keys the user presses.
+		OnRecordShortcut: func(on bool) { sh.hotkeys.Suspend(on) },
+		OpenFolder:       func(dir string) { sh.openURL((&url.URL{Scheme: "file", Path: dir}).String()) },
+		Do:               func(f func()) { sh.do(f) },
+		Log:              sh.rt.Log.Logger,
+	})
+}
+
 // settingsClosed runs after the user closes the settings window, which hides
 // it. Without a tray the window was the only way into the app, so closing it
 // quits.
@@ -321,13 +350,7 @@ func (sh *shell) stopFollowing() {
 // icon once it is installed.
 func (sh *shell) applySettings(s config.Settings) {
 	model := modelName(s)
-	sh.settings.SetModel(model)
-	l := languageSetting(s)
-	if !slices.Equal(l.Options, sh.settings.Language().Options) {
-		// Another model: what the last one detected says nothing about it.
-		sh.settings.SetDetected("")
-	}
-	sh.settings.SetLanguage(l)
+	sh.settings.SetSettings(s)
 	if sh.tray != nil {
 		sh.tray.SetModel(model)
 		sh.tray.SetDebug(sh.debugMode(s))

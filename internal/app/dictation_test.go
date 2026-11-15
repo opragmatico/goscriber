@@ -16,23 +16,28 @@ import (
 	"github.com/opragmatico/goscriber/internal/config"
 	"github.com/opragmatico/goscriber/internal/engine"
 	"github.com/opragmatico/goscriber/internal/engine/fake"
+	"github.com/opragmatico/goscriber/internal/models"
 	"github.com/opragmatico/goscriber/internal/notice"
 	"github.com/opragmatico/goscriber/internal/output"
 	"github.com/opragmatico/goscriber/internal/pipeline"
 	"github.com/opragmatico/goscriber/internal/ui"
 )
 
-// Every app test dictates on fakes, so none opens a microphone or pastes.
+// Every app test dictates on fakes, so none opens a microphone or pastes,
+// and its settings window lists the models in its own empty directory and
+// no audio devices.
 func init() {
-	newServices = func(*Runtime, Options, *notice.Hub) services {
+	newServices = func(rt *Runtime, _ Options, _ *notice.Hub) services {
 		return services{
 			recorder: newTestRecorder(),
 			engine:   fake.New(fake.Script{Replies: []fake.Reply{fake.Transcript("hello from the test")}}),
 			output:   &testOutput{},
 			models:   testModels{},
+			files:    models.NewManager(rt.Paths.ModelsDir(), models.Options{}),
 			feedback: &testFeedback{},
 		}
 	}
+	listDevices = func() ([]audio.Device, []audio.Device, error) { return nil, nil, nil }
 }
 
 // testRecorder records a second of a tone each time.

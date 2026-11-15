@@ -8,10 +8,12 @@ import (
 	"testing"
 	"time"
 
+	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/test"
 
 	"github.com/opragmatico/goscriber/internal/config"
 	"github.com/opragmatico/goscriber/internal/hotkey"
+	"github.com/opragmatico/goscriber/internal/ui"
 )
 
 // testShortcuts stands in for the OS's global shortcuts in every app test,
@@ -135,6 +137,39 @@ func TestShortcutFollowsSettings(t *testing.T) {
 	// Quitting gives the shortcut back.
 	sh.stopFollowing()
 	testShortcuts.waitLog(t, "+ctrl+shift+d", "-ctrl+shift+d", "+f5", "-f5")
+}
+
+// While the settings window records a shortcut, the global shortcuts are
+// given back to the OS, so the keys pressed reach the window; the new one
+// registers once it is recorded.
+func TestSettingsWindowSuspendsShortcutsWhileRecording(t *testing.T) {
+	home := isolate(t)
+	testShortcuts.reset()
+	writeSettings(t, home, `{"schema_version": 1, "transcribe_shortcut": "ctrl+shift+d"}`)
+	a := &trayApp{plainApp: plainApp{App: test.NewTempApp(t)}}
+	sh, q := newTestShell(t, a, Options{})
+	testShortcuts.waitLog(t, "+ctrl+shift+d")
+
+	sh.settings.Show(ui.PageGeneral)
+	var in *ui.ShortcutInput
+	for _, o := range test.LaidOutObjects(sh.settings.Window().Content()) {
+		if s, ok := o.(*ui.ShortcutInput); ok && in == nil {
+			in = s // the dictation shortcut comes first
+		}
+	}
+	if in == nil {
+		t.Fatal("no shortcut field on the General page")
+	}
+	test.Tap(in)
+	testShortcuts.waitLog(t, "+ctrl+shift+d", "-ctrl+shift+d")
+	for _, k := range []fyne.KeyName{"LeftControl", "LeftShift", fyne.KeyK} {
+		in.KeyDown(&fyne.KeyEvent{Name: k})
+	}
+	if got := sh.rt.Settings.Get().TranscribeShortcut; got != "ctrl+shift+k" {
+		t.Fatalf("saved %q", got)
+	}
+	q.runNext(t) // the shell applies the new settings
+	testShortcuts.waitLog(t, "+ctrl+shift+d", "-ctrl+shift+d", "+ctrl+shift+d", "-ctrl+shift+d", "+ctrl+shift+k")
 }
 
 // syncBuffer is a bytes.Buffer the logger and the test can share.

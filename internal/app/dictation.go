@@ -26,6 +26,9 @@ type services struct {
 	engine   engine.Engine
 	output   pipeline.Output
 	models   pipeline.ModelSource
+	// files lists, downloads and deletes the model files, for the Models
+	// page.
+	files    ui.ModelFiles
 	feedback feedback
 }
 
@@ -60,13 +63,13 @@ func systemServices(rt *Runtime, opts Options, notices *notice.Hub) services {
 		AlwaysOn: s.AlwaysOnMicrophone,
 		Notify:   func(msg string) { notices.Publish(notice.MicrophoneUnavailable(msg)) },
 	})
+	files := models.NewManager(rt.Paths.ModelsDir(), models.Options{HFCache: models.HFCacheDir(os.Getenv)})
 	return services{
 		recorder: rec,
 		engine:   autounload.New(speechEngine(rt, opts, s, notices), s.ModelUnloadTimeout.Duration(), rt.Log.Logger),
 		output:   output.New(platform.GeneralPasteboard(), platform.Keyboard{}, rt.Log.Logger),
-		models: pipeline.CatalogModels{Manager: models.NewManager(rt.Paths.ModelsDir(), models.Options{
-			HFCache: models.HFCacheDir(os.Getenv),
-		})},
+		models:   pipeline.CatalogModels{Manager: files},
+		files:    files,
 		feedback: audio.NewFeedback(audio.NewPlayer(), platform.MuteOutput, rt.Log.Logger),
 	}
 }

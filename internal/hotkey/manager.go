@@ -106,6 +106,7 @@ type Manager struct {
 	applied    bool
 	act        Activator
 	recording  bool // dictation confirmed a recording in progress
+	suspended  bool // the shortcuts are given back to the OS for now
 	transcribe slot
 	cancel     slot
 	closed     bool
@@ -154,6 +155,12 @@ func (m *Manager) Apply(cfg Config) { m.post(func() { m.apply(cfg) }) }
 // shortcut is registered while it is, so its key stays free otherwise.
 // Report every change, including a refusal to start after ActionStart.
 func (m *Manager) SetRecording(on bool) { m.post(func() { m.setRecording(on) }) }
+
+// Suspend gives the shortcuts back to the OS while on, and registers them
+// again once it is off. The settings window suspends them while it records
+// a new shortcut, so pressing the current one reaches the window instead of
+// starting dictation. Apply still takes effect, once the suspension ends.
+func (m *Manager) Suspend(on bool) { m.post(func() { m.suspend(on) }) }
 
 // Close unregisters the shortcuts and stops the Manager. It returns at
 // once, so it is safe on the main thread; Done closes when it has finished.
@@ -237,8 +244,10 @@ func (m *Manager) apply(cfg Config) {
 		m.transcribe.shortcut = cfg.Transcribe
 		// A key held during the switch belongs to the old shortcut.
 		m.act.down, m.act.ownsPress = false, false
-		if b, err := m.binding(PurposeTranscribe, cfg.Transcribe); err == nil {
-			m.register(&m.transcribe, b)
+		if !m.suspended {
+			if b, err := m.binding(PurposeTranscribe, cfg.Transcribe); err == nil {
+				m.register(&m.transcribe, b)
+			}
 		}
 	}
 	if cancelChanged {
@@ -264,6 +273,22 @@ func (m *Manager) binding(p Purpose, shortcut string) (Binding, error) {
 	return b, nil
 }
 
+func (m *Manager) suspend(on bool) {
+	if on == m.suspended {
+		return
+	}
+	m.suspended = on
+	if on {
+		m.unregister(&m.transcribe)
+		m.act.down, m.act.ownsPress = false, false
+	} else if m.applied {
+		if b, err := m.binding(PurposeTranscribe, m.cfg.Transcribe); err == nil {
+			m.register(&m.transcribe, b)
+		}
+	}
+	m.syncCancel()
+}
+
 func (m *Manager) setRecording(on bool) {
 	m.act.SetRecording(on)
 	m.recording = on
@@ -271,9 +296,9 @@ func (m *Manager) setRecording(on bool) {
 }
 
 // syncCancel registers the cancel shortcut while dictation is recording and
-// unregisters it otherwise.
+// the shortcuts are not suspended, and unregisters it otherwise.
 func (m *Manager) syncCancel() {
-	want := m.recording && m.applied
+	want := m.recording && m.applied && !m.suspended
 	switch {
 	case want && m.cancel.reg == nil:
 		if b, err := m.binding(PurposeCancel, m.cancel.shortcut); err == nil {

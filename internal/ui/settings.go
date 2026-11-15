@@ -1,95 +1,342 @@
 package ui
 
 import (
+	"log/slog"
+
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"github.com/opragmatico/goscriber/internal/audio"
+	"github.com/opragmatico/goscriber/internal/config"
+	"github.com/opragmatico/goscriber/internal/logging"
 )
 
 // Page is a page of the settings window.
 type Page int
 
-// Settings pages, in sidebar order.
+// Settings pages, in sidebar order. The Debug page is in the sidebar only in
+// debug mode.
 const (
 	PageGeneral Page = iota
 	PageModels
+	PageAdvanced
 	PagePermissions
+	PageHistory
+	PageDebug
 	PageAbout
+	pageCount
 )
+
+var pageTitles = [pageCount]string{"General", "Models", "Advanced", "Permissions", "History", "Debug", "About"}
+
+// String returns the page's title in the sidebar.
+func (p Page) String() string {
+	if p < 0 || p >= pageCount {
+		return "Page(?)"
+	}
+	return pageTitles[p]
+}
 
 // SettingsTitle is the settings window's title.
 const SettingsTitle = "Goscriber Settings"
 
-// SettingsInfo is what the placeholder pages show.
+// SettingsInfo is what the About and Debug pages say about this build and
+// where its files are.
 type SettingsInfo struct {
-	Version      string
-	SettingsFile string
-	LogsDir      string
+	Version string
+	// EngineVersion is the NeMo-Speech.cpp runtime's version, or "" for a
+	// build without the speech engine.
+	EngineVersion string
+	SettingsFile  string
+	LogsDir       string
 }
 
-// SettingsWindow is a placeholder for the settings window: it has the pages
-// the tray links to, each with a short note, until the real pages land. The
-// Fyne window is created on first Show, so nothing is on screen until the user
-// asks for it. Its methods must be called on the Fyne main thread.
+// SettingsOptions configure the settings window. Store is required.
+type SettingsOptions struct {
+	Info SettingsInfo
+	// Store holds the settings. Every widget shows a field of it and saves
+	// the user's changes to it at once.
+	Store SettingsStore
+	// Models lists, downloads and deletes the model files for the Models
+	// page. Nil shows the catalog with nothing to download.
+	Models ModelFiles
+	// Devices lists the microphones and outputs for the General page. Nil
+	// means the system's, from internal/audio.
+	Devices func() (inputs, outputs []audio.Device, err error)
+	// Logs returns the most recent log records, for the Debug page.
+	Logs func() []logging.Entry
+	// DefaultFillerWords is the built-in filler-word list, shown while
+	// custom_filler_words is null, as the start of the user's own list.
+	DefaultFillerWords []string
+	// ForceDebug shows the Debug page whatever debug_mode says, as --debug
+	// does.
+	ForceDebug bool
+	// OnClose runs after the user closes the window, which only hides it so
+	// it can be shown again.
+	OnClose func()
+	// OnRecordShortcut runs with true when a shortcut field starts listening
+	// for a key combination and with false when it stops. The app suspends
+	// its global shortcuts meanwhile, so pressing the current one reaches
+	// the window instead of starting dictation.
+	OnRecordShortcut func(recording bool)
+	// OpenFolder shows a folder, such as the logs directory, in the file
+	// manager. Nil leaves those buttons out.
+	OpenFolder func(dir string)
+	// Do runs f on the Fyne main thread; nil means fyne.Do. Downloads, the
+	// model list and the device list are read in the background and shown
+	// through it.
+	Do func(f func())
+	// Log receives settings that could not be saved and failed downloads.
+	// Nil means slog's default logger.
+	Log *slog.Logger
+}
+
+// SettingsWindow is the settings window: a sidebar of pages whose widgets
+// are bound to the settings store, so a change applies at once and
+// persists, and a change made elsewhere (the settings file, the tray) shows
+// up as soon as the app passes it on with SetSettings. The Fyne window is
+// created on first Show, so nothing is on screen until the user asks for
+// it. Its methods must be called on the Fyne main thread.
 type SettingsWindow struct {
-	app     fyne.App
-	info    SettingsInfo
-	onClose func()
-	model   string
+	app  fyne.App
+	opts SettingsOptions
+
+	cur      config.Settings // the settings shown
+	bindings []*binding
+	col      *labelColumn // the label column of the page being built
+	created  bool         // the pages and their bindings exist
+	loading  bool         // the widgets are being brought in line with cur
+
+	win     fyne.Window
+	tabs    *container.AppTabs
+	items   [pageCount]*container.TabItem
 	banner  *Banner
 	visible bool
 
-	win         fyne.Window
-	tabs        *container.AppTabs
-	modelLabel  *widget.Label
 	permissions []PermissionRow
 	permBox     *fyne.Container
 
 	language       LanguageSetting
 	detected       string
-	onLanguage     func(code string)
 	languageBox    *fyne.Container
 	languageSelect *widget.Select
 	languageNote   *widget.Label
 	detectedLabel  *widget.Label
-	settingSelect  bool // the window itself is changing the selection
+
+	devices deviceState
+	models  modelsState
+	logs    logsState
+
+	// confirm asks before something that cannot be undone, such as
+	// deleting a model, with action as the button that does it; tests
+	// replace it.
+	confirm func(title, message, action string, ok func())
 }
 
-// LanguageOption is a language the user can pick: its code, such as
-// "es-ES", and its readable name.
-type LanguageOption struct {
-	Code, Name string
+// NewSettingsWindow prepares the window; nothing is created until Show.
+func NewSettingsWindow(a fyne.App, opts SettingsOptions) *SettingsWindow {
+	w := &SettingsWindow{app: a, opts: opts}
+	w.cur = opts.Store.Get()
+	w.models.init()
+	w.confirm = w.showConfirm
+	return w
 }
 
-// LanguageSetting is what the Models page's language picker shows.
-type LanguageSetting struct {
-	// Options are the languages to pick from. None hides the picker.
-	Options []LanguageOption
-	// Selected is the code of the language picked.
-	Selected string
-	// Locked shows the language without letting it change: the model's
-	// language is fixed. Note says why.
-	Locked bool
-	Note   string
+// showConfirm asks the user to confirm something that cannot be undone, in
+// a modal pop-up over the window, and runs ok if they do.
+func (w *SettingsWindow) showConfirm(title, message, action string, ok func()) {
+	var pop *widget.PopUp
+	cancel := widget.NewButton("Cancel", func() { pop.Hide() })
+	confirm := widget.NewButton(action, func() {
+		pop.Hide()
+		ok()
+	})
+	confirm.Importance = widget.DangerImportance
+	body := container.NewVBox(
+		widget.NewLabelWithStyle(title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		paragraph(message),
+		container.NewHBox(layout.NewSpacer(), cancel, confirm),
+	)
+	pop = widget.NewModalPopUp(container.NewPadded(body), w.win.Canvas())
+	pop.Resize(fyne.NewSize(420, pop.MinSize().Height))
+	pop.Show()
 }
 
-// PermissionRow is one permission on the Permissions page.
-type PermissionRow struct {
-	Title  string
-	Why    string
-	Status string // such as "granted" or "denied"
-	// OK is true when the permission lets Goscriber work.
-	OK bool
-	// OnOpen opens System Settings at the permission; nil shows no button.
-	OnOpen func()
+func (w *SettingsWindow) do(f func()) {
+	if w.opts.Do != nil {
+		w.opts.Do(f)
+		return
+	}
+	fyne.Do(f)
 }
 
-// PermissionsNone is what the Permissions page says on a system without
-// permissions to grant.
-const PermissionsNone = "Goscriber needs no special permissions on this system."
+func (w *SettingsWindow) log() *slog.Logger {
+	if w.opts.Log != nil {
+		return w.opts.Log
+	}
+	return slog.Default()
+}
+
+// Show opens the window on page p and brings it to the front. The Debug
+// page opens only in debug mode; otherwise Show opens General instead.
+// Each time, the model files and audio devices are read again, since they
+// may have changed while the window was closed.
+func (w *SettingsWindow) Show(p Page) {
+	if w.win == nil {
+		w.create()
+	}
+	w.selectPage(p)
+	w.win.Show()
+	w.win.RequestFocus()
+	w.visible = true
+	w.refreshModelFiles()
+	w.refreshDevices()
+}
+
+// Visible reports whether the window is on screen.
+func (w *SettingsWindow) Visible() bool { return w.visible }
+
+// Window is the Fyne window, or nil before the first Show.
+func (w *SettingsWindow) Window() fyne.Window { return w.win }
+
+// Page is the page currently selected.
+func (w *SettingsWindow) Page() Page {
+	if w.tabs == nil {
+		return PageGeneral
+	}
+	sel := w.tabs.Selected()
+	for p, it := range w.items {
+		if it == sel {
+			return Page(p)
+		}
+	}
+	return PageGeneral
+}
+
+// Pages are the pages in the sidebar, in order.
+func (w *SettingsWindow) Pages() []Page {
+	if w.tabs == nil {
+		return nil
+	}
+	var out []Page
+	for _, it := range w.tabs.Items {
+		for p, pit := range w.items {
+			if it == pit {
+				out = append(out, Page(p))
+			}
+		}
+	}
+	return out
+}
+
+// SetSettings shows settings changed elsewhere, such as in the settings
+// file or from the tray. Changes made in the window show at once without
+// it. A different model clears the language detected for the last one.
+func (w *SettingsWindow) SetSettings(s config.Settings) {
+	if s.SelectedModel != w.cur.SelectedModel {
+		w.SetDetected("")
+	}
+	w.show(s)
+}
+
+// Settings are the settings the window shows.
+func (w *SettingsWindow) Settings() config.Settings { return w.cur.Clone() }
+
+func (w *SettingsWindow) create() {
+	for p, page := range [pageCount]struct {
+		icon  fyne.Resource
+		build func() fyne.CanvasObject
+	}{
+		PageGeneral:     {theme.SettingsIcon(), w.generalPage},
+		PageModels:      {theme.DownloadIcon(), w.modelsPage},
+		PageAdvanced:    {theme.ListIcon(), w.advancedPage},
+		PagePermissions: {theme.VisibilityIcon(), w.permissionsPage},
+		PageHistory:     {theme.HistoryIcon(), w.historyPage},
+		PageDebug:       {theme.WarningIcon(), w.debugPage},
+		PageAbout:       {theme.InfoIcon(), w.aboutPage},
+	} {
+		w.col = &labelColumn{} // each page lines up its own labels
+		w.items[p] = container.NewTabItemWithIcon(Page(p).String(), page.icon, page.build())
+	}
+	w.col = nil
+	w.tabs = container.NewAppTabs()
+	w.tabs.SetTabLocation(container.TabLocationLeading)
+	w.tabs.OnSelected = func(it *container.TabItem) {
+		if it == w.items[PageDebug] {
+			w.refreshLogs()
+		}
+	}
+	w.created = true
+	w.show(w.cur)
+
+	w.win = w.app.NewWindow(SettingsTitle)
+	w.win.SetIcon(AppIcon())
+	w.layout()
+	w.win.Resize(fyne.NewSize(760, 560))
+	w.win.CenterOnScreen()
+	w.win.SetCloseIntercept(w.closeRequested)
+	w.win.Canvas().AddShortcut(DebugShortcut, func(fyne.Shortcut) { w.ToggleDebugMode() })
+}
+
+// DebugShortcut toggles debug mode while the settings window has the
+// keyboard: Cmd+Shift+D on macOS, Ctrl+Shift+D elsewhere.
+var DebugShortcut = &desktop.CustomShortcut{
+	KeyName:  fyne.KeyD,
+	Modifier: fyne.KeyModifierShortcutDefault | fyne.KeyModifierShift,
+}
+
+// ToggleDebugMode turns the debug_mode setting on or off, which shows or
+// hides the Debug page.
+func (w *SettingsWindow) ToggleDebugMode() {
+	on := !w.cur.DebugMode
+	w.change(func(s *config.Settings) { s.DebugMode = on })
+	if on {
+		w.selectPage(PageDebug)
+	}
+}
+
+// debugMode reports whether the Debug page belongs in the sidebar.
+func (w *SettingsWindow) debugMode() bool { return w.opts.ForceDebug || w.cur.DebugMode }
+
+// syncDebugPage puts the Debug page in the sidebar in debug mode and takes
+// it out otherwise, keeping the page selected unless it was Debug.
+func (w *SettingsWindow) syncDebugPage() {
+	if w.tabs == nil {
+		return
+	}
+	want := w.debugMode()
+	shown := false
+	for _, it := range w.tabs.Items {
+		shown = shown || it == w.items[PageDebug]
+	}
+	if want == shown && len(w.tabs.Items) > 0 {
+		return
+	}
+	current := w.Page()
+	var items []*container.TabItem
+	for p, it := range w.items {
+		if Page(p) != PageDebug || want {
+			items = append(items, it)
+		}
+	}
+	w.tabs.SetItems(items)
+	if current == PageDebug && !want {
+		current = PageGeneral
+	}
+	w.tabs.Select(w.items[current])
+}
+
+func (w *SettingsWindow) selectPage(p Page) {
+	if p == PageDebug && !w.debugMode() || p < 0 || p >= pageCount {
+		p = PageGeneral
+	}
+	w.tabs.Select(w.items[p])
+}
 
 // Banner is a problem shown across the top of the settings window, with a
 // button that fixes it and one that dismisses it.
@@ -102,45 +349,25 @@ type Banner struct {
 	OnDismiss   func()
 }
 
-// NewSettingsWindow prepares the window. onClose, if not nil, runs after the
-// user closes the window, which only hides it so it can be shown again.
-func NewSettingsWindow(a fyne.App, info SettingsInfo, onClose func()) *SettingsWindow {
-	return &SettingsWindow{app: a, info: info, onClose: onClose}
-}
-
-// Show opens the window on page p and brings it to the front.
-func (s *SettingsWindow) Show(p Page) {
-	if s.win == nil {
-		s.create()
-	}
-	s.tabs.SelectIndex(int(p))
-	s.win.Show()
-	s.win.RequestFocus()
-	s.visible = true
-}
-
-// Visible reports whether the window is on screen.
-func (s *SettingsWindow) Visible() bool { return s.visible }
-
 // Banner is the banner shown, or nil.
-func (s *SettingsWindow) Banner() *Banner { return s.banner }
+func (w *SettingsWindow) Banner() *Banner { return w.banner }
 
 // SetBanner shows b across the top of the window, or removes the banner
 // with nil.
-func (s *SettingsWindow) SetBanner(b *Banner) {
-	s.banner = b
-	if s.win != nil {
-		s.layout()
+func (w *SettingsWindow) SetBanner(b *Banner) {
+	w.banner = b
+	if w.win != nil {
+		w.layout()
 	}
 }
 
 // layout puts the banner, if any, above the pages.
-func (s *SettingsWindow) layout() {
-	if s.banner == nil {
-		s.win.SetContent(s.tabs)
+func (w *SettingsWindow) layout() {
+	if w.banner == nil {
+		w.win.SetContent(w.tabs)
 		return
 	}
-	s.win.SetContent(container.NewBorder(bannerView(s.banner), nil, nil, nil, s.tabs))
+	w.win.SetContent(container.NewBorder(bannerView(w.banner), nil, nil, nil, w.tabs))
 }
 
 func bannerView(b *Banner) fyne.CanvasObject {
@@ -164,214 +391,13 @@ func bannerView(b *Banner) fyne.CanvasObject {
 	return container.NewPadded(container.NewBorder(nil, nil, stripe, nil, body))
 }
 
-// Window is the Fyne window, or nil before the first Show.
-func (s *SettingsWindow) Window() fyne.Window { return s.win }
-
-// Page is the page currently selected.
-func (s *SettingsWindow) Page() Page {
-	if s.tabs == nil {
-		return PageGeneral
+// closeRequested runs when the user closes the window. A shortcut field
+// still listening stops, so the global shortcuts come back.
+func (w *SettingsWindow) closeRequested() {
+	w.win.Canvas().Unfocus()
+	w.win.Hide()
+	w.visible = false
+	if w.opts.OnClose != nil {
+		w.opts.OnClose()
 	}
-	return Page(s.tabs.SelectedIndex())
-}
-
-// SetModel sets the display name of the ready model; "" means none is ready.
-func (s *SettingsWindow) SetModel(name string) {
-	s.model = name
-	if s.modelLabel != nil {
-		s.modelLabel.SetText(s.modelText())
-	}
-}
-
-// Language is what the language picker shows.
-func (s *SettingsWindow) Language() LanguageSetting { return s.language }
-
-// SetLanguage sets what the language picker shows.
-func (s *SettingsWindow) SetLanguage(l LanguageSetting) {
-	s.language = l
-	s.refreshLanguage()
-}
-
-// OnLanguage sets what runs when the user picks a language, on the main
-// thread, with the language's code.
-func (s *SettingsWindow) OnLanguage(f func(code string)) { s.onLanguage = f }
-
-// Detected is the readable name of the language the last dictation was
-// detected in, or "".
-func (s *SettingsWindow) Detected() string { return s.detected }
-
-// SetDetected shows the language the last dictation was detected in, by its
-// readable name; "" shows none.
-func (s *SettingsWindow) SetDetected(name string) {
-	s.detected = name
-	s.refreshLanguage()
-}
-
-// PickLanguage picks a language by code as the user would, as if chosen in
-// the picker.
-func (s *SettingsWindow) PickLanguage(code string) {
-	for _, o := range s.language.Options {
-		if o.Code == code && s.languageSelect != nil && !s.language.Locked {
-			s.languageSelect.SetSelected(o.Name)
-		}
-	}
-}
-
-func (s *SettingsWindow) languageView() fyne.CanvasObject {
-	s.languageSelect = widget.NewSelect(nil, s.languagePicked)
-	s.languageNote = paragraph("")
-	s.detectedLabel = paragraph("")
-	row := container.NewBorder(nil, nil, widget.NewLabel("Language"), nil, s.languageSelect)
-	s.languageBox = container.NewVBox(row, s.languageNote, s.detectedLabel)
-	s.refreshLanguage()
-	return s.languageBox
-}
-
-// refreshLanguage brings the picker in line with the language setting.
-func (s *SettingsWindow) refreshLanguage() {
-	if s.languageBox == nil {
-		return
-	}
-	l := s.language
-	if len(l.Options) == 0 {
-		s.languageBox.Hide()
-		return
-	}
-	names := make([]string, len(l.Options))
-	selected := ""
-	for i, o := range l.Options {
-		names[i] = o.Name
-		if o.Code == l.Selected {
-			selected = o.Name
-		}
-	}
-	s.settingSelect = true
-	s.languageSelect.SetOptions(names)
-	s.languageSelect.SetSelected(selected)
-	s.settingSelect = false
-	if l.Locked {
-		s.languageSelect.Disable()
-	} else {
-		s.languageSelect.Enable()
-	}
-	s.languageNote.SetText(l.Note)
-	s.languageNote.Hidden = l.Note == ""
-	s.detectedLabel.SetText("Detected in the last dictation: " + s.detected)
-	s.detectedLabel.Hidden = s.detected == ""
-	s.languageBox.Show()
-	s.languageBox.Refresh()
-}
-
-func (s *SettingsWindow) languagePicked(name string) {
-	if s.settingSelect || s.language.Locked {
-		return
-	}
-	for _, o := range s.language.Options {
-		if o.Name == name && o.Code != s.language.Selected {
-			s.language.Selected = o.Code
-			if s.onLanguage != nil {
-				s.onLanguage(o.Code)
-			}
-		}
-	}
-}
-
-func (s *SettingsWindow) modelText() string {
-	if s.model == "" {
-		return "No model is downloaded yet. Choosing and downloading a model will happen on this page."
-	}
-	return "Selected model: " + s.model
-}
-
-func (s *SettingsWindow) create() {
-	s.modelLabel = paragraph(s.modelText())
-	s.tabs = container.NewAppTabs(
-		container.NewTabItem("General", page("General",
-			paragraph("Goscriber runs in the menu bar. This window is a placeholder: the settings pages are not built yet."),
-			paragraph("Settings are saved in:"),
-			path(s.info.SettingsFile),
-		)),
-		container.NewTabItem("Models", page("Models", s.modelLabel, s.languageView())),
-		container.NewTabItem("Permissions", page("Permissions", s.permissionsView())),
-		container.NewTabItem("About", page("Goscriber",
-			paragraph("Offline push-to-talk speech-to-text."),
-			paragraph("Version "+s.info.Version),
-			paragraph("Logs are written to:"),
-			path(s.info.LogsDir),
-		)),
-	)
-	s.tabs.SetTabLocation(container.TabLocationLeading)
-
-	s.win = s.app.NewWindow(SettingsTitle)
-	s.win.SetIcon(AppIcon())
-	s.layout()
-	s.win.Resize(fyne.NewSize(640, 420))
-	s.win.CenterOnScreen()
-	s.win.SetCloseIntercept(s.closeRequested)
-}
-
-// Permissions are the rows of the Permissions page.
-func (s *SettingsWindow) Permissions() []PermissionRow { return s.permissions }
-
-// SetPermissions shows rows on the Permissions page; none says no
-// permission is needed.
-func (s *SettingsWindow) SetPermissions(rows []PermissionRow) {
-	s.permissions = rows
-	if s.permBox != nil {
-		s.permBox.Objects = s.permissionRows()
-		s.permBox.Refresh()
-	}
-}
-
-func (s *SettingsWindow) permissionsView() fyne.CanvasObject {
-	s.permBox = container.NewVBox(s.permissionRows()...)
-	return s.permBox
-}
-
-func (s *SettingsWindow) permissionRows() []fyne.CanvasObject {
-	if len(s.permissions) == 0 {
-		return []fyne.CanvasObject{paragraph(PermissionsNone)}
-	}
-	var out []fyne.CanvasObject
-	for _, r := range s.permissions {
-		mark := "✓"
-		if !r.OK {
-			mark = "✗"
-		}
-		head := widget.NewLabelWithStyle(mark+" "+r.Title+": "+r.Status, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-		row := container.NewVBox(head, paragraph(r.Why))
-		if r.OnOpen != nil {
-			row.Add(container.NewHBox(widget.NewButton("Open System Settings", r.OnOpen)))
-		}
-		out = append(out, row)
-	}
-	return out
-}
-
-// closeRequested runs when the user closes the window.
-func (s *SettingsWindow) closeRequested() {
-	s.win.Hide()
-	s.visible = false
-	if s.onClose != nil {
-		s.onClose()
-	}
-}
-
-func page(title string, body ...fyne.CanvasObject) fyne.CanvasObject {
-	heading := widget.NewLabelWithStyle(title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-	heading.SizeName = theme.SizeNameSubHeadingText
-	return container.NewVBox(append([]fyne.CanvasObject{heading}, body...)...)
-}
-
-func paragraph(text string) *widget.Label {
-	l := widget.NewLabel(text)
-	l.Wrapping = fyne.TextWrapWord
-	return l
-}
-
-func path(p string) *widget.Label {
-	l := widget.NewLabelWithStyle(p, fyne.TextAlignLeading, fyne.TextStyle{Monospace: true})
-	l.Wrapping = fyne.TextWrapBreak
-	l.Selectable = true
-	return l
 }
