@@ -47,7 +47,7 @@ Names and jargon listed in the `custom_words` setting come out spelled your way:
 
 Filler words ("um", "uh") are removed, with the punctuation around them, and the `filler_word_removal` and `custom_filler_words` settings turn that off or change the list ([details](docs/architecture.md#text-cleanup)).
 
-Following Handy, Goscriber also plans transcription history, an external transcription hook and optional LLM post-processing.
+Following Handy, Goscriber keeps a history of past dictations with their recordings (copy, paste again, play, transcribe again), and plans an external transcription hook and optional LLM post-processing.
 
 ## Stack
 
