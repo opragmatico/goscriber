@@ -85,8 +85,11 @@ func (sh *shell) checkPermissions() {
 }
 
 // refreshPermissions shows where each permission stands on the settings
-// window's Permissions page, on the main thread. A permission Goscriber
-// needs and lacks gets a button to System Settings.
+// window's Permissions page and onboarding's permissions step, on the main
+// thread. A permission Goscriber needs and lacks gets a button: Allow, which
+// shows macOS's prompt, while the microphone has not been asked for or
+// Accessibility has not been prompted for, and otherwise one to System
+// Settings.
 func (sh *shell) refreshPermissions() {
 	var rows []ui.PermissionRow
 	for _, p := range platform.Permissions {
@@ -98,6 +101,10 @@ func (sh *shell) refreshPermissions() {
 		switch {
 		case !p.Required() && !st.Usable():
 			row.Status, row.OK = "not needed", true
+		case st == platform.StatusNotDetermined,
+			p == platform.PermAccessibility && !st.Usable() && !sh.app.Preferences().Bool(askedAccessibility):
+			row.ActionLabel = LabelAllow
+			row.OnOpen = func() { sh.allow(p) }
 		case !st.Usable():
 			u := p.SettingsURL()
 			row.OnOpen = func() { sh.openURL(u) }
@@ -105,6 +112,23 @@ func (sh *shell) refreshPermissions() {
 		rows = append(rows, row)
 	}
 	sh.settings.SetPermissions(rows)
+}
+
+// LabelAllow is the button that shows macOS's prompt for a permission.
+const LabelAllow = "Allow…"
+
+// allow shows macOS's prompt for permission p, in the background: the
+// microphone's waits for the user's answer. Accessibility's offers to open
+// System Settings, and is shown only once. The rows follow the answer.
+func (sh *shell) allow(p platform.Permission) {
+	if p == platform.PermAccessibility {
+		sh.app.Preferences().SetBool(askedAccessibility, true)
+	}
+	sh.rt.Log.Info("asking for a permission", "permission", string(p))
+	go func() {
+		requestPermission(p)
+		sh.permissionRows.post(sh.refreshPermissions)
+	}()
 }
 
 // openURL opens a link, such as a System Settings pane.

@@ -85,7 +85,7 @@ func (sh *shell) trayAlert(active []notice.Notice) *ui.TrayAlert {
 func (sh *shell) noticeAction(id notice.ActionID) {
 	switch id {
 	case notice.ActionOpenModels:
-		sh.settings.Show(ui.PageModels)
+		sh.openModels()
 	case notice.ActionOpenAccessibility:
 		sh.openURL(platform.PermAccessibility.SettingsURL())
 	case notice.ActionOpenMicrophone:
@@ -97,13 +97,15 @@ func (sh *shell) noticeAction(id notice.ActionID) {
 
 // followModel reports a missing model at startup and whenever the model goes
 // away, and clears the notice once there is one. A dismissed notice stays
-// dismissed while nothing changes. It runs on the main thread.
+// dismissed while nothing changes. Onboarding opening at launch is about
+// the missing model already, so the startup notice is left out then. It
+// runs on the main thread.
 func (sh *shell) followModel(s config.Settings) {
 	has := modelName(s) != ""
 	switch {
 	case has:
 		sh.notices.Resolve(notice.CodeNoModel)
-	case sh.hasModel || !sh.modelChecked: // at startup, or the model went away
+	case sh.hasModel || !sh.modelChecked && !sh.plan.Onboarding: // at startup, or the model went away
 		sh.notices.Publish(notice.NoModel())
 	}
 	sh.hasModel, sh.modelChecked = has, true

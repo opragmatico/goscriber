@@ -74,7 +74,17 @@ func (q uiQueue) runNext(t *testing.T) {
 	}
 }
 
+// newTestShell starts a shell whose onboarding is over, as on every launch
+// after the first.
 func newTestShell(t *testing.T, a fyne.App, opts Options) (*shell, uiQueue) {
+	t.Helper()
+	a.Preferences().SetBool(prefOnboardingDone, true)
+	return newFirstLaunchShell(t, a, opts)
+}
+
+// newFirstLaunchShell starts a shell with the app's preferences as they are:
+// on a fresh test app, the first launch, with onboarding to do.
+func newFirstLaunchShell(t *testing.T, a fyne.App, opts Options) (*shell, uiQueue) {
 	t.Helper()
 	rt := start(t, opts)
 	sh := newShell(rt, a, opts)
@@ -104,22 +114,27 @@ func TestPlanLaunch(t *testing.T) {
 	hiddenSetting.StartHidden = true
 
 	for _, tt := range []struct {
-		name      string
-		settings  config.Settings
-		opts      Options
-		supported bool
-		want      launch
+		name       string
+		settings   config.Settings
+		opts       Options
+		supported  bool
+		onboarding bool
+		want       launch
 	}{
-		{"defaults", def, Options{}, true, launch{Tray: true}},
-		{"start hidden setting", hiddenSetting, Options{}, true, launch{Tray: true, Hidden: true}},
-		{"--start-hidden", def, Options{StartHidden: true}, true, launch{Tray: true, Hidden: true}},
-		{"--no-tray", def, Options{NoTray: true}, true, launch{Window: true}},
-		{"show_tray_icon off", noTraySetting, Options{}, true, launch{Window: true}},
-		{"no tray on this desktop", def, Options{}, false, launch{Window: true}},
+		{"defaults", def, Options{}, true, false, launch{Tray: true}},
+		{"start hidden setting", hiddenSetting, Options{}, true, false, launch{Tray: true, Hidden: true}},
+		{"--start-hidden", def, Options{StartHidden: true}, true, false, launch{Tray: true, Hidden: true}},
+		{"--no-tray", def, Options{NoTray: true}, true, false, launch{Window: true}},
+		{"show_tray_icon off", noTraySetting, Options{}, true, false, launch{Window: true}},
+		{"no tray on this desktop", def, Options{}, false, false, launch{Window: true}},
 		// Without a tray the window is the only way in, hidden or not.
-		{"--no-tray --start-hidden", def, Options{NoTray: true, StartHidden: true}, true, launch{Window: true, Hidden: true}},
+		{"--no-tray --start-hidden", def, Options{NoTray: true, StartHidden: true}, true, false, launch{Window: true, Hidden: true}},
+		// Onboarding opens unless the app starts hidden behind its tray.
+		{"onboarding", def, Options{}, true, true, launch{Tray: true, Onboarding: true}},
+		{"onboarding, start hidden", hiddenSetting, Options{}, true, true, launch{Tray: true, Hidden: true}},
+		{"onboarding, no tray", def, Options{NoTray: true, StartHidden: true}, true, true, launch{Window: true, Hidden: true, Onboarding: true}},
 	} {
-		if got := planLaunch(tt.settings, tt.opts, tt.supported); got != tt.want {
+		if got := planLaunch(tt.settings, tt.opts, tt.supported, tt.onboarding); got != tt.want {
 			t.Errorf("%s: %+v, want %+v", tt.name, got, tt.want)
 		}
 	}
@@ -149,15 +164,25 @@ func TestShellInstallsTrayAndOpensNoWindow(t *testing.T) {
 func TestTrayOpensSettingsPages(t *testing.T) {
 	isolate(t)
 	a := &trayApp{plainApp: plainApp{App: test.NewTempApp(t)}}
-	sh, _ := newTestShell(t, a, Options{})
+	sh, q := newTestShell(t, a, Options{})
 
 	item(t, a.menu, ui.LabelNoModel).Action()
-	if sh.settings.Window() == nil || sh.settings.Page() != ui.PageModels {
-		t.Fatalf("No model: Download… should open the Models page (page %v)", sh.settings.Page())
+	if step, on := sh.settings.Onboarding(); sh.settings.Window() == nil || !on || step != ui.StepModel {
+		t.Fatalf("No model: Download… should open onboarding's model step (step %v, onboarding %v)", step, on)
 	}
 	item(t, a.menu, ui.LabelSettings).Action()
-	if sh.settings.Page() != ui.PageGeneral {
-		t.Errorf("Settings… opened page %v", sh.settings.Page())
+	if _, on := sh.settings.Onboarding(); on || sh.settings.Page() != ui.PageGeneral {
+		t.Errorf("Settings… opened page %v (onboarding %v)", sh.settings.Page(), on)
+	}
+
+	// With a model selected, the model item opens the Models page.
+	if err := sh.rt.Settings.Update(func(s *config.Settings) { s.SelectedModel = "parakeet-tdt-0.6b-v2" }); err != nil {
+		t.Fatal(err)
+	}
+	q.runNext(t)
+	item(t, a.menu, ui.LabelModelPrefix+"parakeet-tdt-0.6b-v2").Action()
+	if sh.settings.Page() != ui.PageModels {
+		t.Errorf("the model item opened page %v", sh.settings.Page())
 	}
 
 	sh.settingsClosed()

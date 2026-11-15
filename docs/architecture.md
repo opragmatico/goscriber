@@ -81,7 +81,7 @@ internal/
 └── ui/
     ├── tray.go
     ├── overlay.go
-    ├── onboarding.go
+    ├── onboarding.go      # first-run onboarding, shown in the settings window
     ├── settings.go        # the settings window: sidebar, banner, debug shortcut
     ├── settings_bind.go   # widgets bound to settings fields, row layout
     ├── settings_*.go      # one file per page: general, models, advanced, history, debug, about…
@@ -102,9 +102,9 @@ third_party/
 
 `goscriber` with no subcommand starts the Fyne app (`io.github.opragmatico.goscriber`) as a menu bar / tray icon:
 
-- **Tray menu**: Start / Stop Dictation, Cancel, the current model (or "No model: Download…", which opens the Models page, with the dictation items disabled), "Loading <model>…" under it while a model loads ([model lifecycle](#model-lifecycle)), Settings… and Quit. With debug mode on, a Debug submenu forces the icon state.
+- **Tray menu**: Start / Stop Dictation, Cancel, the current model (which opens the Models page, or "No model: Download…", which opens [onboarding](#onboarding)'s model step, with the dictation items disabled), "Loading <model>…" under it while a model loads ([model lifecycle](#model-lifecycle)), Settings… and Quit. With debug mode on, a Debug submenu forces the icon state.
 - **Icon per state**: idle and transcribing are template icons that follow the menu bar's colour; recording is red. The coordinator drives the state; post-processing and outputting show as transcribing.
-- **No window at launch** while the tray is shown; windows open from the menu. Without a tray (`--no-tray`, the `show_tray_icon` setting, or a desktop with no tray) the settings window opens at launch, even with `--start-hidden`, and closing it quits, as in Handy.
+- **No window at launch** while the tray is shown, except [onboarding](#onboarding) until it is over; windows open from the menu. Without a tray (`--no-tray`, the `show_tray_icon` setting, or a desktop with no tray) the settings window opens at launch, even with `--start-hidden`, and closing it quits, as in Handy.
 - **macOS**: with a tray the app is an accessory app with no Dock icon. The bundle's Info.plist sets `LSUIElement`, and the app also sets the activation policy at startup, because GLFW makes every app a regular one and plain `go run` builds have no Info.plist. Without a tray the Dock icon stays as the way back in.
 - **Shutdown**: Quit, SIGINT and SIGTERM all end Fyne's main loop; the app then stops following settings and closes the log.
 
@@ -120,7 +120,7 @@ third_party/
 | **Permissions** | each macOS permission, with a button to System Settings when missing ([permissions.md](permissions.md)) |
 | **History** | how many dictations and how long recordings are kept; the list itself comes with #32 |
 | **Debug** | only in debug mode: debug mode, log level, running the engine in the app ([profiling](#process-isolation)), and a viewer over the last 400 records of the logger's in-memory ring |
-| **About** | Goscriber's version, the NeMo-Speech.cpp runtime's (or "not built in"), where settings and logs live, and the licences of what Goscriber is built with and of the models |
+| **About** | Goscriber's version, the NeMo-Speech.cpp runtime's (or "not built in"), where settings and logs live, a button that runs [onboarding](#onboarding) again, and the licences of what Goscriber is built with and of the models |
 
 - **Bound to the settings store.** Every widget shows one field of `config.Settings` and saves a change through `Store.Update` at once, so it applies to the running app and persists; a value the store refuses is logged and the widget shows the stored one again. The shell passes changes made elsewhere (the settings file, the tray) on with `SetSettings`. Each binding is declared in one line (`boolSetting`, `choiceSetting`, `sliderSetting`, `intEntrySetting` in `settings_bind.go`) with the field's JSON name and an accessor for it, and a test checks against the struct's tags that every field but `schema_version` has a widget on some page, and that each binding changes the field its name says. Sliders save when let go (or at each arrow-key step), not at every step of a drag.
 - **Models.** The page reads the model files through `models.Manager` in the background each time the window opens, since a file's first look hashes it. A model can be used only once downloaded. The first model downloaded, or one downloaded while the selected model is missing, is selected: the user just chose it. Deleting the model in use unselects it, so dictation asks for a model rather than failing.
@@ -129,6 +129,17 @@ third_party/
 - **Filler words.** A null `custom_filler_words` is the built-in list ([text cleanup](#text-cleanup)), shown as English's as the start of the user's own; removing the last word saves an empty list (remove none), and a button goes back to the built-in one.
 
 `GOSCRIBER_RENDER_DIR=dir go test -run TestRenderSettingsPages ./internal/ui` writes every page, in the light and dark themes, to PNGs through Fyne's test driver, to check the layout without running the app.
+
+## Onboarding
+
+A new user goes from first launch to first dictation in a couple of minutes (`internal/ui/onboarding.go`). Onboarding is a mode of the settings window: its four steps replace the sidebar, under the title "Set Up Goscriber", with Skip setup and Back along the bottom.
+
+1. **Welcome**: what Goscriber does and what setting up involves.
+2. **Permissions**: the rows of the Permissions page, live (the shell's two-second permission check refreshes them while the window is open), with Allow… or Open System Settings on each one missing ([permissions.md](permissions.md)). The launch's own permission prompts wait for this step, and run when onboarding ends if it skipped them.
+3. **Model**: every speech model in the catalog, with what it does (live text or not, its languages), its download size and licence. Nothing is selected or downloaded until the user presses Download; the download shares the Models page's state and progress, and, as there, the first model downloaded is selected. Continue waits for the selected model to be on disk.
+4. **Try it**: the shortcut, as the General page shows it, and how to dictate with the activation mode, over a text field that has the keyboard, so the paste lands in it. Text arriving there says it works.
+
+**When it opens.** At launch, unless onboarding is over: finished or skipped (`onboarding.done` in Fyne's app preferences). Each step shown is saved there too (`onboarding.step`), so a quit midway resumes at that step. A settings file that already selects a model (set up from the command line, or before onboarding existed) counts as over. Starting hidden with a tray leaves it closed. While it opens at launch, the launch's "no model downloaded" notice is left out. While no model is selected, the tray's "No model: Download…" and the `no_model` notice's button open its model step, so a shortcut press without a model still raises the notice, and the notice leads back here. About's Run setup again opens it at the welcome. Finishing or skipping shows the General page; Settings… from the tray leaves onboarding for the pages without ending it.
 
 ## Overlay
 
@@ -152,7 +163,7 @@ With `mute_while_recording` on, the system's default output is muted through Cor
 
 ## Permissions
 
-On macOS Goscriber needs the **Microphone** permission to record and **Accessibility** for the shortcut's event tap and for posting the paste; **Input Monitoring** is not needed, because the shortcut library's tap is an active one, which Accessibility covers. At launch it asks once for each that is missing (macOS's own microphone prompt; the Accessibility dialog, remembered in Fyne's preferences so it is not shown at every launch), raises a notice with a button to System Settings for each that is refused, and shows them all on the settings window's Permissions page. Start refuses to record without the microphone permission, since macOS would deliver silence. `internal/platform` has the status API (`StatusOf`, `Request`, `PermissionStates`) for onboarding (#31). Permissions attach to the app's code signature, which matters during development: [permissions.md](permissions.md).
+On macOS Goscriber needs the **Microphone** permission to record and **Accessibility** for the shortcut's event tap and for posting the paste; **Input Monitoring** is not needed, because the shortcut library's tap is an active one, which Accessibility covers. At launch it asks once for each that is missing (macOS's own microphone prompt; the Accessibility dialog, remembered in Fyne's preferences so it is not shown at every launch), raises a notice with a button to System Settings for each that is refused, and shows them all on the settings window's Permissions page. At the first launch [onboarding](#onboarding)'s permissions step asks instead. Start refuses to record without the microphone permission, since macOS would deliver silence. `internal/platform` has the status API (`StatusOf`, `Request`, `PermissionStates`). Permissions attach to the app's code signature, which matters during development: [permissions.md](permissions.md).
 
 ## Shortcuts
 
