@@ -22,6 +22,9 @@ var testShortcuts = &fakeShortcuts{}
 
 func init() {
 	newHotkeyBackend = func() hotkey.Backend { return testShortcuts }
+	// No test asks a real desktop portal for shortcuts; shortcuts_test.go
+	// puts a fake one in.
+	openDesktopShortcuts = nil
 }
 
 type fakeShortcuts struct {
@@ -49,7 +52,7 @@ func (f *fakeShortcuts) reset() {
 	f.active, f.log, f.fail = map[string]chan hotkey.KeyEvent{}, nil, nil
 }
 
-func (f *fakeShortcuts) Register(b hotkey.Binding) (hotkey.Registration, error) {
+func (f *fakeShortcuts) Register(_ hotkey.Purpose, b hotkey.Binding) (hotkey.Registration, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.fail != nil {

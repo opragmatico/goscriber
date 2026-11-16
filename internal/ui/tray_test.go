@@ -2,6 +2,7 @@ package ui
 
 import (
 	"bytes"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -290,8 +291,18 @@ func TestTrayIcons(t *testing.T) {
 		}
 		seen[icon] = s
 		_, themed := icon.(*theme.ThemedResource)
-		if themed == (s == TrayRecording) {
+		if runtime.GOOS != "linux" && themed == (s == TrayRecording) {
 			t.Errorf("%v: themed %v; only the red recording icon should be unthemed", s, themed)
+		}
+	}
+	// A Linux panel keeps its own colours, so no icon follows the app's
+	// theme there: idle and transcribing are painted to show on any panel.
+	for s, icon := range trayIconsFor("linux") {
+		if _, themed := icon.(*theme.ThemedResource); themed {
+			t.Errorf("Linux: %v is themed", s)
+		}
+		if s != TrayRecording && !strings.Contains(string(icon.Content()), `fill="#e8e8e8"`) {
+			t.Errorf("Linux: %v is not painted for the panel", s)
 		}
 	}
 	if TrayIcon(TrayState(99)) != TrayIcon(TrayIdle) {

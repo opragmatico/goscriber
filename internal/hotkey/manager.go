@@ -21,9 +21,11 @@ const (
 
 // Backend registers global shortcuts with the OS.
 type Backend interface {
-	// Register makes b a global shortcut. The OS stops delivering its key
-	// presses to the focused app while it is registered.
-	Register(b Binding) (Registration, error)
+	// Register makes b the global shortcut for purpose p. The OS stops
+	// delivering its key presses to the focused app while it is
+	// registered. A backend whose keys belong to the desktop, such as the
+	// XDG desktop portal's, goes by p and takes b as a suggestion at most.
+	Register(p Purpose, b Binding) (Registration, error)
 }
 
 // Registration is a registered shortcut.
@@ -310,7 +312,7 @@ func (m *Manager) syncCancel() {
 }
 
 func (m *Manager) register(s *slot, b Binding) {
-	reg, err := m.be.Register(b)
+	reg, err := m.be.Register(s.purpose, b)
 	if err != nil {
 		m.fail(s.purpose, s.shortcut, err)
 		return

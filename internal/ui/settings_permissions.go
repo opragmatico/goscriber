@@ -49,7 +49,7 @@ func (w *SettingsWindow) permissionsPage() fyne.CanvasObject {
 
 func (w *SettingsWindow) permissionRows() []fyne.CanvasObject {
 	if len(w.permissions) == 0 {
-		return []fyne.CanvasObject{paragraph(PermissionsNone)}
+		return append([]fyne.CanvasObject{paragraph(PermissionsNone)}, w.linuxSetupNotes()...)
 	}
 	var out []fyne.CanvasObject
 	for _, r := range w.permissions {

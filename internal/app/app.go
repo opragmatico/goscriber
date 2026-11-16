@@ -30,6 +30,10 @@ type Options struct {
 	// EngineVersion returns the speech engine's version, for the About
 	// page. Nil means this build has no engine.
 	EngineVersion func() string
+	// EngineGPU names the engine's GPU backend ("Metal", "Vulkan",
+	// "CUDA"), or "" when it runs on the CPU only, for the accelerator
+	// setting and the About page. Nil means this build has no engine.
+	EngineGPU func() string
 	// Instance is this launch's hold on being the only Goscriber, which the
 	// command line took; the app answers the commands later launches send
 	// on its control socket until it quits. Nil: no remote control. The

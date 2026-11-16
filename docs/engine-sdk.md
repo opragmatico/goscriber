@@ -28,8 +28,8 @@ make test-engine     # vets and tests internal/engine/nemo against the SDK
 `make deps` downloads the Go modules and runs `scripts/build-nemo-speech.sh`:
 
 - **Source**: `third_party/nemo-speech`, a shallow git submodule pinned to tag `v0.3.0` (commit `20999cc9`). On first use the script checks it out together with its `llama.cpp` submodule, which also provides ggml. It fetches no other upstream submodules.
-- **Preset**: upstream's `metal-asr` on Apple Silicon and `cpu-asr` on Linux. `NEMO_SPEECH_PRESET` overrides it.
-- **ASR only**: diarization, TTS, translation, speech-LLM, VoiceChat, the CLI and its microphone capture, HTTP, gRPC, examples, tests and tools are all off. Text normalisation (`NEMO_SPEECH_WITH_NORM`, Sparrowhawk/OpenFST) is off too; upstream leaves it off on macOS. CUDA and Vulkan presets wait for the Linux and Windows issues.
+- **Preset**: upstream's `metal-asr` on Apple Silicon and `cpu-asr` on Linux. `NEMO_SPEECH_PRESET` overrides it: `vulkan-asr` gives Linux the GPU, and needs `libvulkan-dev`, `glslc` and `spirv-headers` to build and a Vulkan driver to run; `cuda-asr` builds the same way with the CUDA toolkit, untested.
+- **ASR only**: diarization, TTS, translation, speech-LLM, VoiceChat, the CLI and its microphone capture, HTTP, gRPC, examples, tests and tools are all off. Text normalisation (`NEMO_SPEECH_WITH_NORM`, Sparrowhawk/OpenFST) is off too; upstream leaves it off on macOS.
 - **SentencePiece**: upstream's pinned static build (`scripts/build_sentencepiece_static.sh`), linked into `libnemo_speech_asr` with its symbols hidden, as in upstream's release archives. The SDK therefore needs no SentencePiece, Abseil or protobuf at run time.
 - **macOS 13.3** minimum (`CMAKE_OSX_DEPLOYMENT_TARGET`), the same as upstream's release archives. Without it, CMake would target the build machine's macOS version. Set `MACOSX_DEPLOYMENT_TARGET` to change it.
 - **Install**: `cmake --install` into `.deps/nemo-speech`, plus a generated `lib/pkgconfig/nemo-speech-asr.pc`.
@@ -62,9 +62,11 @@ The install records a build stamp in `share/goscriber/build-stamp`: the pinned c
 `internal/engine/nemo` declares `#cgo pkg-config: nemo-speech-asr`. The generated file gives:
 
 ```text
-Cflags: -I<prefix>/include
+Cflags: -I<prefix>/include -DGOSCRIBER_NEMO_GPU_<BACKEND>=1
 Libs:   -L<prefix>/lib -Wl,-rpath,<prefix>/lib -lnemo_speech_asr_c
 ```
+
+**GPU backend.** `nemo.GPUBackend()` names the SDK's GPU backend, which the binding needs because a `cpu-asr` SDK refuses any GPU index: it then loads every model on the CPU, and the settings window offers only the CPU. It goes by the ggml backend library loaded in the process (`libggml-metal`, `libggml-vulkan`, `libggml-cuda`, or only `libggml-cpu`), which the binary loads at startup with the SDK, so it is right whatever the binary was compiled against. `GOSCRIBER_NEMO_GPU_*` in the pkg-config file (`METAL`, `VULKAN`, `CUDA` or `NONE`) is the fallback when the libraries cannot be told apart; Go's build cache does not notice a new pkg-config file, so that define can be stale after a change of preset until a clean build (`go clean -cache`).
 
 The rpath lets development binaries and `go test` run straight from the tree, without `DYLD_LIBRARY_PATH` or `LD_LIBRARY_PATH`. Go needs to find the file:
 
@@ -103,10 +105,10 @@ macOS (the release bundle, [#34](https://github.com/opragmatico/goscriber/issues
 - `LSMinimumSystemVersion` must be at least 13.3, the libraries' deployment target.
 - At run time the libraries need only the system's libc++ and frameworks (Metal, MetalKit, Foundation, Accelerate).
 
-Linux (M4):
+Linux (`make dist-linux`, `scripts/package-linux.sh`; [linux.md](linux.md#packages)):
 
-- Ship `lib/` beside the binary, for example `bin/goscriber` and `lib/*.so*` in a tarball or AppImage, and set the binary's RUNPATH to `$ORIGIN/../lib` (for example with `patchelf`).
-- The libraries need glibc, libstdc++ and libgomp (ggml's CPU backend uses OpenMP with GCC) from the build machine's generation or newer, so build releases on the oldest distribution Goscriber supports.
+- `lib/` ships beside the binary, `bin/goscriber` and `lib/*.so*` in a tarball or in `/opt/goscriber` from the `.deb`, and patchelf sets the binary's RUNPATH to `$ORIGIN/../lib` and each library's to `$ORIGIN`.
+- The libraries need glibc, libstdc++ and libgomp (ggml's CPU backend uses OpenMP with GCC) from the build machine's generation or newer, so build releases on the oldest distribution Goscriber supports. The `.deb`'s dependencies come from `dpkg-shlibdeps`, which also adds libvulkan for a Vulkan build.
 
 ## Updating the pin
 

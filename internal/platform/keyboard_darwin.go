@@ -118,6 +118,7 @@ import (
 	"unicode/utf16"
 	"unsafe"
 
+	"github.com/opragmatico/goscriber/internal/config"
 	"github.com/opragmatico/goscriber/internal/output"
 )
 
@@ -142,6 +143,9 @@ const (
 // permission: without it macOS drops the events silently, so every method
 // checks first and fails with an error matching output.ErrNoPermission.
 type Keyboard struct {
+	// Settings is unused on macOS, which always pastes with Cmd+V and
+	// presses keys itself; Linux reads paste_keys and typing_tool from it.
+	Settings func() config.Settings
 	// Log receives a warning when the keyboard layout cannot be read. Nil
 	// means slog's default logger.
 	Log *slog.Logger
@@ -186,7 +190,7 @@ func (k Keyboard) Paste() error {
 
 // PasteKeyName describes the paste shortcut in the active keyboard layout,
 // such as "Cmd+V (key code 9)", for diagnostics.
-func PasteKeyName() string {
+func (Keyboard) PasteKeyName() string {
 	switch key := int(C.gsCommandVKeycode(C.long(layoutTimeout.Milliseconds()))); key {
 	case -1:
 		return fmt.Sprintf("Cmd+V (no V in this layout; key code %d)", ansiV)

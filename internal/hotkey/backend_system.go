@@ -50,7 +50,7 @@ var keyCodes = func() map[string]xhotkey.Key {
 	return m
 }()
 
-func (systemBackend) Register(b Binding) (Registration, error) {
+func (systemBackend) Register(_ Purpose, b Binding) (Registration, error) {
 	key, ok := keyCodes[b.Key]
 	if !ok {
 		return nil, fmt.Errorf("hotkey: no key code for %q", b.Key)

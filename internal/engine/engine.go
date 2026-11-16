@@ -101,7 +101,8 @@ type LoadSpec struct {
 	// than VADOnset. Zero means the library's default: 0.5 and 0.3.
 	VADOnset, VADOffset float32
 	// CPU runs the model on the CPU even when the build has a GPU backend
-	// (Metal on macOS).
+	// (Metal on macOS, Vulkan or CUDA on Linux). A build without one runs
+	// every model on the CPU.
 	CPU bool
 	// Latency is how far a streaming model looks ahead. Empty means
 	// LatencyBalanced; offline models ignore it.
@@ -135,6 +136,10 @@ type ModelInfo struct {
 	// as "en-US", including "auto" when it can detect the language. Empty
 	// means the model has one fixed language and ignores Options.Language.
 	Languages []string
+	// CPU reports that the model runs on the CPU: LoadSpec.CPU asked for
+	// it, the build has no GPU backend, or the GPU could not take the
+	// model.
+	CPU bool
 }
 
 // DecodeMode is how a recording is turned into text.

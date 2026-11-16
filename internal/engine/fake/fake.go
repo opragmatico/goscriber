@@ -106,6 +106,7 @@ func (e *Engine) Load(ctx context.Context, spec engine.LoadSpec) (engine.ModelIn
 		info.ID = spec.ID
 	}
 	info.Languages = slices.Clone(info.Languages)
+	info.CPU = info.CPU || spec.CPU
 	e.loaded, e.model = true, info
 	return info, nil
 }

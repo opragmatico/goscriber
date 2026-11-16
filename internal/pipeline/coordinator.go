@@ -865,7 +865,7 @@ func (c *Coordinator) finish(s *session, res engine.Result, samples []float32, r
 		Language:     s.model.Language,
 		Languages:    slices.Clone(res.Languages),
 		TextLanguage: textLanguage(s.model, res.Languages),
-		Duration:     s.timings.recording,
+		Duration:     recordingLength(samples, rate, s.timings.recording),
 		Boosted:      len(s.phrases) > 0,
 		Settings:     s.settings.Clone(),
 	}
@@ -1106,3 +1106,14 @@ func displayName(m Model) string {
 }
 
 func round(d time.Duration) time.Duration { return d.Round(time.Millisecond) }
+
+// recordingLength is how long the recording lasts: the length of its
+// samples at rate Hz, as for a file or a saved recording transcribed again,
+// so the history shows what Play plays. Without a rate, the time spent
+// recording stands in.
+func recordingLength(samples []float32, rate int, recording time.Duration) time.Duration {
+	if rate <= 0 {
+		return recording
+	}
+	return time.Duration(len(samples)) * time.Second / time.Duration(rate)
+}

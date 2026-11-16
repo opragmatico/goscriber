@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Goscriber
+GenericName=Dictation
+Comment=Offline push-to-talk speech-to-text
+Exec=goscriber
+Icon=io.github.opragmatico.goscriber
+Terminal=false
+Categories=Utility;Accessibility;
+Keywords=dictation;speech;transcription;voice;speech-to-text;
+StartupNotify=false
+X-GNOME-UsesNotifications=true

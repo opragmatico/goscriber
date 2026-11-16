@@ -18,6 +18,8 @@ func debugPaste(args []string, env Env) int {
 	keep := c.fs.Bool("keep", false, "leave the text on the clipboard")
 	submit := c.fs.Bool("submit", false, "press Return afterwards")
 	space := c.fs.Bool("space", false, "add a trailing space")
+	keys := c.fs.String("keys", "", "Linux: ctrl_v, shift_insert or ctrl_shift_v")
+	tool := c.fs.String("tool", "", "Linux: auto, xdotool, wtype, dotool or ydotool")
 	pos, code, ok := c.parse(args)
 	if !ok {
 		return code
@@ -26,7 +28,8 @@ func debugPaste(args []string, env Env) int {
 	if strings.TrimSpace(text) == "" {
 		return c.fail("no TEXT given")
 	}
-	opts := output.OptionsFrom(userSettings())
+	s := userSettings()
+	opts := output.OptionsFrom(s)
 	switch m := config.PasteMethod(*method); m {
 	case "":
 	case config.PasteClipboard, config.PasteDirect, config.PasteNone:
@@ -34,16 +37,30 @@ func debugPaste(args []string, env Env) int {
 	default:
 		return c.fail("--method %q: want paste, direct or none", *method)
 	}
+	switch k := config.PasteKeys(*keys); k {
+	case "":
+	case config.PasteCtrlV, config.PasteShiftInsert, config.PasteCtrlShiftV:
+		s.PasteKeys = k
+	default:
+		return c.fail("--keys %q: want ctrl_v, shift_insert or ctrl_shift_v", *keys)
+	}
+	switch t := config.TypingTool(*tool); t {
+	case "":
+	case config.TypingAuto, config.TypingXdotool, config.TypingWtype, config.TypingDotool, config.TypingYdotool:
+		s.TypingTool = t
+	default:
+		return c.fail("--tool %q: want auto, xdotool, wtype, dotool or ydotool", *tool)
+	}
 	if *keep {
 		opts.Clipboard = config.ClipboardKeep
 	}
 	opts.AutoSubmit = opts.AutoSubmit || *submit
 	opts.TrailingSpace = opts.TrailingSpace || *space
 	if env.Output == nil {
-		fmt.Fprintln(env.Stderr, "goscriber: this build cannot paste; build it with cgo on macOS")
+		fmt.Fprintln(env.Stderr, "goscriber: this build cannot paste; build it with cgo on macOS or Linux")
 		return exitFailure
 	}
-	oe := env.Output()
+	oe := env.Output(s)
 
 	how := map[config.PasteMethod]string{
 		config.PasteClipboard: "paste with " + oe.PasteKey(),

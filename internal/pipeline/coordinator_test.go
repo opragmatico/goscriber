@@ -748,6 +748,11 @@ func TestStages(t *testing.T) {
 		e.SampleRate != rate || !slices.Equal(e.Languages, []string{"en-US"}) || e.Language != "en-US" || e.At.IsZero() {
 		t.Errorf("history entry %+v", e)
 	}
+	// The recording lasts as long as its audio, however quickly the test
+	// stopped it.
+	if e.Duration != time.Second {
+		t.Errorf("history entry lasts %v, want the second recorded", e.Duration)
+	}
 	if res := r.events.kinds(EventResult); len(res) != 1 || !slices.Equal(res[0].Languages, []string{"en-US"}) {
 		t.Errorf("result events %+v, want the detected language", res)
 	}

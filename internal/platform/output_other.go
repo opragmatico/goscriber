@@ -1,11 +1,16 @@
-//go:build !darwin
+//go:build !darwin && !linux
 
 package platform
 
-import "github.com/opragmatico/goscriber/internal/output"
+import (
+	"log/slog"
 
-// Pasteboard is the clipboard. Only macOS is supported so far (Linux and
-// Windows are issues #35 and #36); elsewhere every method fails with
+	"github.com/opragmatico/goscriber/internal/config"
+	"github.com/opragmatico/goscriber/internal/output"
+)
+
+// Pasteboard is the clipboard. Only macOS and Linux are supported so far
+// (Windows is issue #36); elsewhere every method fails with
 // output.ErrUnsupported.
 type Pasteboard struct{}
 
@@ -19,9 +24,12 @@ func (Pasteboard) Text() (string, bool)        { return "", false }
 func (Pasteboard) SetText(string, bool) error  { return output.ErrUnsupported }
 func (Pasteboard) Save() (func() error, error) { return nil, output.ErrUnsupported }
 
-// Keyboard posts key presses to the focused app; only macOS is supported
-// so far.
-type Keyboard struct{}
+// Keyboard posts key presses to the focused app; only macOS and Linux are
+// supported so far.
+type Keyboard struct {
+	Settings func() config.Settings
+	Log      *slog.Logger
+}
 
 var _ output.Keyboard = Keyboard{}
 
@@ -33,4 +41,4 @@ func (Keyboard) Type(string) error  { return output.ErrUnsupported }
 func AccessibilityTrusted() bool { return true }
 
 // PasteKeyName describes the paste shortcut.
-func PasteKeyName() string { return "Ctrl+V" }
+func (Keyboard) PasteKeyName() string { return "Ctrl+V" }

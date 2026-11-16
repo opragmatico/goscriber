@@ -35,10 +35,11 @@ type Env struct {
 	// wires it to the NeMo-Speech.cpp binding in builds that have it; nil
 	// means this build has no engine.
 	NewEngine func() engine.Engine
-	// Output reaches the clipboard and keyboard for `goscriber debug paste`.
-	// main wires it to internal/platform in CGo builds; nil means this build
+	// Output reaches the clipboard and keyboard for `goscriber debug paste`,
+	// pressing keys as s says (paste_keys and typing_tool on Linux). main
+	// wires it to internal/platform in CGo builds; nil means this build
 	// cannot paste.
-	Output func() OutputEnv
+	Output func(s config.Settings) OutputEnv
 	// Models manages the model files for the subcommands. Nil means one for
 	// the user's models directory, which also looks in the Hugging Face
 	// cache; tests supply their own.
@@ -54,7 +55,8 @@ type OutputEnv struct {
 	// back. Its content is never printed.
 	Text func() (string, bool)
 	// PasteKey describes the paste shortcut in the active keyboard layout,
-	// such as "Cmd+V (key code 9)".
+	// such as "Cmd+V (key code 9)", or the paste keys and what presses
+	// them on Linux, such as "Shift+Insert (X11 key events)".
 	PasteKey func() string
 }
 

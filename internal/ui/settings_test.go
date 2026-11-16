@@ -335,9 +335,10 @@ func settingsKeys() map[string][]int {
 
 // Every settings field can be changed from the window: each has a widget
 // bound to it, the binding points at the field its key names, and the
-// widget is on a page.
+// widget is on a page. Linux shows every field: the paste keys and typing
+// tool are Linux's.
 func TestEveryFieldIsBound(t *testing.T) {
-	tw := newTestWindow(t, func(o *SettingsOptions) { o.ForceDebug = true })
+	tw := newTestWindow(t, func(o *SettingsOptions) { o.ForceDebug = true; o.Info.OS = "linux" })
 	tw.show(PageGeneral)
 
 	keys := settingsKeys()

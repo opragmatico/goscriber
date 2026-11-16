@@ -113,6 +113,35 @@ func loadNemotron(t testing.TB, cpu bool) (*Engine, engine.ModelInfo) {
 	return e, info
 }
 
+// The ggml backend library the process loaded names the SDK's GPU
+// backend: metal-asr on Apple Silicon, cpu-asr (none) on Linux unless
+// asked for vulkan-asr.
+func TestGPUBackend(t *testing.T) {
+	got := GPUBackend()
+	if !slices.Contains([]string{"", "Metal", "Vulkan", "CUDA"}, got) {
+		t.Fatalf("GPUBackend = %q", got)
+	}
+	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" && got != "Metal" {
+		t.Errorf("GPUBackend = %q on Apple Silicon, want Metal", got)
+	}
+	t.Logf("GPU backend: %q", got)
+}
+
+// A model runs on the GPU only when the SDK has one and the spec does not
+// ask for the CPU; a CPU-only SDK loads on the CPU instead of refusing the
+// GPU index, and ModelInfo.CPU says where it runs.
+func TestModelInfoSaysWhereTheModelRuns(t *testing.T) {
+	_, onCPU := loadNemotron(t, true)
+	if !onCPU.CPU {
+		t.Errorf("loaded with LoadSpec.CPU: ModelInfo.CPU = false")
+	}
+	_, auto := loadNemotron(t, false)
+	if GPUBackend() == "" && !auto.CPU {
+		t.Errorf("a CPU-only SDK reported the model on the GPU")
+	}
+	t.Logf("GPU backend %q: the model runs on the CPU = %v", GPUBackend(), auto.CPU)
+}
+
 func TestNemotronModelInfo(t *testing.T) {
 	_, info := loadNemotron(t, false)
 	if info.ID != "nemotron-3.5" || !info.Streaming || info.DecodeMode() != engine.DecodeLive {

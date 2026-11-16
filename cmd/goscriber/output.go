@@ -4,17 +4,19 @@ package main
 
 import (
 	"github.com/opragmatico/goscriber/internal/cli"
+	"github.com/opragmatico/goscriber/internal/config"
 	"github.com/opragmatico/goscriber/internal/platform"
 )
 
 func init() {
-	newOutput = func() cli.OutputEnv {
+	newOutput = func(s config.Settings) cli.OutputEnv {
 		pb := platform.GeneralPasteboard()
+		kb := platform.Keyboard{Settings: func() config.Settings { return s }}
 		return cli.OutputEnv{
 			Clipboard: pb,
-			Keyboard:  platform.Keyboard{},
+			Keyboard:  kb,
 			Text:      pb.Text,
-			PasteKey:  platform.PasteKeyName,
+			PasteKey:  kb.PasteKeyName,
 		}
 	}
 }

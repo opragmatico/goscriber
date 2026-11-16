@@ -48,6 +48,32 @@ const (
 	PasteNone      PasteMethod = "none"   // copy only, never paste
 )
 
+// PasteKeys are the keys a clipboard paste presses on Linux. macOS always
+// presses Cmd+V.
+type PasteKeys string
+
+// Paste keys.
+const (
+	PasteCtrlV       PasteKeys = "ctrl_v"       // most apps
+	PasteShiftInsert PasteKeys = "shift_insert" // apps and terminals alike, in any keyboard layout
+	PasteCtrlShiftV  PasteKeys = "ctrl_shift_v" // terminals
+)
+
+// TypingTool is what presses keys for Goscriber on Linux: the paste keys,
+// direct typing and Return.
+type TypingTool string
+
+// Typing tools. Auto uses Goscriber's own X11 key events (XTest) in an X11
+// session, and on Wayland the first of wtype, dotool and ydotool that
+// works.
+const (
+	TypingAuto    TypingTool = "auto"
+	TypingXdotool TypingTool = "xdotool" // X11
+	TypingWtype   TypingTool = "wtype"   // Wayland compositors with the virtual keyboard protocol (not GNOME)
+	TypingDotool  TypingTool = "dotool"  // any session, through uinput
+	TypingYdotool TypingTool = "ydotool" // any session, through uinput and the ydotoold daemon
+)
+
 // ClipboardHandling says what happens to the clipboard after a paste.
 type ClipboardHandling string
 
@@ -229,6 +255,9 @@ type Settings struct {
 	PasteDelayAfterMS   int               `json:"paste_delay_after_ms"`
 	AutoSubmit          bool              `json:"auto_submit"`
 	AppendTrailingSpace bool              `json:"append_trailing_space"`
+	// Linux only: the keys a paste presses, and the tool that presses keys.
+	PasteKeys  PasteKeys  `json:"paste_keys"`
+	TypingTool TypingTool `json:"typing_tool"`
 
 	// Custom vocabulary: names and jargon to spell the user's way. A model
 	// with word boosting (Nemotron) is asked to favour CustomWords, by
@@ -295,7 +324,9 @@ func defaultsFor(goos string) Settings {
 		PasteMethod:         PasteClipboard,
 		ClipboardHandling:   ClipboardRestore,
 		PasteDelayMS:        60,
-		PasteDelayAfterMS:   60,
+		PasteDelayAfterMS:   defaultPasteDelayAfter(goos),
+		PasteKeys:           defaultPasteKeys(goos),
+		TypingTool:          TypingAuto,
 		HistoryLimit:        5,
 		RecordingRetention:  RetentionPreserveLimit,
 		LogLevel:            LogInfo,
@@ -329,6 +360,25 @@ func defaultOverlayStyle(goos string) OverlayStyle {
 		return OverlayNone
 	}
 	return OverlayLive
+}
+
+// Shift+Insert pastes in terminals as well as in other apps, and does not
+// depend on the keyboard layout, so Linux defaults to it, as Handy does.
+func defaultPasteKeys(goos string) PasteKeys {
+	if goos == "linux" {
+		return PasteShiftInsert
+	}
+	return PasteCtrlV
+}
+
+// On X11 the app reads the clipboard from Goscriber when it handles the
+// paste keys, which may come well after they are pressed; Handy waits 500
+// ms on Linux before putting the clipboard back.
+func defaultPasteDelayAfter(goos string) int {
+	if goos == "linux" {
+		return 500
+	}
+	return 60
 }
 
 // Clone returns a deep copy, so callers can change it without affecting the
@@ -380,6 +430,10 @@ func (s *Settings) normalize(def Settings) []string {
 		func() { s.PasteMethod = def.PasteMethod })
 	check("clipboard_handling", oneOf(s.ClipboardHandling, ClipboardRestore, ClipboardKeep),
 		func() { s.ClipboardHandling = def.ClipboardHandling })
+	check("paste_keys", oneOf(s.PasteKeys, PasteCtrlV, PasteShiftInsert, PasteCtrlShiftV),
+		func() { s.PasteKeys = def.PasteKeys })
+	check("typing_tool", oneOf(s.TypingTool, TypingAuto, TypingXdotool, TypingWtype, TypingDotool, TypingYdotool),
+		func() { s.TypingTool = def.TypingTool })
 	check("paste_delay_ms", between(s.PasteDelayMS, 0, 5000), func() { s.PasteDelayMS = def.PasteDelayMS })
 	check("paste_delay_after_ms", between(s.PasteDelayAfterMS, 0, 5000),
 		func() { s.PasteDelayAfterMS = def.PasteDelayAfterMS })

@@ -18,6 +18,8 @@ type fakeDesk struct {
 	typed    string
 	returns  int
 	pasteErr error
+	// settings is what debug paste handed the keyboard.
+	settings config.Settings
 }
 
 func (d *fakeDesk) Save() (func() error, error) {
@@ -45,7 +47,8 @@ func (d *fakeDesk) Type(text string) error { d.typed += text; return nil }
 func (d *fakeDesk) PressReturn() error     { d.returns++; return nil }
 
 func (d *fakeDesk) env() Env {
-	return Env{Output: func() OutputEnv {
+	return Env{Output: func(s config.Settings) OutputEnv {
+		d.settings = s
 		return OutputEnv{
 			Clipboard: d, Keyboard: d,
 			Text:     func() (string, bool) { return d.clip, d.has },
@@ -106,6 +109,23 @@ func TestDebugPasteMethods(t *testing.T) {
 	}
 }
 
+// --keys and --tool choose how Linux presses keys for this one paste.
+func TestDebugPasteKeysAndTool(t *testing.T) {
+	t.Setenv(config.HomeEnv, t.TempDir())
+	d := &fakeDesk{}
+	code, _, stderr := runWith(t, d.env(), "debug", "paste", "--wait", "0", "--keys", "ctrl_shift_v", "--tool", "ydotool", "Hi.")
+	if code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, stderr)
+	}
+	if d.settings.PasteKeys != config.PasteCtrlShiftV || d.settings.TypingTool != config.TypingYdotool {
+		t.Errorf("the keyboard got paste keys %q and tool %q", d.settings.PasteKeys, d.settings.TypingTool)
+	}
+	code, _, _ = runWith(t, d.env(), "debug", "paste", "--wait", "0", "Hi.")
+	if def := config.Defaults(); code != 0 || d.settings.PasteKeys != def.PasteKeys || d.settings.TypingTool != def.TypingTool {
+		t.Errorf("without flags: exit %d, paste keys %q, tool %q; want the settings'", code, d.settings.PasteKeys, d.settings.TypingTool)
+	}
+}
+
 func TestDebugPasteWithoutPermission(t *testing.T) {
 	t.Setenv(config.HomeEnv, t.TempDir())
 	d := &fakeDesk{clip: "user's copy", has: true, pasteErr: fmt.Errorf("%w: grant it", output.ErrNoPermission)}
@@ -128,6 +148,8 @@ func TestDebugPasteUsageErrors(t *testing.T) {
 	}{
 		{d.env(), []string{"debug", "paste"}, "no TEXT given"},
 		{d.env(), []string{"debug", "paste", "--method", "shout", "x"}, `--method "shout"`},
+		{d.env(), []string{"debug", "paste", "--keys", "alt_v", "x"}, `--keys "alt_v"`},
+		{d.env(), []string{"debug", "paste", "--tool", "xte", "x"}, `--tool "xte"`},
 		{Env{}, []string{"debug", "paste", "x"}, "this build cannot paste"},
 	} {
 		code, _, stderr := runWith(t, tc.env, tc.args...)

@@ -13,6 +13,7 @@ import (
 	"github.com/opragmatico/goscriber/internal/audio"
 	"github.com/opragmatico/goscriber/internal/config"
 	"github.com/opragmatico/goscriber/internal/hotkey"
+	"github.com/opragmatico/goscriber/internal/session"
 )
 
 // SystemDefault is how a device picker names the system's default device.
@@ -26,9 +27,22 @@ func (w *SettingsWindow) generalPage() fyne.CanvasObject {
 		func(s *config.Settings) *string { return &s.CancelShortcut },
 		func(s *config.Settings) *string { return &s.TranscribeShortcut })
 
-	return settingsPage("General",
-		group("Shortcuts",
-			w.row("Dictation", "Starts and stops dictation, in any app. Click it, then press the keys.", transcribe),
+	dictation := w.row("Dictation", dictationHint, transcribe)
+	cancelRow := w.row("Cancel", cancelHint, cancel)
+	var desktopKeys []fyne.CanvasObject
+	var keysView *desktopKeysView
+	if w.opts.Info.Session == session.Wayland {
+		// What the hints say depends on whether the desktop's portal holds
+		// the shortcuts, which the app learns after the window is built.
+		keysView = w.newDesktopKeysView()
+		dictation = w.row("Dictation", "", container.NewVBox(transcribe, keysView.dictationHint))
+		cancelRow = w.row("Cancel", "", container.NewVBox(cancel, keysView.cancelHint))
+		desktopKeys = append(desktopKeys, keysView.row)
+	}
+
+	pg := settingsPage("General",
+		group("Shortcuts", append(desktopKeys,
+			dictation,
 			w.row("Activation", "How the dictation shortcut works.",
 				choiceSetting(w, "activation_mode", func(s *config.Settings) *config.ActivationMode { return &s.ActivationMode },
 					[]choice[config.ActivationMode]{
@@ -39,8 +53,8 @@ func (w *SettingsWindow) generalPage() fyne.CanvasObject {
 			w.row("Hold threshold", "With Hold or tap, holding the shortcut longer than this is push to talk; a quicker tap toggles.",
 				sliderSetting(w, "hold_threshold_ms", func(s *config.Settings) *int { return &s.HoldThresholdMS },
 					50, 2000, 50, formatMS)),
-			w.row("Cancel", "Discards the recording. Taken from other apps only while recording.", cancel),
-		),
+			cancelRow,
+		)...),
 		group("Microphone and sounds",
 			w.row("Microphone", "", w.deviceSetting("microphone", func(s *config.Settings) *string { return &s.Microphone }, false)),
 			w.row("Start and stop sounds", "A chime when recording starts and stops.",
@@ -69,6 +83,10 @@ func (w *SettingsWindow) generalPage() fyne.CanvasObject {
 					}, nil)),
 		),
 	)
+	if keysView != nil {
+		keysView.page = pg.(*container.Scroll).Content
+	}
+	return pg
 }
 
 // shortcutSetting is a shortcut recorder bound to a shortcut field, with a

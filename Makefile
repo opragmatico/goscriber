@@ -34,7 +34,7 @@ NEMO_TAGS := nemo
 BUILD_TAGS ?= $(if $(wildcard $(NEMO_SPEECH_PREFIX)/lib/pkgconfig/nemo-speech-asr.pc),$(NEMO_TAGS))
 
 .DEFAULT_GOAL := build
-.PHONY: help build run app test test-race test-nocgo test-engine engine-version bench vet lint fmt deps tidy clean clean-deps
+.PHONY: help build run app dist-linux test test-race test-nocgo test-engine engine-version bench vet lint fmt deps tidy clean clean-deps
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -72,6 +72,13 @@ app: build ## Assemble and sign dist/Goscriber.app (macOS development bundle; CO
 		echo "codesign not found: $(APP_BUNDLE) is not signed"; \
 	fi
 
+# Linux packages: a tarball that runs from wherever it is unpacked and a
+# .deb that installs into /opt/goscriber, both with the NeMo-Speech.cpp
+# libraries (docs/linux.md). Build the SDK with -DGGML_NATIVE=OFF for
+# packages that run on other machines.
+dist-linux: build ## Linux: dist/goscriber-VERSION-linux-ARCH.tar.gz and a .deb (needs make deps, patchelf, dpkg-dev)
+	VERSION='$(VERSION)' BIN='$(CURDIR)/$(BIN)' scripts/package-linux.sh
+
 test: test-race test-nocgo ## Run every test with the race detector, then the CGo-free check
 
 test-race: ## go test -race ./...
@@ -106,9 +113,9 @@ deps: ## Download Go modules and build the pinned NeMo-Speech.cpp SDK into .deps
 tidy: ## go mod tidy
 	$(GO) mod tidy
 
-clean: ## Remove the binary, the app bundle and the pinned tools
+clean: ## Remove the binary, the app bundle, the packages and the pinned tools
 	rm -f $(BIN)
-	rm -rf $(TOOLS_BIN) $(APP_BUNDLE)
+	rm -rf $(TOOLS_BIN) $(APP_BUNDLE) dist
 
 clean-deps: ## Remove the NeMo-Speech.cpp SDK and its build tree (.deps/)
 	rm -rf .deps
