@@ -13,6 +13,7 @@ import (
 
 	"github.com/opragmatico/goscriber/internal/audio"
 	"github.com/opragmatico/goscriber/internal/config"
+	"github.com/opragmatico/goscriber/internal/history"
 	"github.com/opragmatico/goscriber/internal/hotkey"
 	"github.com/opragmatico/goscriber/internal/notice"
 	"github.com/opragmatico/goscriber/internal/pipeline"
@@ -104,6 +105,7 @@ type shell struct {
 	do func(func())
 
 	svc       services
+	history   *history.Store // nil when it could not be opened
 	dictation *pipeline.Coordinator
 	overlay   *ui.Overlay
 	// overlayActive is whether a session is in progress, for the overlay's
@@ -160,6 +162,7 @@ func newShell(rt *Runtime, a fyne.App, opts Options) *shell {
 		trusted:        accessibilityTrusted,
 	}
 	sh.svc = newServices(rt, opts, sh.notices)
+	sh.history = openHistory(rt)
 	sh.permissionRows = &latest{do: func(f func()) { sh.do(f) }}
 	if runtime.GOOS == "darwin" {
 		sh.secureInput = platform.SecureInputEnabled
@@ -308,6 +311,8 @@ func (sh *shell) newSettingsWindow() *ui.SettingsWindow {
 		// transcripts get.
 		DefaultFillerWords: text.Fillers("en"),
 		Models:             sh.svc.files,
+		History:            sh.historyStore(),
+		HistoryActions:     sh.historyActions(),
 		Devices:            listDevices,
 		Logs:               sh.rt.Log.Ring().Entries,
 		ForceDebug:         sh.opts.Debug,
@@ -382,6 +387,7 @@ func (sh *shell) applySettings(s config.Settings) {
 	}
 	sh.hotkeys.Apply(hotkey.ConfigFrom(s))
 	sh.applyDictationSettings(s)
+	sh.followHistory(s)
 	sh.followModel(s)
 }
 

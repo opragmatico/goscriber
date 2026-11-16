@@ -65,6 +65,11 @@ type SettingsOptions struct {
 	// Models lists, downloads and deletes the model files for the Models
 	// page. Nil shows the catalog with nothing to download.
 	Models ModelFiles
+	// History lists and deletes past dictations for the History page. Nil
+	// says they are not being saved.
+	History HistoryStore
+	// HistoryActions carry out the History page's buttons.
+	HistoryActions HistoryActions
 	// Devices lists the microphones and outputs for the General page. Nil
 	// means the system's, from internal/audio.
 	Devices func() (inputs, outputs []audio.Device, err error)
@@ -137,6 +142,7 @@ type SettingsWindow struct {
 	devices    deviceState
 	models     modelsState
 	logs       logsState
+	history    historyState
 	onboarding onboardingState
 
 	// confirm asks before something that cannot be undone, such as
@@ -191,8 +197,8 @@ func (w *SettingsWindow) log() *slog.Logger {
 
 // Show opens the window on page p and brings it to the front, leaving
 // onboarding if it is on screen. The Debug page opens only in debug mode;
-// otherwise Show opens General instead. Each time, the model files and
-// audio devices are read again, since they may have changed while the
+// otherwise Show opens General instead. Each time, the model files, audio
+// devices and history are read again, since they may have changed while the
 // window was closed.
 func (w *SettingsWindow) Show(p Page) {
 	if w.win == nil {
@@ -205,6 +211,18 @@ func (w *SettingsWindow) Show(p Page) {
 	w.visible = true
 	w.refreshModelFiles()
 	w.refreshDevices()
+	w.refreshHistory()
+}
+
+// Hide takes the window off screen, as closing it does, without running
+// OnClose.
+func (w *SettingsWindow) Hide() {
+	if w.win == nil || !w.visible {
+		return
+	}
+	w.win.Canvas().Unfocus()
+	w.win.Hide()
+	w.visible = false
 }
 
 // Visible reports whether the window is on screen.
