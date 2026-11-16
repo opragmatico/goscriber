@@ -1,20 +1,23 @@
 // Package cli parses Goscriber's command line: the desktop app's flags, the
 // transcribe, models and debug subcommands, the hidden engine-worker
-// subcommand the app runs its speech engine in, and later the
-// remote-control flags that are forwarded to a running instance.
+// subcommand the app runs its speech engine in, and the remote-control
+// flags that are forwarded to the running app.
 package cli
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"runtime"
+	"strings"
 
 	"github.com/opragmatico/goscriber/internal/config"
 	"github.com/opragmatico/goscriber/internal/engine"
 	"github.com/opragmatico/goscriber/internal/engine/worker"
+	"github.com/opragmatico/goscriber/internal/instance"
 	"github.com/opragmatico/goscriber/internal/models"
 	"github.com/opragmatico/goscriber/internal/output"
 )
@@ -92,12 +95,19 @@ type AppOptions struct {
 	// a worker process, whatever the engine_in_process setting says.
 	EngineInProcess bool
 	Version         string
+	// Instance makes this launch the only Goscriber running; the app
+	// answers the commands later launches send it. Nil where the system
+	// has no single-instance support yet, or the lock could not be taken.
+	// Run releases it once the app returns.
+	Instance *instance.Instance
 }
 
 const usage = `Goscriber: offline push-to-talk speech-to-text.
 
 Usage:
-  goscriber [flags]            start the desktop app
+  goscriber [flags]            start the desktop app, or show the running one
+  goscriber --toggle-transcription | --cancel
+                               control the running app
   goscriber transcribe FILE... transcribe WAV files and print the text
   goscriber models COMMAND     list, download and delete speech models
 
@@ -119,6 +129,15 @@ Flags:
       --no-tray        run without the tray icon; the settings window opens instead
       --start-hidden   open no window at launch
       --version        print the version and exit
+
+Remote control (sent to the running app, which must be started first):
+      --toggle-transcription
+                       start dictation, or stop it and paste the transcript
+      --cancel         discard the dictation in progress
+  Sending SIGUSR2 to the app also toggles dictation.
+
+Only one Goscriber runs at a time: starting it again without a remote-control
+flag brings the running one's settings window to the front.
 
 Environment:
   GOSCRIBER_LOG   log level override: debug, info, warn or error
@@ -154,6 +173,8 @@ func Run(args []string, env Env) int {
 	startHidden := fs.Bool("start-hidden", false, "open no window at launch")
 	noTray := fs.Bool("no-tray", false, "run without the tray icon")
 	inProcess := fs.Bool("engine-in-process", false, "run the speech engine inside the app")
+	toggle := fs.Bool(string(instance.Toggle), false, "start or stop dictation in the running app")
+	cancel := fs.Bool(string(instance.Cancel), false, "cancel dictation in the running app")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -168,6 +189,13 @@ func Run(args []string, env Env) int {
 		return 2
 	}
 
+	if cmd, msg := remoteCommand(fs, *toggle, *cancel); msg != "" {
+		fmt.Fprintf(env.Stderr, "goscriber: %s\n\n%s", msg, usage)
+		return 2
+	} else if cmd != "" {
+		return runRemote(cmd, env)
+	}
+
 	if *showVersion {
 		fmt.Fprintf(env.Stdout, "goscriber %s (%s %s/%s)\n",
 			ResolveVersion(env.Version), runtime.Version(), runtime.GOOS, runtime.GOARCH)
@@ -178,16 +206,103 @@ func Run(args []string, env Env) int {
 		fmt.Fprintln(env.Stderr, "goscriber: the desktop app is not available in this build; run 'goscriber --help'")
 		return 0
 	}
+	inst, code, done := claimInstance(env)
+	if done {
+		return code
+	}
+	defer inst.Close()
 	opts := AppOptions{
 		Debug:           *debug,
 		StartHidden:     *startHidden,
 		NoTray:          *noTray,
 		EngineInProcess: *inProcess,
 		Version:         ResolveVersion(env.Version),
+		Instance:        inst,
 	}
 	if err := env.RunApp(opts); err != nil {
 		fmt.Fprintf(env.Stderr, "goscriber: %v\n", err)
 		return 1
 	}
 	return 0
+}
+
+// remoteCommand returns the command the remote-control flags ask for, or ""
+// when none was given. msg explains a usage error: two remote-control
+// flags, or one with flags that only mean something to a launch.
+func remoteCommand(fs *flag.FlagSet, toggle, cancel bool) (cmd instance.Command, msg string) {
+	switch {
+	case toggle && cancel:
+		return "", "--toggle-transcription and --cancel cannot be combined"
+	case toggle:
+		cmd = instance.Toggle
+	case cancel:
+		cmd = instance.Cancel
+	default:
+		return "", ""
+	}
+	var others []string
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name != string(cmd) {
+			others = append(others, "--"+f.Name)
+		}
+	})
+	if len(others) > 0 {
+		return "", fmt.Sprintf("--%s controls the running app and takes no other flags (%s)", cmd, strings.Join(others, ", "))
+	}
+	return cmd, ""
+}
+
+// runRemote sends cmd to the running app.
+func runRemote(cmd instance.Command, env Env) int {
+	paths, err := config.ResolvePaths()
+	if err != nil {
+		fmt.Fprintf(env.Stderr, "goscriber: %v\n", err)
+		return exitFailure
+	}
+	ctx, stop := interruptible()
+	defer stop()
+	switch err := instance.Send(ctx, paths.ConfigDir, cmd); {
+	case err == nil:
+		return exitOK
+	case errors.Is(err, instance.ErrNotRunning):
+		fmt.Fprintln(env.Stderr, "goscriber: Goscriber is not running; start it first")
+	default:
+		fmt.Fprintf(env.Stderr, "goscriber: %v\n", err)
+	}
+	return exitFailure
+}
+
+// claimInstance makes this launch the only Goscriber running. When another
+// one runs, it asks that one to show its settings window, and done is true
+// with the exit code. Where the system has no single-instance support, or
+// the lock cannot be taken, the app runs anyway, without remote control.
+func claimInstance(env Env) (inst *instance.Instance, code int, done bool) {
+	paths, err := config.ResolvePaths()
+	if err != nil {
+		return nil, 0, false // the app reports it when it starts
+	}
+	// Each round either takes the lock or reaches the app that holds it,
+	// unless that app quits in between; three rounds are plenty.
+	for range 3 {
+		held, err := instance.Acquire(paths.ConfigDir)
+		switch {
+		case err == nil:
+			return held, 0, false
+		case errors.Is(err, instance.ErrUnsupported):
+			return nil, 0, false
+		case !errors.Is(err, instance.ErrRunning):
+			fmt.Fprintf(env.Stderr, "goscriber: cannot make sure only one Goscriber runs: %v\n", err)
+			return nil, 0, false
+		}
+		switch err := instance.Send(context.Background(), paths.ConfigDir, instance.Show); {
+		case err == nil:
+			fmt.Fprintln(env.Stdout, "Goscriber is already running; its settings window is in front.")
+			return nil, exitOK, true
+		case !errors.Is(err, instance.ErrNotRunning):
+			fmt.Fprintf(env.Stderr, "goscriber: Goscriber is already running: %v\n", err)
+			return nil, exitFailure, true
+		}
+	}
+	fmt.Fprintln(env.Stderr, "goscriber: another Goscriber keeps starting and quitting; try again")
+	return nil, exitFailure, true
 }

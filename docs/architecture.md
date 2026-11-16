@@ -44,7 +44,7 @@ cmd/goscriber/             # main: GUI by default; subcommands `transcribe`, `en
 internal/
 ├── app/                   # Fyne app bootstrap and object wiring
 ├── cli/                   # flags, subcommands, remote-control client
-├── instance/              # single-instance socket server
+├── instance/              # single-instance lock and control socket
 ├── config/                # paths and settings (JSON, defaults, migrations)
 ├── logging/               # slog setup, file sink, in-memory ring for the log viewer
 ├── notice/                # one place to report background errors: hub, de-duplication, fan-out
@@ -107,6 +107,27 @@ third_party/
 - **No window at launch** while the tray is shown, except [onboarding](#onboarding) until it is over; windows open from the menu. Without a tray (`--no-tray`, the `show_tray_icon` setting, or a desktop with no tray) the settings window opens at launch, even with `--start-hidden`, and closing it quits, as in Handy.
 - **macOS**: with a tray the app is an accessory app with no Dock icon. The bundle's Info.plist sets `LSUIElement`, and the app also sets the activation policy at startup, because GLFW makes every app a regular one and plain `go run` builds have no Info.plist. Without a tray the Dock icon stays as the way back in.
 - **Shutdown**: Quit, SIGINT and SIGTERM all end Fyne's main loop; the app then stops following settings and closes the log.
+
+### Single instance and remote control
+
+Only one Goscriber runs per config directory (`GOSCRIBER_HOME` makes another), and scripts can control it (`internal/instance`, `internal/cli`):
+
+| Command line | With Goscriber running | With none running |
+| --- | --- | --- |
+| `goscriber` (with or without `--start-hidden`, `--no-tray`, `--debug`) | brings the running one's settings window to the front, as it is, or on [onboarding](#onboarding) while that is not over, and exits | starts the app |
+| `goscriber --toggle-transcription` | starts dictation, or stops it and pastes the transcript, as the shortcut in toggle mode; exits quietly with 0 | says Goscriber is not running and exits with 1 |
+| `goscriber --cancel` | discards the dictation in progress | the same |
+| `kill -USR2 <pid>` | toggles dictation, as in Handy | |
+
+A remote-control flag takes no other flag. The commands reach the coordinator as the tray's do, so one that does not fit the state is refused there (a toggle while a transcript is on its way), and toggling without a model raises `no_model` in the app.
+
+**Lock.** Before the app starts, the command line takes an exclusive `flock` on `goscriber.lock` in the config directory, and holds it until the app has shut down. The kernel releases it however the process ends, so a crash never leaves Goscriber "running". Two launches at once cannot both win.
+
+**Control socket.** The app then listens on a Unix domain socket, `goscriber.sock` beside the lock, with mode 0600; one a crash left behind is replaced. A config directory too deep for a socket address (`sun_path` holds about 100 bytes) moves the socket to `goscriber-<uid>/` under `XDG_RUNTIME_DIR` or the temporary directory, which must be the user's own and closed to others. Each connection carries one request and one response, each a line of JSON: `{"version":1,"command":"toggle-transcription"}` (or `cancel`, `show-settings`), answered by `{"ok":true}` or `{"ok":false,"error":"…"}`. A request of another protocol version, an unknown command or a malformed line is refused with the reason, which the command line prints. While the app quits, the socket goes first and commands are refused; the lock stays until the end, so a launch then waits for it and starts once it is free.
+
+**Sending.** The command line connects to the socket. If nothing answers and no process holds the lock, Goscriber is not running. If the lock is held, the app is still starting, so it tries again every 50 ms for up to five seconds.
+
+Windows, where this would be a named pipe, has neither yet: the app runs without the lock and the flags say they are not supported.
 
 ## Settings window
 
@@ -300,7 +321,7 @@ shortcut up   ─► Capture.Stop() ─► speech gate (too short / too quiet �
 
 The `Coordinator` (`internal/pipeline/coordinator.go`) owns a single state machine: `idle → recording → transcribing → post_processing → outputting → idle`. A cancel from any state returns to `idle` and discards the session. Only one session is active at a time.
 
-- **Actions**: `Start`, `Stop`, `Toggle` and `Cancel` (also `Do(action)`), from the shortcut, the tray and later the command line (#33). They never block: they are queued and run in order on the coordinator's own goroutine, so they are safe on the UI thread. An action that does not fit the state is refused, not queued: the shortcut pressed while a transcript is on its way does nothing.
+- **Actions**: `Start`, `Stop`, `Toggle` and `Cancel` (also `Do(action)`), from the shortcut, the tray, the [command line](#single-instance-and-remote-control) and SIGUSR2. They never block: they are queued and run in order on the coordinator's own goroutine, so they are safe on the UI thread. An action that does not fit the state is refused, not queued: the shortcut pressed while a transcript is on its way does nothing.
 - **Events**: `Subscribe` delivers state changes, refusals, the microphone level while recording and the transcript so far (both coalesced, so a slow reader gets the latest), and the delivered transcript. A refusal carries the unchanged state, so the shortcut's activator, which guessed the press would start or stop a recording, resyncs. The shell follows the events to drive the tray icon and to register Escape only while recording.
 - **Model**: every `Start` resolves the selected model through a `ModelSource` (`CatalogModels` over the models manager: `selected_model`, in `model_quant` when the model has it, on the CPU when `accelerator` says so, with the Silero VAD when enabled and downloaded). With no model ready, `Start` records nothing and raises `no_model` afresh, so every press is answered; a damaged file raises `model_corrupt`. The engine goroutine loads the model when recording starts, if the engine does not hold it already (with `preload_model` it usually does: see [model lifecycle](#model-lifecycle)), and `Acquire`s it until the transcript is out.
 - **Decode**: the recording is decoded while it goes on ([live transcription](#live-transcription)). On `Stop`, the speech gate runs first (too short or too quiet ends the session quietly), then the engine goroutine finishes the decode: the stream's final, or the chunk still open, or the whole clip when neither applies.
@@ -415,6 +436,7 @@ The output then waits `paste_delay_ms` (60 ms) before pressing the paste key.
 - **Fyne main thread**: all widgets, tray, overlay. Other goroutines update the UI only through `fyne.Do` / `fyne.DoAndWait`.
 - **Audio callback (miniaudio thread)**: copies frames into a ring buffer and returns; never blocks or calls into the engine.
 - **Hotkey goroutine**: owns the shortcut registrations and turns key-down / key-up events into coordinator actions, which it hands straight to the coordinator: its actions never block.
+- **Control socket goroutine**: accepts the [command line's](#single-instance-and-remote-control) connections and answers each on a goroutine of its own, handing the command to the coordinator (or the window to the main thread) without waiting; a signal goroutine does the same for SIGUSR2.
 - **Coordinator goroutine**: runs the actions in order (opening the microphone, stopping it, refusing what does not fit the state) and owns the session's state with a mutex.
 - **Engine goroutine**: one goroutine owns the engine client and serialises load, acquire and recognition, background loads included. While recording it pumps the recorder's frames into the live decode (`Push` / `Next`, or `Recognize` per chunk); on `Stop` it finishes the decode.
 - **Engine worker process**: runs NeMo-Speech.cpp. In the app, the supervisor has a goroutine per worker reading its responses, one re-logging its stderr and one sending heartbeats; calls wait for their response on the caller's goroutine.
@@ -429,3 +451,4 @@ Goroutines talk through channels and the coordinator; nothing outside the main t
 - **Models**: `os.UserCacheDir()/goscriber/models/` (GGUF files under their Hugging Face names, `*.part` while downloading, and `verified.json`, which remembers the files already hashed). Files already in the Hugging Face cache (`HF_HUB_CACHE`, `HF_HOME`, default `~/.cache/huggingface/hub`) are used from there.
 - **History**: `os.UserConfigDir()/goscriber/history.sqlite3` and `…/recordings/*.wav`
 - **Logs**: `os.UserCacheDir()/goscriber/logs/goscriber.log`
+- **Single instance**: `os.UserConfigDir()/goscriber/goscriber.lock` and `…/goscriber.sock` (the [control socket](#single-instance-and-remote-control))

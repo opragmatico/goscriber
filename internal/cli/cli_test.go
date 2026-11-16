@@ -5,7 +5,18 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/opragmatico/goscriber/internal/config"
 )
+
+// isolate keeps the test's files, the single-instance lock among them, in a
+// directory of its own, and returns it.
+func isolate(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv(config.HomeEnv, home)
+	return home
+}
 
 func run(t *testing.T, version string, args ...string) (code int, stdout, stderr string) {
 	t.Helper()
@@ -72,6 +83,7 @@ func TestNoAppInBuild(t *testing.T) {
 }
 
 func TestRunsAppWithFlags(t *testing.T) {
+	isolate(t)
 	for _, tt := range []struct {
 		args []string
 		want AppOptions
@@ -93,6 +105,7 @@ func TestRunsAppWithFlags(t *testing.T) {
 			t.Fatalf("%v: exit %d, app started: %v", tt.args, code, got != nil)
 		}
 		tt.want.Version = "v1.0.0"
+		tt.want.Instance = got.Instance // TestSingleInstance covers it
 		if *got != tt.want {
 			t.Errorf("%v: app options %+v, want %+v", tt.args, *got, tt.want)
 		}
@@ -118,6 +131,7 @@ func TestEngineWorkerSubcommand(t *testing.T) {
 }
 
 func TestAppErrorExitsNonZero(t *testing.T) {
+	isolate(t)
 	var errOut bytes.Buffer
 	code := Run(nil, Env{Stdout: &bytes.Buffer{}, Stderr: &errOut, RunApp: func(AppOptions) error {
 		return errors.New("no settings for you")
