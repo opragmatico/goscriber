@@ -3,14 +3,18 @@ package ui
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/opragmatico/goscriber/internal/audio"
 	"github.com/opragmatico/goscriber/internal/config"
 	"github.com/opragmatico/goscriber/internal/history"
 )
@@ -35,6 +39,13 @@ type HistoryActions struct {
 	// Retranscribe transcribes an entry's recording again with the current
 	// model, saves the new transcript and returns the entry as it is now.
 	Retranscribe func(ctx context.Context, e history.Entry) (history.Entry, error)
+	// TranscribeFile transcribes an audio file with the current model,
+	// telling progress how much of it is done as it goes, saves the
+	// transcript to the history and returns its entry. The entry has no ID
+	// when the history keeps no dictations; its Text is the transcript
+	// either way, also alongside an error in saving it. Nil leaves file
+	// transcription out of the page.
+	TranscribeFile func(ctx context.Context, path string, progress func(done, total time.Duration)) (history.Entry, error)
 }
 
 // Labels and texts of the History page that tests look for.
@@ -50,6 +61,9 @@ const (
 	LabelDeleteAll          = "Delete all"
 	HistoryRetranscribing   = "Transcribing again with the current model…"
 	historyNothingDelivered = "Nothing was pasted."
+	LabelChooseFile         = "Choose a file…"
+	LabelCancelFile         = "Cancel"
+	HistoryFilesHint        = "Drop WAV or FLAC files on this window, or choose one. Each is transcribed with the selected model, however long it is, and listed with the dictations."
 )
 
 // historyShown is the most dictations the page lists.
@@ -74,6 +88,27 @@ type historyState struct {
 	playing  int64 // the entry whose recording plays, or 0
 	stopPlay context.CancelFunc
 	busy     map[int64]string // what each entry is waiting for, such as a re-transcription
+
+	files fileJobs
+}
+
+// fileJobs are the audio files the History page transcribes, one at a time.
+type fileJobs struct {
+	// box is the section, and page the History page: both are laid out
+	// again as the section's rows come and go.
+	box    *fyne.Container
+	page   fyne.CanvasObject
+	status *widget.Label
+	bar    *widget.ProgressBar
+	cancel *widget.Button
+	copy   *widget.Button
+
+	queue       []string // waiting their turn
+	now         string   // the file being transcribed, or ""
+	stop        context.CancelFunc
+	done, total time.Duration // how far it has got
+	result      string        // what became of the last file
+	text        string        // the last file's transcript, for Copy
 }
 
 func (w *SettingsWindow) historyPage() fyne.CanvasObject {
@@ -83,7 +118,7 @@ func (w *SettingsWindow) historyPage() fyne.CanvasObject {
 	h.deleteAll = widget.NewButtonWithIcon(LabelDeleteAll, theme.DeleteIcon(), w.askDeleteAllHistory)
 	h.box = container.NewVBox()
 	w.refreshHistoryRows()
-	return settingsPage("History",
+	h.files.page = settingsPage("History",
 		group("Keep",
 			w.row("Dictations", "How many recent dictations to keep. 0 keeps none.",
 				intEntrySetting(w, "history_limit", func(s *config.Settings) *int { return &s.HistoryLimit }, 0, 100000)),
@@ -97,8 +132,179 @@ func (w *SettingsWindow) historyPage() fyne.CanvasObject {
 						{config.RetentionNever, "Do not keep recordings"},
 					}, nil)),
 		),
+		w.fileSection(),
 		section("Recent dictations", container.NewBorder(nil, nil, nil, h.deleteAll, h.note), h.box),
 	)
+	return h.files.page
+}
+
+// fileSection lets audio files be transcribed: chosen, or dropped on the
+// window. Without a way to transcribe them it is empty.
+func (w *SettingsWindow) fileSection() fyne.CanvasObject {
+	if w.opts.HistoryActions.TranscribeFile == nil {
+		return layout.NewSpacer()
+	}
+	f := &w.history.files
+	f.status = paragraph("")
+	f.bar = widget.NewProgressBar()
+	f.cancel = widget.NewButtonWithIcon(LabelCancelFile, theme.CancelIcon(), w.cancelFiles)
+	f.copy = widget.NewButtonWithIcon(LabelCopy, theme.ContentCopyIcon(), func() { w.app.Clipboard().SetContent(f.text) })
+	choose := widget.NewButtonWithIcon(LabelChooseFile, theme.FolderOpenIcon(), w.chooseFile)
+	f.box = section("Transcribe a file",
+		container.NewBorder(nil, nil, nil, choose, paragraph(HistoryFilesHint)),
+		f.status, f.bar, container.NewHBox(f.cancel, f.copy)).(*fyne.Container)
+	w.refreshFiles()
+	return f.box
+}
+
+// chooseFile asks for an audio file to transcribe.
+func (w *SettingsWindow) chooseFile() {
+	d := dialog.NewFileOpen(func(r fyne.URIReadCloser, err error) {
+		if err != nil || r == nil {
+			return
+		}
+		path := r.URI().Path()
+		_ = r.Close()
+		w.TranscribeFiles([]string{path})
+	}, w.win)
+	d.SetFilter(storage.NewExtensionFileFilter(audio.FileExtensions))
+	d.Show()
+}
+
+// dropped transcribes the files dropped on the window, on the History page.
+// Drops during onboarding are ignored.
+func (w *SettingsWindow) dropped(_ fyne.Position, uris []fyne.URI) {
+	if w.opts.HistoryActions.TranscribeFile == nil || w.onboarding.active {
+		return
+	}
+	var paths []string
+	for _, u := range uris {
+		if u.Scheme() == "file" {
+			paths = append(paths, u.Path())
+		}
+	}
+	if len(paths) == 0 {
+		return
+	}
+	if w.Page() != PageHistory {
+		w.selectPage(PageHistory)
+	}
+	w.TranscribeFiles(paths)
+}
+
+// TranscribeFiles transcribes audio files one after another, showing their
+// progress on the History page and their transcripts in the history.
+func (w *SettingsWindow) TranscribeFiles(paths []string) {
+	if w.opts.HistoryActions.TranscribeFile == nil || len(paths) == 0 {
+		return
+	}
+	f := &w.history.files
+	f.queue = append(f.queue, paths...)
+	if f.now == "" {
+		w.nextFile()
+	}
+	w.refreshFiles()
+}
+
+// nextFile starts on the next file waiting, if any.
+func (w *SettingsWindow) nextFile() {
+	f := &w.history.files
+	if len(f.queue) == 0 {
+		return
+	}
+	path := f.queue[0]
+	f.queue = f.queue[1:]
+	ctx, cancel := context.WithCancel(context.Background())
+	f.now, f.stop, f.done, f.total = path, cancel, 0, 0
+	transcribe := w.opts.HistoryActions.TranscribeFile
+	go func() {
+		e, err := transcribe(ctx, path, func(done, total time.Duration) {
+			w.do(func() {
+				if f.now == path {
+					f.done, f.total = done, total
+					w.refreshFiles()
+				}
+			})
+		})
+		cancelled := ctx.Err() != nil
+		cancel()
+		w.do(func() { w.fileDone(path, e, err, cancelled) })
+	}()
+}
+
+// fileDone says what became of a file and moves on to the next.
+func (w *SettingsWindow) fileDone(path string, e history.Entry, err error, cancelled bool) {
+	f := &w.history.files
+	name := filepath.Base(path)
+	f.text = e.Text
+	switch {
+	case cancelled:
+		f.result, f.text = "Stopped transcribing "+name+".", ""
+	case err != nil:
+		w.log().Warn("an audio file could not be transcribed", "file", name, "err", err)
+		f.result = fmt.Sprintf("Could not transcribe %s: %v", name, err)
+	case e.ID == 0:
+		f.result = "Transcribed " + name + ". The history keeps no dictations, so copy the text now."
+	default:
+		f.result = "Transcribed " + name + ": it is the first of the recent dictations."
+	}
+	f.now, f.stop = "", nil
+	w.nextFile()
+	w.refreshFiles()
+	w.refreshHistory()
+}
+
+// cancelFiles stops the file being transcribed and drops those waiting.
+func (w *SettingsWindow) cancelFiles() {
+	f := &w.history.files
+	f.queue = nil
+	if f.stop != nil {
+		f.stop()
+	}
+	w.refreshFiles()
+}
+
+// refreshFiles shows the file being transcribed, or what became of the last
+// one.
+func (w *SettingsWindow) refreshFiles() {
+	f := &w.history.files
+	if f.status == nil {
+		return
+	}
+	busy := f.now != ""
+	switch {
+	case busy && f.total > 0:
+		f.status.SetText(fmt.Sprintf("Transcribing %s… %s of %s", filepath.Base(f.now), formatLength(f.done), formatLength(f.total)))
+	case busy:
+		f.status.SetText("Transcribing " + filepath.Base(f.now) + "…")
+	default:
+		f.status.SetText(f.result)
+	}
+	if n := len(f.queue); busy && n > 0 {
+		f.status.SetText(fmt.Sprintf("%s (%d more waiting)", f.status.Text, n))
+	}
+	value := 0.0
+	if busy && f.total > 0 {
+		value = float64(f.done) / float64(f.total)
+	}
+	f.bar.SetValue(value)
+	showIf(f.status, f.status.Text != "")
+	showIf(f.bar, busy)
+	showIf(f.cancel, busy)
+	showIf(f.copy, !busy && f.text != "")
+	f.box.Refresh()
+	if f.page != nil {
+		f.page.Refresh()
+	}
+}
+
+// showIf shows o when on holds, and hides it otherwise.
+func showIf(o fyne.CanvasObject, on bool) {
+	if on {
+		o.Show()
+	} else {
+		o.Hide()
+	}
 }
 
 // RefreshHistory reads the history again for the History page, when the
@@ -255,7 +461,11 @@ func historyHeading(e history.Entry, model string, now time.Time) string {
 	default:
 		when = at.Format("2 Jan 2006 15:04")
 	}
-	parts := when + " · " + formatLength(e.Duration)
+	parts := when
+	if e.Source != "" {
+		parts += " · " + e.Source
+	}
+	parts += " · " + formatLength(e.Duration)
 	if model != "" {
 		parts += " · " + model
 	}

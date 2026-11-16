@@ -24,9 +24,9 @@ import (
 const transcribeUsage = `Usage:
   goscriber transcribe [flags] FILE...
 
-Transcribes WAV files (PCM or float, any sample rate, mixed down to mono) and
-prints each transcript on stdout, prefixed with its file name when there is
-more than one file.
+Transcribes WAV (PCM or float) or FLAC files, at any sample rate, mixed down
+to mono, and prints each transcript on stdout, prefixed with its file name
+when there is more than one file.
 
 Flags:
       --model ID      model to use (default: the model selected in settings,
@@ -338,7 +338,7 @@ func (t *transcriber) exit(ctx context.Context, err error) int {
 // run, so the benchmark measures a warm engine: the first decode also
 // prepares the GPU pipelines.
 func (t *transcriber) warmUp(ctx context.Context, file string) error {
-	samples, rate, err := audio.ReadWAVFile(file)
+	samples, rate, err := audio.ReadFile(file)
 	if err != nil {
 		return err
 	}
@@ -357,7 +357,7 @@ type timing struct {
 }
 
 func (t *transcriber) transcribe(ctx context.Context, file string, many bool) error {
-	samples, rate, err := audio.ReadWAVFile(file)
+	samples, rate, err := audio.ReadFile(file)
 	if err != nil {
 		return err
 	}

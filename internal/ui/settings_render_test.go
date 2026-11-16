@@ -1,15 +1,18 @@
 package ui
 
 import (
+	"context"
 	"image/png"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/theme"
 
 	"github.com/opragmatico/goscriber/internal/config"
+	"github.com/opragmatico/goscriber/internal/history"
 )
 
 // RenderDirEnv names a directory to write the settings pages to as PNGs,
@@ -27,7 +30,13 @@ func TestRenderSettingsPages(t *testing.T) {
 		name  string
 		theme fyne.Theme
 	}{{"light", theme.LightTheme()}, {"dark", theme.DarkTheme()}} { //nolint:staticcheck // fixed variants, whatever the OS uses
-		tw := newTestWindow(t, func(o *SettingsOptions) { o.ForceDebug = true })
+		tw := newTestWindow(t, func(o *SettingsOptions) {
+			o.ForceDebug = true
+			o.HistoryActions.TranscribeFile = func(ctx context.Context, _ string, _ func(done, total time.Duration)) (history.Entry, error) {
+				<-ctx.Done()
+				return history.Entry{}, ctx.Err()
+			}
+		})
 		tw.app.Settings().SetTheme(variant.theme)
 		tw.files.setReady(nemotron, "Q8_0")
 		if err := tw.store.Update(func(s *config.Settings) {
@@ -50,6 +59,15 @@ func TestRenderSettingsPages(t *testing.T) {
 			}
 			f.Close()
 		}
+		// A file being transcribed, with another waiting, on the History page.
+		tw.selectPage(PageHistory)
+		f := &tw.history.files
+		f.now, f.done, f.total, f.queue = "/audio/interview.flac", 200*time.Second, 600*time.Second, []string{"/audio/next.wav"}
+		tw.refreshFiles()
+		capture(t, tw, filepath.Join(dir, variant.name+"-history-file.png"))
+		f.now, f.queue = "", nil
+		tw.refreshFiles()
+
 		// The delete confirmation, over the Models page.
 		tw.selectPage(PageModels)
 		tw.Window().Resize(fyne.NewSize(760, 560))

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/opragmatico/goscriber/internal/audio"
@@ -66,15 +68,17 @@ func (sh *shell) historyStore() ui.HistoryStore {
 	return sh.history
 }
 
-// historyActions back the History page's buttons.
+// historyActions back the History page's buttons. Without a history, files
+// can still be transcribed and their text copied.
 func (sh *shell) historyActions() ui.HistoryActions {
 	if sh.history == nil {
-		return ui.HistoryActions{}
+		return ui.HistoryActions{TranscribeFile: sh.transcribeFile}
 	}
 	return ui.HistoryActions{
-		Paste:        sh.pasteAgain,
-		Play:         sh.playRecording,
-		Retranscribe: sh.retranscribe,
+		Paste:          sh.pasteAgain,
+		Play:           sh.playRecording,
+		Retranscribe:   sh.retranscribe,
+		TranscribeFile: sh.transcribeFile,
 	}
 }
 
@@ -134,15 +138,61 @@ func (sh *shell) retranscribe(ctx context.Context, e history.Entry) (history.Ent
 		return history.Entry{}, fmt.Errorf("the recording could not be read: %w", err)
 	}
 	t, err := sh.dictation.Retranscribe(ctx, samples, rate)
-	switch {
-	case errors.Is(err, pipeline.ErrNoSpeech):
-		return history.Entry{}, errors.New("no speech was found in the recording")
-	case errors.Is(err, pipeline.ErrNoModel):
-		return history.Entry{}, errors.New("no model is downloaded")
-	case err != nil:
-		return history.Entry{}, err
+	if err != nil {
+		return history.Entry{}, transcriptionError(err, "the recording")
 	}
 	return sh.history.Retranscribed(ctx, e.ID, history.Transcript{Text: t.Text, RawText: t.RawText, Model: t.Model, Language: t.Language})
+}
+
+// transcribeFile transcribes an audio file with the current model and saves
+// it to the history, with the file's audio as its recording, so it can be
+// played and transcribed again like a dictation.
+func (sh *shell) transcribeFile(ctx context.Context, path string, progress func(done, total time.Duration)) (history.Entry, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return history.Entry{}, err
+	}
+	samples, rate, err := audio.Read(f)
+	f.Close()
+	if err != nil {
+		return history.Entry{}, err
+	}
+	at := time.Now()
+	t, err := sh.dictation.Transcribe(ctx, samples, rate, pipeline.TranscribeOptions{Progress: progress})
+	if err != nil {
+		return history.Entry{}, transcriptionError(err, "the file")
+	}
+	e := history.Entry{
+		At: at, Text: t.Text, RawText: t.RawText, Model: t.Model, Language: t.Language,
+		Duration: time.Duration(len(samples)) * time.Second / time.Duration(rate),
+		Source:   filepath.Base(path),
+	}
+	if sh.history == nil {
+		return e, nil
+	}
+	saved, err := sh.history.Add(ctx, history.Record{
+		At: e.At, Text: e.Text, RawText: e.RawText, Model: e.Model, Language: e.Language,
+		Duration: e.Duration, Samples: samples, SampleRate: rate, Source: e.Source,
+	})
+	if err != nil {
+		return e, fmt.Errorf("the transcript could not be saved: %w", err)
+	}
+	if saved.ID == 0 {
+		return e, nil // the history keeps no dictations
+	}
+	return saved, nil
+}
+
+// transcriptionError says why audio could not be transcribed, in words for
+// the History page.
+func transcriptionError(err error, what string) error {
+	switch {
+	case errors.Is(err, pipeline.ErrNoSpeech):
+		return fmt.Errorf("no speech was found in %s", what)
+	case errors.Is(err, pipeline.ErrNoModel):
+		return errors.New("no model is downloaded")
+	}
+	return err
 }
 
 // post runs f on the main thread, unless the app is stopping.

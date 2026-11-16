@@ -108,7 +108,7 @@ Usage:
   goscriber [flags]            start the desktop app, or show the running one
   goscriber --toggle-transcription | --cancel
                                control the running app
-  goscriber transcribe FILE... transcribe WAV files and print the text
+  goscriber transcribe FILE... transcribe WAV or FLAC files and print the text
   goscriber models COMMAND     list, download and delete speech models
 
 Commands:

@@ -317,6 +317,7 @@ func (w *SettingsWindow) create() {
 	w.win.Resize(fyne.NewSize(760, 560))
 	w.win.CenterOnScreen()
 	w.win.SetCloseIntercept(w.closeRequested)
+	w.win.SetOnDropped(w.dropped)
 	w.win.Canvas().AddShortcut(DebugShortcut, func(fyne.Shortcut) { w.ToggleDebugMode() })
 }
 
