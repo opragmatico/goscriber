@@ -13,8 +13,8 @@ Handy is built with Tauri (Rust backend + React UI) and runs a broad catalog of 
 | Model download | Catalog + downloader with mirrors | Embedded three-model catalog, resumable HTTP download, SHA-256 verification |
 | Voice activity detection | Silero VAD v6 (GGUF) | Silero VAD GGUF loaded by NeMo-Speech.cpp (feature masking, endpointing) |
 | Audio capture | `handy-recorder` (cpal) | `malgo` (miniaudio); NeMo-Speech.cpp resamples 8–96 kHz input itself |
-| Global shortcuts | `handy-keys` (CGEventTap) / `rdev` | `golang.design/x/hotkey` (a CGEventTap on macOS, XGrabKey on X11) |
-| Paste / typing | `enigo`, platform paste code | `NSPasteboard` and `CGEventPost` through CGo on macOS |
+| Global shortcuts | `handy-keys` (CGEventTap) / `rdev` | `golang.design/x/hotkey` (a CGEventTap on macOS, XGrabKey on X11); on Wayland, the XDG GlobalShortcuts portal over D-Bus (`godbus/dbus`), or the desktop's own shortcut sending `SIGUSR2`, as in Handy |
+| Paste / typing | `enigo`, platform paste code, typing tools on Linux | `NSPasteboard` and `CGEventPost` through CGo on macOS; X11 selections and XTEST through CGo on Linux, or wtype, dotool or ydotool on Wayland ([linux.md](linux.md)) |
 | Settings | `tauri-plugin-store` (JSON) | Go structs persisted as JSON under `os.UserConfigDir()` |
 | History | SQLite (`rusqlite`) | SQLite (`modernc.org/sqlite`, pure Go) + WAV files |
 | LLM post-processing | OpenAI-compatible HTTP clients | `net/http` OpenAI-compatible client |
@@ -74,9 +74,13 @@ internal/
 ├── text/                  # cleanup, filler words, custom-word correction, hook
 ├── llm/                   # optional post-processing
 ├── output/                # clipboard paste with restore, direct typing
+├── typing/                # Linux typing tools: xdotool, wtype, dotool, ydotool
+├── session/               # X11 or Wayland
 ├── hotkey/                # global shortcuts, push-to-talk and toggle
+│   └── portal/            # the XDG GlobalShortcuts portal, for Wayland (D-Bus)
 ├── history/               # SQLite history + saved recordings
-├── platform/              # permissions, the overlay's native window tweaks (per-OS, CGo)
+├── platform/              # permissions, clipboard and key events, the overlay's native window tweaks (per-OS, CGo)
+│   └── x11test/           # another X11 app, for the Linux clipboard and key-event tests
 └── ui/
     ├── tray.go
     ├── overlay.go
@@ -88,9 +92,11 @@ internal/
     └── word_list.go       # edits custom and filler words
 packaging/
 ├── macos/Info.plist       # bundle metadata (LSUIElement: menu bar app, no Dock icon)
+├── linux/                 # the desktop entry of the Linux packages
 └── huggingface/           # model cards of the GGUF repositories Goscriber publishes
 scripts/
 ├── build-nemo-speech.sh   # builds and installs the pinned NeMo-Speech.cpp SDK into .deps/
+├── package-linux.sh       # the Linux tarball and .deb (make dist-linux)
 ├── convert-models.sh      # reproduces (and publishes) the Parakeet TDT v2 and Silero VAD GGUFs
 └── wer.py                 # scores model evaluations (docs/models/)
 third_party/
@@ -102,7 +108,7 @@ third_party/
 `goscriber` with no subcommand starts the Fyne app (`io.github.opragmatico.goscriber`) as a menu bar / tray icon:
 
 - **Tray menu**: Start / Stop Dictation, Cancel, the current model (which opens the Models page, or "No model: Download…", which opens [onboarding](#onboarding)'s model step, with the dictation items disabled), Settings… and Quit. With debug mode on, a Debug submenu forces the icon state.
-- **Icon per state**: idle and transcribing are template icons that follow the menu bar's colour; recording is red. The coordinator drives the state; post-processing and outputting show as transcribing.
+- **Icon per state**: idle and transcribing are template icons that follow the menu bar's colour (on Linux, whose panels keep their own colours, light grey with a dark outline); recording is red. The coordinator drives the state; post-processing and outputting show as transcribing.
 - **No window at launch** while the tray is shown, except [onboarding](#onboarding) until it is over; windows open from the menu. Without a tray (`--no-tray`, the `show_tray_icon` setting, or a desktop with no tray) the settings window opens at launch, even with `--start-hidden`, and closing it quits, as in Handy.
 - **macOS**: with a tray the app is an accessory app with no Dock icon. The bundle's Info.plist sets `LSUIElement`, and the app also sets the activation policy at startup, because GLFW makes every app a regular one and plain `go run` builds have no Info.plist. Without a tray the Dock icon stays as the way back in.
 - **Shutdown**: Quit, SIGINT and SIGTERM all end Fyne's main loop; the app then stops following settings and closes the log.
@@ -115,8 +121,8 @@ third_party/
 | --- | --- |
 | **General** | the dictation and cancel shortcuts (recorded by pressing them), activation mode and hold threshold, microphone, start / stop sounds with their volume and output device, mute while recording, overlay style and position |
 | **Models** | a card per catalog model: what it does, size, licence, quantisation (Parakeet TDT v2 has two), status, and Download (with progress, cancellable), Delete (asks first) and Use. With no model downloaded the page says so. Below the cards, the [language picker](#language) |
-| **Advanced** | app (start hidden, tray icon, launch at login, unload timeout), output (paste method, clipboard, delays, trailing space, Return), transcription (accelerator, live-text latency, decoding while recording, always-on microphone, VAD and its thresholds, shortest recording, silence threshold) and text (filler words, custom words with their [boost and correction threshold](#custom-vocabulary)) |
-| **Permissions** | each macOS permission, with a button to System Settings when missing ([permissions.md](permissions.md)) |
+| **Advanced** | app (start hidden, tray icon, launch at login, unload timeout), output (paste method, on Linux the paste keys and typing tool, clipboard, delays, trailing space, Return), transcription (accelerator, offering only what the engine was built with, live-text latency, decoding while recording, always-on microphone, VAD and its thresholds, shortest recording, silence threshold) and text (filler words, custom words with their [boost and correction threshold](#custom-vocabulary)) |
+| **Permissions** | each macOS permission, with a button to System Settings when missing ([permissions.md](permissions.md)); on Linux, what a Wayland session needs set up ([linux.md](linux.md)) |
 | **History** | how many dictations and how long recordings are kept; the list itself comes with #32 |
 | **Debug** | only in debug mode: debug mode, log level, running the engine in the app ([profiling](#process-isolation)), and a viewer over the last 400 records of the logger's in-memory ring |
 | **About** | Goscriber's version, the NeMo-Speech.cpp runtime's (or "not built in"), where settings and logs live, a button that runs [onboarding](#onboarding) again, and the licences of what Goscriber is built with and of the models |
@@ -148,7 +154,7 @@ The window is a borderless Fyne window (`desktop.Driver.CreateSplashWindow`, ask
 
 - **No focus on show, on every OS**: GLFW focuses a window when it shows it unless the window was created with `GLFW_FOCUS_ON_SHOW` off. Fyne never sets that hint, so the overlay sets it (through `go-gl/glfw`, which Fyne's driver owns) only around the window's creation, then puts it back for windows created later.
 - **macOS** (`platform.PrepareOverlay`, through `driver.NativeWindow.RunNative`): the `NSWindow` gets the status window level, joins all Spaces and full-screen apps (`CanJoinAllSpaces`, `FullScreenAuxiliary`, `Stationary`, `IgnoresCycle`), loses its shadow, and has its content clipped to a pill by its layer. AppKit can only pass a window's clicks through as a whole, so the overlay ignores the mouse except while the pointer is over the cancel button, which it checks ten times a second while shown (`platform.OverlayClickThrough`). Clicking cancel makes Goscriber the active app, so the overlay then hands the keyboard back (`[NSApp deactivate]`). It is placed with `NSScreen.visibleFrame`, clear of the menu bar and the Dock.
-- **Elsewhere** the window is centred on the screen and Fyne's always-on-top request applies; Linux and Windows positioning come with #35 and #36.
+- **Elsewhere** the window is centred on the screen and Fyne's always-on-top request applies. On Linux, where the overlay is off by default, that is all there is.
 
 The shell feeds it from the coordinator's events on the main thread: the state, the interim text at most ten times a second (always ending on the newest, and never a session's text after it ended), and the microphone level at most about 40 times a second (the recorder measures 30), with at most one level update, one interim and one clock tick waiting for the main thread at a time. If adjusting the GLFW window turns out not to be enough (it may still activate the app on some macOS versions), the fallback the issue foresaw is to draw this one overlay as a native `NSPanel` through CGo.
 
@@ -171,6 +177,8 @@ On macOS Goscriber needs the **Microphone** permission to record and **Accessibi
 Key-downs and key-ups of the transcribe shortcut drive the activation mode: **toggle** (press to start, press to stop), **push-to-talk** (hold to record) and **hold-or-toggle**, the default (a press starts recording; released after `hold_threshold_ms`, 300 ms, it was push-to-talk and stops, released sooner it was a tap and recording goes on until the next press). The manager owns the registrations on one goroutine and re-registers when the settings change, without a restart; a shortcut that cannot be registered is logged and handed to `OnError`, and the next settings change retries it.
 
 On macOS, `golang.design/x/hotkey` hears shortcuts through a keyboard event tap, which consumes the key and needs the **Accessibility** permission (the same one pasting needs). Registration dispatches onto the main thread, which Fyne's loop services; the manager never makes the main thread wait for it. An event tap hears no key presses while any process holds **Secure Event Input** (a focused password field, Terminal's Secure Keyboard Entry), so the app polls `IsSecureEventInputEnabled()` and logs a warning naming the holder when it stays on for 3 s, as Handy does.
+
+On X11 the library grabs the keys on the root window (`XGrabKey`), which needs no permission. **Wayland** lets no app grab keys; the desktop owns them. Where it has the XDG GlobalShortcuts portal (KDE Plasma, Hyprland, GNOME 48 and later), `internal/hotkey/portal` is the backend: it binds the transcribe and cancel shortcuts in one portal session, which the desktop asks the user to confirm, and turns the portal's `Activated` and `Deactivated` signals into key-downs and key-ups, so every activation mode works. The backend is chosen at the first registration, on the manager's goroutine, so waiting for the portal holds up neither the launch nor the UI (`internal/app/shortcuts.go`); `Register` takes the shortcut's purpose, the portal's ID for it, and only connects that shortcut's events, so the manager may unregister and register as before without asking the desktop again. The settings window shows the keys the desktop bound. Without the portal, the user binds `pkill -USR2 -x goscriber` to a key in the desktop's keyboard settings, and the X11 grab is registered through XWayland, where it is heard in X11 windows and, on KDE Plasma, wherever legacy X11 apps may read keys. Either way the app toggles dictation on `SIGUSR2`, as Handy does, and every other `goscriber` process, the engine workers included, ignores the signal (`cmd/goscriber`). [linux.md](linux.md#the-globalshortcuts-portal) has the details.
 
 **Modifier-only shortcuts** (the right Option key, Fn) are not supported: the library matches a key with modifiers, not a modifier on its own, and the parser refuses them with a clear message. Supporting them needs our own CGEventTap watching `flagsChanged` in `internal/platform`; since the library's tap already needs Accessibility, that adds no new permission. Handy also shadows keyed shortcuts with Carbon hotkeys while Secure Event Input is on, which Carbon is immune to; that is a possible follow-up.
 
@@ -207,7 +215,9 @@ The app shell routes each new notice once: an OS notification (`fyne.App.SendNot
 
 `append_trailing_space` adds a space after the transcript and `auto_submit` presses Return after it (paste and direct only). Deliveries are serialised, so two pastes never restore each other's transcript as the user's clipboard. `goscriber debug paste` runs a delivery from the command line, after a few seconds to switch apps.
 
-On macOS the clipboard is `NSPasteboard` itself rather than `golang.design/x/clipboard`, which only reads text and PNG: saving copies every item in every type it offers (rich text, images, file URLs, app-private types) into Go memory, and restoring writes them all back, or leaves the clipboard empty if it was. The transcript is marked with the [nspasteboard.org](http://nspasteboard.org) transient and auto-generated types while it is there only to be pasted, so clipboard managers leave it out of their history. Key presses go through `CGEventPost` from a private event source with explicit flags, so the Option still held from Option+Space does not turn Cmd+V into another shortcut. The paste key is the one that types "v" with Command held in the active keyboard layout (`UCKeyTranslate`, read on the main thread), so Cmd+V works on Dvorak; direct typing attaches the text to key events with `CGEventKeyboardSetUnicodeString`, 20 UTF-16 units at a time. Posting needs the **Accessibility** permission: without it macOS drops the events silently, so the keyboard checks `AXIsProcessTrusted()` first and fails with `output.ErrNoPermission`. Linux and Windows are issues #35 and #36.
+On macOS the clipboard is `NSPasteboard` itself rather than `golang.design/x/clipboard`, which only reads text and PNG: saving copies every item in every type it offers (rich text, images, file URLs, app-private types) into Go memory, and restoring writes them all back, or leaves the clipboard empty if it was. The transcript is marked with the [nspasteboard.org](http://nspasteboard.org) transient and auto-generated types while it is there only to be pasted, so clipboard managers leave it out of their history. Key presses go through `CGEventPost` from a private event source with explicit flags, so the Option still held from Option+Space does not turn Cmd+V into another shortcut. The paste key is the one that types "v" with Command held in the active keyboard layout (`UCKeyTranslate`, read on the main thread), so Cmd+V works on Dvorak; direct typing attaches the text to key events with `CGEventKeyboardSetUnicodeString`, 20 UTF-16 units at a time. Posting needs the **Accessibility** permission: without it macOS drops the events silently, so the keyboard checks `AXIsProcessTrusted()` first and fails with `output.ErrNoPermission`.
+
+On Linux the clipboard is the X11 `CLIPBOARD` and `PRIMARY` selections, which Goscriber owns from a hidden window and serves from a thread of its own (through XWayland on Wayland); saving keeps their text only. The paste presses `paste_keys` (Shift+Insert by default) with `typing_tool`: Goscriber's own XTEST key events on X11, or wtype, dotool or ydotool (`internal/typing`), which work on Wayland. [linux.md](linux.md#pasting-and-typing) has the details.
 
 Handy's "reliable paste" (restore only once the target app has read the pasteboard) is a later improvement; Goscriber starts with the delays.
 
@@ -215,7 +225,7 @@ Handy's "reliable paste" (restore only once the target app has read the pasteboa
 
 NeMo-Speech.cpp exposes a stable C ABI: opaque handles, size-prefixed POD config structs, explicit ownership and status codes. `internal/engine/nemo` wraps it:
 
-- **Recognizer**: `nemo_speech_asr_create` / `_destroy`. One recognizer per loaded model. Backend `gpu = 0` uses Metal (or CUDA / Vulkan where built), `gpu = -1` forces the CPU.
+- **Recognizer**: `nemo_speech_asr_create` / `_destroy`. One recognizer per loaded model. Backend `gpu = 0` uses the first device of the SDK's GPU backend (Metal, Vulkan or CUDA), `gpu = -1` the CPU. The backend is the preset's that `make deps` built, which the binding reads from the ggml backend library the process loaded (`nemo.GPUBackend()`): an SDK without one (`cpu-asr`, Linux's default) always loads with `-1`, since it refuses any GPU index, and a GPU that cannot take the model (no Vulkan device, no memory) is retried on the CPU. `ModelInfo.CPU` says where the model ended up.
 - **Offline**: `nemo_speech_asr_recognize_f32` for a whole utterance.
 - **Streaming**: `nemo_speech_asr_streaming_recognize`, then `_stream_push_f32` / `_stream_next` while recording, `_stream_finish` and a final drain on release, `_stream_close`. With `interim_results` the stream yields partial hypotheses for the overlay and finals for output.
 - **Options**: `language_code` (Nemotron locale or `auto`), word time offsets, and `speech_contexts` for custom-vocabulary boosting.

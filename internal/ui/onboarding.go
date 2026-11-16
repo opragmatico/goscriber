@@ -13,6 +13,7 @@ import (
 
 	"github.com/opragmatico/goscriber/internal/config"
 	"github.com/opragmatico/goscriber/internal/models"
+	"github.com/opragmatico/goscriber/internal/session"
 )
 
 // OnboardingStep is a step of first-run onboarding, in the order the user
@@ -201,7 +202,7 @@ func (w *SettingsWindow) welcomeStep() fyne.CanvasObject {
 			"and the transcript is pasted where you were typing. Speech recognition runs on this computer, "+
 			"so your audio never leaves it."),
 		paragraph("Setting up takes a couple of minutes:"),
-		paragraph("1. Allow the permissions Goscriber needs.\n"+
+		paragraph(w.setupFirstStep()+"\n"+
 			"2. Choose a speech model and download it.\n"+
 			"3. Dictate your first sentence."),
 		note("You can skip this now and run it again later from Settings, on the About page."),
@@ -212,11 +213,24 @@ func (w *SettingsWindow) permissionsStep() fyne.CanvasObject {
 	o := &w.onboarding
 	o.perms = container.NewVBox()
 	next := widget.NewButtonWithIcon(LabelContinue, theme.NavigateNextIcon(), func() { w.goStep(StepModel) })
-	return w.stepView(StepPermissions, next,
-		paragraph("Goscriber needs these to record your voice, hear the shortcut and paste the transcript. "+
-			"Each status updates as soon as you change it in System Settings."),
-		o.perms,
-	)
+	intro := "Goscriber needs these to record your voice, hear the shortcut and paste the transcript. " +
+		"Each status updates as soon as you change it in System Settings."
+	if w.opts.Info.os() == "linux" {
+		intro = "Linux asks for no permissions, but Wayland desktops need a little setup for the shortcut and for pasting."
+	}
+	return w.stepView(StepPermissions, next, paragraph(intro), o.perms)
+}
+
+// setupFirstStep is the first step of setting up, as the welcome lists it.
+func (w *SettingsWindow) setupFirstStep() string {
+	switch {
+	case w.opts.Info.Session == session.Wayland:
+		return "1. Set up the dictation shortcut with your desktop and check that something can paste."
+	case w.opts.Info.os() == "linux":
+		return "1. Check what your desktop needs (on X11, nothing)."
+	default:
+		return "1. Allow the permissions Goscriber needs."
+	}
 }
 
 func (w *SettingsWindow) modelStep() fyne.CanvasObject {
@@ -312,6 +326,11 @@ func (w *SettingsWindow) tryStep() fyne.CanvasObject {
 	return w.stepView(StepTry, done, o.tryHint, o.tryKey, o.tryNoModel, o.tryEntry, o.tryResult)
 }
 
+// TryHintWayland says how to dictate on Wayland, where the desktop's own
+// shortcut runs the command shown below it, and each press toggles.
+const TryHintWayland = "Click in the box below, then press the shortcut you added in your desktop's keyboard settings, " +
+	"say a sentence, and press it again. It runs:"
+
 // tryHint says how to dictate into the field with the activation mode; the
 // shortcut is shown on its own line below it.
 func tryHint(mode config.ActivationMode) string {
@@ -349,8 +368,15 @@ func (w *SettingsWindow) refreshOnboarding() {
 		o.modelNote.Refresh()
 	}
 	if o.tryHint != nil {
-		o.tryHint.SetText(tryHint(w.cur.ActivationMode))
-		o.tryKey.SetText(ShortcutLabel(w.cur.TranscribeShortcut))
+		if w.opts.Info.Session == session.Wayland {
+			hint, key := w.tryStepShortcut()
+			o.tryHint.SetText(hint)
+			o.tryKey.SetText(key)
+			o.tryKey.Hidden = key == ""
+		} else {
+			o.tryHint.SetText(tryHint(w.cur.ActivationMode))
+			o.tryKey.SetText(ShortcutLabel(w.cur.TranscribeShortcut))
+		}
 		o.tryNoModel.Hidden = ready
 	}
 	// Widgets shown or hidden above need their containers laid out again.

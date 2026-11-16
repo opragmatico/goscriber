@@ -29,6 +29,10 @@ type Options struct {
 	// EngineVersion returns the speech engine's version, for the About
 	// page. Nil means this build has no engine.
 	EngineVersion func() string
+	// EngineGPU names the engine's GPU backend ("Metal", "Vulkan",
+	// "CUDA"), or "" when it runs on the CPU only, for the accelerator
+	// setting and the About page. Nil means this build has no engine.
+	EngineGPU func() string
 }
 
 // Runtime is what every part of the app shares: where files live, the

@@ -9,20 +9,28 @@ import (
 
 func TestDefaultsPerOS(t *testing.T) {
 	tests := []struct {
-		goos     string
-		shortcut string
-		overlay  OverlayStyle
+		goos       string
+		shortcut   string
+		overlay    OverlayStyle
+		pasteKeys  PasteKeys
+		pasteAfter int
 	}{
-		{"darwin", "option+space", OverlayLive},
-		{"windows", "ctrl+space", OverlayLive},
-		{"linux", "ctrl+alt+space", OverlayNone},
-		{"freebsd", "alt+space", OverlayLive},
+		{"darwin", "option+space", OverlayLive, PasteCtrlV, 60},
+		{"windows", "ctrl+space", OverlayLive, PasteCtrlV, 60},
+		// Handy's Linux defaults: no overlay (it can take the focus),
+		// Shift+Insert and a longer wait before the clipboard goes back.
+		{"linux", "ctrl+alt+space", OverlayNone, PasteShiftInsert, 500},
+		{"freebsd", "alt+space", OverlayLive, PasteCtrlV, 60},
 	}
 	for _, tt := range tests {
 		d := defaultsFor(tt.goos)
 		if d.TranscribeShortcut != tt.shortcut || d.OverlayStyle != tt.overlay {
 			t.Errorf("%s: shortcut %q overlay %q, want %q %q",
 				tt.goos, d.TranscribeShortcut, d.OverlayStyle, tt.shortcut, tt.overlay)
+		}
+		if d.PasteKeys != tt.pasteKeys || d.PasteDelayAfterMS != tt.pasteAfter || d.TypingTool != TypingAuto {
+			t.Errorf("%s: paste keys %q, delay after %d ms, typing tool %q; want %q, %d ms, auto",
+				tt.goos, d.PasteKeys, d.PasteDelayAfterMS, d.TypingTool, tt.pasteKeys, tt.pasteAfter)
 		}
 	}
 }
@@ -74,16 +82,21 @@ func TestNormalizeResetsInvalidValues(t *testing.T) {
 	s.LogLevel = "trace"
 	s.TranscribeShortcut = ""
 	s.StreamingLatency = "instant"
+	s.PasteKeys = "alt_v"
+	s.TypingTool = "xte"
 
 	fixed := s.normalize(def)
-	want := []string{"transcribe_shortcut", "activation_mode", "hold_threshold_ms", "streaming_latency", "audio_feedback_volume", "overlay_style", "log_level"}
+	want := []string{
+		"transcribe_shortcut", "activation_mode", "hold_threshold_ms", "streaming_latency", "audio_feedback_volume",
+		"overlay_style", "paste_keys", "typing_tool", "log_level",
+	}
 	if !slices.Equal(fixed, want) {
 		t.Errorf("fixed = %v, want %v", fixed, want)
 	}
 	if s.ActivationMode != def.ActivationMode || s.HoldThresholdMS != def.HoldThresholdMS ||
 		s.AudioFeedbackVolume != def.AudioFeedbackVolume || s.OverlayStyle != def.OverlayStyle ||
 		s.LogLevel != def.LogLevel || s.TranscribeShortcut != def.TranscribeShortcut ||
-		s.StreamingLatency != def.StreamingLatency {
+		s.StreamingLatency != def.StreamingLatency || s.PasteKeys != def.PasteKeys || s.TypingTool != def.TypingTool {
 		t.Errorf("invalid values were not reset: %+v", s)
 	}
 }

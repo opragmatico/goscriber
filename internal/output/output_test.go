@@ -3,6 +3,7 @@ package output
 import (
 	"context"
 	"errors"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -130,7 +131,13 @@ func newOutputter(w *world) *Outputter {
 	return o
 }
 
-func defaults() Options { return OptionsFrom(config.Defaults()) }
+// defaults are the default options with macOS's 60 ms before the clipboard
+// goes back, which Linux makes 500 ms, so the logs read the same on both.
+func defaults() Options {
+	o := OptionsFrom(config.Defaults())
+	o.DelayAfter = 60 * time.Millisecond
+	return o
+}
 
 func wantLog(t *testing.T, w *world, want ...string) {
 	t.Helper()
@@ -141,7 +148,11 @@ func wantLog(t *testing.T, w *world, want ...string) {
 
 func TestOptionsFrom(t *testing.T) {
 	s := config.Defaults()
-	want := Options{Method: config.PasteClipboard, Clipboard: config.ClipboardRestore, DelayBefore: 60 * time.Millisecond, DelayAfter: 60 * time.Millisecond}
+	after := 60 * time.Millisecond
+	if runtime.GOOS == "linux" {
+		after = 500 * time.Millisecond
+	}
+	want := Options{Method: config.PasteClipboard, Clipboard: config.ClipboardRestore, DelayBefore: 60 * time.Millisecond, DelayAfter: after}
 	if got := OptionsFrom(s); got != want {
 		t.Errorf("defaults: %+v, want %+v", got, want)
 	}

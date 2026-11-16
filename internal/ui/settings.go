@@ -2,6 +2,7 @@ package ui
 
 import (
 	"log/slog"
+	"runtime"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -14,6 +15,7 @@ import (
 	"github.com/opragmatico/goscriber/internal/audio"
 	"github.com/opragmatico/goscriber/internal/config"
 	"github.com/opragmatico/goscriber/internal/logging"
+	"github.com/opragmatico/goscriber/internal/session"
 )
 
 // Page is a page of the settings window.
@@ -45,16 +47,43 @@ func (p Page) String() string {
 // SettingsTitle is the settings window's title.
 const SettingsTitle = "Goscriber Settings"
 
-// SettingsInfo is what the About and Debug pages say about this build and
-// where its files are.
+// SettingsInfo is what the settings window says about this build, the
+// desktop it runs on and where its files are.
 type SettingsInfo struct {
 	Version string
 	// EngineVersion is the NeMo-Speech.cpp runtime's version, or "" for a
 	// build without the speech engine.
 	EngineVersion string
-	SettingsFile  string
-	LogsDir       string
+	// EngineGPU names the engine's GPU backend ("Metal", "Vulkan",
+	// "CUDA"), or is "" when the engine runs on the CPU only. The
+	// accelerator setting offers only what the engine has.
+	EngineGPU    string
+	SettingsFile string
+	LogsDir      string
+	// OS is the operating system, as runtime.GOOS names it; empty means
+	// this one. The paste keys and typing tool settings are Linux's.
+	OS string
+	// Session is the kind of graphical session. On Wayland the desktop
+	// owns the dictation shortcut: through its global shortcuts portal
+	// (SetDesktopShortcuts), or as a shortcut of its own that runs
+	// ToggleCommand.
+	Session session.Kind
+	// TypingTools are the typing tools installed, which the typing tool
+	// setting names.
+	TypingTools []config.TypingTool
 }
+
+func (i SettingsInfo) os() string {
+	if i.OS != "" {
+		return i.OS
+	}
+	return runtime.GOOS
+}
+
+// ToggleCommand is the command a desktop keyboard shortcut runs to start
+// and stop dictation: SIGUSR2 to the running app, which the engine workers
+// ignore.
+const ToggleCommand = "pkill -USR2 -x goscriber"
 
 // SettingsOptions configure the settings window. Store is required.
 type SettingsOptions struct {
@@ -84,6 +113,10 @@ type SettingsOptions struct {
 	// its global shortcuts meanwhile, so pressing the current one reaches
 	// the window instead of starting dictation.
 	OnRecordShortcut func(recording bool)
+	// ChangeDesktopShortcuts opens the desktop's dialog to change the keys
+	// its global shortcuts portal bound, on Wayland. Nil leaves the button
+	// out.
+	ChangeDesktopShortcuts func() error
 	// OpenFolder shows a folder, such as the logs directory, in the file
 	// manager. Nil leaves those buttons out.
 	OpenFolder func(dir string)
@@ -126,6 +159,11 @@ type SettingsWindow struct {
 
 	permissions []PermissionRow
 	permBox     *fyne.Container
+
+	// desktop is what the desktop's global shortcuts portal bound, on
+	// Wayland, which keysView shows on the General page.
+	desktop  DesktopShortcuts
+	keysView *desktopKeysView
 
 	language       LanguageSetting
 	detected       string

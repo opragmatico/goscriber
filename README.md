@@ -40,7 +40,7 @@ No other models or engines are planned. Whisper, Canary, Moonshine and the rest 
 
 1. **Press** a global shortcut: hold to record and release to stop (push-to-talk), or tap to toggle.
 2. **Speak**. A small overlay shows that Goscriber is listening and the words as they are recognised: with Nemotron Streaming 3.5 within a fraction of a second, with Parakeet a sentence or so at a time.
-3. **Release**. NeMo-Speech.cpp finishes the utterance locally on Metal (Apple Silicon) or the CPU.
+3. **Release**. NeMo-Speech.cpp finishes the utterance locally on Metal (Apple Silicon), Vulkan (Linux builds that include it) or the CPU.
 4. **Get** the text pasted into the focused text field.
 
 Names and jargon listed in the `custom_words` setting come out spelled your way: Nemotron is asked to favour them (NeMo-Speech.cpp's word boosting), and Parakeet's transcripts are corrected after the fact ([details](docs/architecture.md#custom-vocabulary)).
@@ -57,8 +57,8 @@ Following Handy, Goscriber also plans transcription history, an external transcr
 | Speech-to-text | [NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) C ABI (`nemo_speech/asr.h`) through CGo |
 | Voice activity detection | Silero VAD, run by NeMo-Speech.cpp |
 | Audio capture and sounds | [`malgo`](https://github.com/gen2brain/malgo) (miniaudio) |
-| Global shortcuts | [`golang.design/x/hotkey`](https://github.com/golang-design/hotkey) (needs the Accessibility permission on macOS) |
-| Clipboard and paste | `NSPasteboard` and Core Graphics key events through CGo on macOS (needs the Accessibility permission) |
+| Global shortcuts | [`golang.design/x/hotkey`](https://github.com/golang-design/hotkey) (needs the Accessibility permission on macOS); on Wayland, the XDG GlobalShortcuts portal through [`godbus/dbus`](https://github.com/godbus/dbus), or a desktop shortcut that sends `SIGUSR2` |
+| Clipboard and paste | `NSPasteboard` and Core Graphics key events through CGo on macOS (needs the Accessibility permission); X11 selections and XTEST key events through CGo on Linux, or wtype, dotool or ydotool on Wayland |
 | Settings | JSON under `os.UserConfigDir()` |
 | History | SQLite via [`modernc.org/sqlite`](https://pkg.go.dev/modernc.org/sqlite) (pure Go) |
 | Logging | `log/slog` |
@@ -75,7 +75,7 @@ Work is split into five milestones, tracked as GitHub issues:
 4. **M3 · Live streaming & usable app**: live transcription in the overlay, language selection, custom vocabulary, engine process isolation, settings window, onboarding, history and the CLI.
 5. **M4 · Distribution & platforms**: a signed macOS app bundle and releases, Linux and Windows, launch at login, transcription hook, LLM post-processing.
 
-macOS on Apple Silicon is the first target. Linux and Windows follow in M4.
+macOS on Apple Silicon is the first target. Linux works on X11 and Wayland desktops, with a little setup on Wayland: see [docs/linux.md](docs/linux.md). Windows is postponed.
 
 ## Development
 
@@ -83,8 +83,8 @@ macOS on Apple Silicon is the first target. Linux and Windows follow in M4.
 
 - Go 1.27 or newer, Git and Make.
 - macOS: the Xcode Command Line Tools (`xcode-select --install`).
-- Linux: a C compiler and Fyne's system packages, for example on Debian/Ubuntu `sudo apt-get install gcc libgl1-mesa-dev xorg-dev libxkbcommon-dev libwayland-dev`. The tray icon needs a StatusNotifierItem host; on GNOME that means the AppIndicator extension.
-- For the NeMo-Speech.cpp engine: CMake 3.26+, Ninja, a C++17 compiler and pkg-config, for example `brew install cmake ninja pkgconf` or `sudo apt-get install build-essential cmake ninja-build pkg-config`. `make deps` builds the pinned SDK (v0.3.0) into `.deps/`; see [docs/engine-sdk.md](docs/engine-sdk.md).
+- Linux: a C compiler and Fyne's system packages, for example on Debian/Ubuntu `sudo apt-get install gcc libgl1-mesa-dev xorg-dev libxkbcommon-dev libwayland-dev libxtst-dev`. The tray icon needs a StatusNotifierItem host; on GNOME that means the AppIndicator extension, which Ubuntu turns on. Wayland needs a typing tool, and a desktop shortcut where the desktop has no global shortcuts portal (GNOME 46, Sway): [docs/linux.md](docs/linux.md).
+- For the NeMo-Speech.cpp engine: CMake 3.26+, Ninja, a C++17 compiler and pkg-config, for example `brew install cmake ninja pkgconf` or `sudo apt-get install build-essential cmake ninja-build pkg-config`. `make deps` builds the pinned SDK (v0.3.0) into `.deps/`, for the CPU on Linux, where `NEMO_SPEECH_PRESET=vulkan-asr make deps` adds the GPU; see [docs/engine-sdk.md](docs/engine-sdk.md).
 
 ### Common tasks
 
@@ -94,6 +94,7 @@ make build                # build ./goscriber, with the engine once make deps ha
 make run ARGS=--version   # build ./goscriber and run it
 make run ARGS=--debug     # run the app with debug logging and the tray's Debug menu
 make app                  # macOS: assemble dist/Goscriber.app (ad-hoc signed development bundle)
+make dist-linux           # Linux: a tarball and a .deb with the engine's libraries (docs/linux.md)
 make test                 # go test -race ./..., then the CGo-free check
 make test-engine          # test the NeMo-Speech.cpp binding against the SDK
 make engine-version       # print the SDK's version through CGo

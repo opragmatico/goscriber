@@ -2,6 +2,7 @@ package app
 
 import (
 	"net/url"
+	"os/exec"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -17,7 +18,9 @@ import (
 	"github.com/opragmatico/goscriber/internal/notice"
 	"github.com/opragmatico/goscriber/internal/pipeline"
 	"github.com/opragmatico/goscriber/internal/platform"
+	"github.com/opragmatico/goscriber/internal/session"
 	"github.com/opragmatico/goscriber/internal/text"
+	"github.com/opragmatico/goscriber/internal/typing"
 	"github.com/opragmatico/goscriber/internal/ui"
 )
 
@@ -27,6 +30,7 @@ import (
 // system's); tests replace them.
 var (
 	newHotkeyBackend     = hotkey.SystemBackend
+	currentSession       = session.Current
 	accessibilityTrusted = platform.AccessibilityTrusted
 	listDevices          func() (inputs, outputs []audio.Device, err error)
 )
@@ -122,6 +126,15 @@ type shell struct {
 
 	// secureInput reports macOS Secure Event Input; nil skips the check.
 	secureInput func() bool
+	// session is the kind of desktop session. On Wayland the desktop owns
+	// the shortcuts: through its global shortcuts portal (shortcuts.go),
+	// or as a shortcut of its own that toggles dictation through SIGUSR2.
+	session session.Kind
+	// portal is the desktop's global shortcuts portal, once it holds the
+	// shortcuts; portalClosed is set as the app stops.
+	portalMu     sync.Mutex
+	portal       desktopShortcuts
+	portalClosed bool
 	// notices collects background problems and routes them to the user.
 	notices *notice.Hub
 	// trusted reports the macOS Accessibility permission.
@@ -158,6 +171,7 @@ func newShell(rt *Runtime, a fyne.App, opts Options) *shell {
 		quit:           make(chan struct{}),
 		notices:        notice.NewHub(notice.Options{Log: rt.Log.Logger}),
 		trusted:        accessibilityTrusted,
+		session:        currentSession(),
 	}
 	sh.svc = newServices(rt, opts, sh.notices)
 	sh.permissionRows = &latest{do: func(f func()) { sh.do(f) }}
@@ -201,7 +215,7 @@ func (sh *shell) start() {
 	// The shortcuts register in the background: on macOS that waits for
 	// Fyne's main loop, which starts with the app. Their actions go
 	// straight to the coordinator, which never blocks.
-	sh.hotkeys = hotkey.NewManager(newHotkeyBackend(), hotkey.Options{
+	sh.hotkeys = hotkey.NewManager(sh.hotkeyBackend(), hotkey.Options{
 		OnAction:     func(a hotkey.Action) { sh.dictate(dictationAction(a)) },
 		OnError:      sh.shortcutFailed,
 		OnRegistered: sh.shortcutRegistered,
@@ -209,6 +223,7 @@ func (sh *shell) start() {
 	})
 	sh.hotkeys.Apply(hotkey.ConfigFrom(s))
 	sh.startDictation()
+	sh.listenToggleSignal()
 
 	sh.app.Lifecycle().SetOnStarted(sh.started)
 	// Stop following settings as soon as Fyne shuts down; stop then waits for
@@ -292,16 +307,26 @@ func (sh *shell) watchSecureInput() {
 // newSettingsWindow prepares the settings window over the settings store,
 // the model files, the log and the shortcuts.
 func (sh *shell) newSettingsWindow() *ui.SettingsWindow {
-	engineVersion := ""
+	engineVersion, engineGPU := "", ""
 	if sh.opts.EngineVersion != nil {
 		engineVersion = sh.opts.EngineVersion()
+	}
+	if sh.opts.EngineGPU != nil {
+		engineGPU = sh.opts.EngineGPU()
+	}
+	var tools []config.TypingTool
+	if runtime.GOOS == "linux" {
+		tools = typing.Installed(exec.LookPath, config.TypingXdotool, config.TypingWtype, config.TypingDotool, config.TypingYdotool)
 	}
 	return ui.NewSettingsWindow(sh.app, ui.SettingsOptions{
 		Info: ui.SettingsInfo{
 			Version:       sh.opts.Version,
 			EngineVersion: engineVersion,
+			EngineGPU:     engineGPU,
 			SettingsFile:  sh.rt.Settings.Path(),
 			LogsDir:       sh.rt.Paths.LogsDir(),
+			Session:       sh.session,
+			TypingTools:   tools,
 		},
 		Store: sh.rt.Settings,
 		// The language-independent fillers and English's: the list most
@@ -314,12 +339,13 @@ func (sh *shell) newSettingsWindow() *ui.SettingsWindow {
 		OnClose:            sh.settingsClosed,
 		// While a shortcut field listens, the global shortcuts would take
 		// the very keys the user presses.
-		OnRecordShortcut: func(on bool) { sh.hotkeys.Suspend(on) },
-		OpenFolder:       func(dir string) { sh.openURL((&url.URL{Scheme: "file", Path: dir}).String()) },
-		OnOnboardingStep: sh.onboardingStepShown,
-		OnOnboardingDone: sh.onboardingDone,
-		Do:               func(f func()) { sh.do(f) },
-		Log:              sh.rt.Log.Logger,
+		OnRecordShortcut:       func(on bool) { sh.hotkeys.Suspend(on) },
+		ChangeDesktopShortcuts: sh.changeDesktopShortcuts,
+		OpenFolder:             func(dir string) { sh.openURL((&url.URL{Scheme: "file", Path: dir}).String()) },
+		OnOnboardingStep:       sh.onboardingStepShown,
+		OnOnboardingDone:       sh.onboardingDone,
+		Do:                     func(f func()) { sh.do(f) },
+		Log:                    sh.rt.Log.Logger,
 	})
 }
 
@@ -367,6 +393,7 @@ func (sh *shell) stopFollowing() {
 		if sh.hotkeys != nil {
 			sh.hotkeys.Close() // returns at once: on macOS the main loop may be gone
 		}
+		sh.closeShortcutPortal()
 	})
 }
 

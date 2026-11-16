@@ -15,4 +15,4 @@ func SystemBackend() Backend { return noBackend{} }
 
 type noBackend struct{}
 
-func (noBackend) Register(Binding) (Registration, error) { return nil, ErrUnsupported }
+func (noBackend) Register(Purpose, Binding) (Registration, error) { return nil, ErrUnsupported }

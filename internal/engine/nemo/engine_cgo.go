@@ -84,15 +84,26 @@ func statusError(op string, status C.nemo_speech_asr_status, msg *C.char) error 
 	return &engine.Error{Op: op, Kind: kind, Detail: detail}
 }
 
+// gpuRetryable reports whether a recognizer that failed to load on the GPU
+// with status may load on the CPU: anything but a configuration the
+// library refuses wherever it runs, or a load that was cancelled.
+func gpuRetryable(status C.nemo_speech_asr_status) bool {
+	return status != C.NEMO_SPEECH_ASR_ERROR_INVALID_ARGUMENT && status != C.NEMO_SPEECH_ASR_ERROR_CANCELLED
+}
+
 // checkSDK refuses a runtime whose version is not compatible with the one
 // the binding was written for: the loader may have found another copy of
 // the library.
 var checkSDK = sync.OnceValue(func() error { return checkVersion(Version()) })
 
-// Load implements engine.Engine. It loads the GGUF at spec.Path on Metal,
-// or on the CPU when spec.CPU is set, after checking that the file exists
-// (engine.ErrModelNotFound otherwise) and reading what the model can do from
-// its metadata. A streaming model looks ahead as far as spec.Latency says.
+// Load implements engine.Engine. It loads the GGUF at spec.Path on the
+// first GPU of the SDK's backend (GPUBackend: Metal, Vulkan or CUDA), or on
+// the CPU when spec.CPU is set or the SDK has no GPU backend, after checking
+// that the file exists (engine.ErrModelNotFound otherwise) and reading what
+// the model can do from its metadata. A model the GPU cannot take (a Vulkan
+// build on a computer without a Vulkan driver, a GPU out of memory) is
+// loaded on the CPU instead, and ModelInfo.CPU says so. A streaming model
+// looks ahead as far as spec.Latency says.
 func (e *Engine) Load(ctx context.Context, spec engine.LoadSpec) (engine.ModelInfo, error) {
 	rc, err := rightContext("load", spec.Latency)
 	if err != nil {
@@ -134,8 +145,10 @@ func (e *Engine) load(ctx context.Context, spec engine.LoadSpec, rightContext in
 	defer mem.free()
 	backend := cnew[C.nemo_speech_asr_backend_config](&mem)
 	backend.size = C.sizeof_nemo_speech_asr_backend_config
-	backend.gpu = 0 // the first GPU: Metal on macOS
-	if spec.CPU {
+	// The first GPU device; a CPU-only SDK refuses any, so it gets -1.
+	onCPU := spec.CPU || GPUBackend() == ""
+	backend.gpu = 0
+	if onCPU {
 		backend.gpu = -1
 	}
 	model := cnew[C.nemo_speech_asr_model_config](&mem)
@@ -168,7 +181,18 @@ func (e *Engine) load(ctx context.Context, spec engine.LoadSpec, rightContext in
 
 	var rec *C.nemo_speech_asr_recognizer
 	var msg *C.char
-	if status := C.gs_create(cfg, &rec, &msg); status != C.NEMO_SPEECH_ASR_OK {
+	status := C.gs_create(cfg, &rec, &msg)
+	if status != C.NEMO_SPEECH_ASR_OK && !onCPU && gpuRetryable(status) && ctx.Err() == nil {
+		// No device of the backend, or one that could not take the
+		// model: the CPU can. If it cannot either, its error is the one
+		// that tells what is wrong with the model.
+		C.free(unsafe.Pointer(msg))
+		msg = nil
+		onCPU = true
+		backend.gpu = -1
+		status = C.gs_create(cfg, &rec, &msg)
+	}
+	if status != C.NEMO_SPEECH_ASR_OK {
 		return engine.ModelInfo{}, statusError(op, status, msg)
 	}
 	if err := ctx.Err(); err != nil {
@@ -176,7 +200,7 @@ func (e *Engine) load(ctx context.Context, spec engine.LoadSpec, rightContext in
 		return engine.ModelInfo{}, cancelled(op, err)
 	}
 	h.rec = rec
-	h.info = engine.ModelInfo{ID: spec.ID, Streaming: meta.streaming, Languages: meta.languages}
+	h.info = engine.ModelInfo{ID: spec.ID, Streaming: meta.streaming, Languages: meta.languages, CPU: onCPU}
 	return cloneInfo(h.info), nil
 }
 

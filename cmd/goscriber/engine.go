@@ -12,4 +12,5 @@ import (
 func init() {
 	newEngine = func() engine.Engine { return nemo.New() }
 	engineVersion = nemo.Version
+	engineGPU = nemo.GPUBackend
 }

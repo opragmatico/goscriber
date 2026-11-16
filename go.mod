@@ -6,6 +6,7 @@ require (
 	fyne.io/fyne/v2 v2.8.2
 	github.com/gen2brain/malgo v0.11.27
 	github.com/go-gl/glfw/v3.4/glfw v0.1.0-pre.2
+	github.com/godbus/dbus/v5 v5.2.2
 	golang.design/x/hotkey v0.6.4
 	golang.org/x/sys v0.30.0
 )
@@ -24,7 +25,6 @@ require (
 	github.com/go-gl/gl v0.0.0-20260331235117-4566fea9a276 // indirect
 	github.com/go-text/render v0.2.1 // indirect
 	github.com/go-text/typesetting v0.3.5 // indirect
-	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/hack-pad/go-indexeddb v0.3.2 // indirect
 	github.com/hack-pad/safejs v0.1.0 // indirect
 	github.com/jeandeaual/go-locale v0.0.0-20250612000132-0ef82f21eade // indirect

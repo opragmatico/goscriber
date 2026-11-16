@@ -49,6 +49,34 @@ func (w *SettingsWindow) advancedPage() fyne.CanvasObject {
 	// The offset may not exceed the onset: moving either keeps them in order.
 	keepOrder := func(s *config.Settings) { s.VADOffset = min(s.VADOffset, s.VADOnset) }
 	onset.fix, offset.fix = keepOrder, keepOrder
+	accelerator, acceleratorHint := w.acceleratorSetting()
+
+	output := []fyne.CanvasObject{
+		w.row("Paste method", "How the transcript reaches the app you are using.",
+			choiceSetting(w, "paste_method", func(s *config.Settings) *config.PasteMethod { return &s.PasteMethod },
+				[]choice[config.PasteMethod]{
+					{config.PasteClipboard, "Paste through the clipboard"},
+					{config.PasteDirect, "Type the text"},
+					{config.PasteNone, "Copy only, never paste"},
+				}, nil)),
+	}
+	output = append(output, w.linuxOutputRows()...)
+	output = append(output,
+		w.row("Clipboard", "After pasting through the clipboard.",
+			choiceSetting(w, "clipboard_handling", func(s *config.Settings) *config.ClipboardHandling { return &s.ClipboardHandling },
+				[]choice[config.ClipboardHandling]{
+					{config.ClipboardRestore, "Put back what was there"},
+					{config.ClipboardKeep, "Keep the transcript"},
+				}, nil)),
+		w.row("Delay before pasting", "Between writing the clipboard and pressing the paste keys.",
+			sliderSetting(w, "paste_delay_ms", func(s *config.Settings) *int { return &s.PasteDelayMS }, 0, 1000, 10, formatMS)),
+		w.row("Delay after pasting", "Before the clipboard is put back, so the app has read it.",
+			sliderSetting(w, "paste_delay_after_ms", func(s *config.Settings) *int { return &s.PasteDelayAfterMS }, 0, 1000, 10, formatMS)),
+		w.row("Add a trailing space", "So the next dictation does not run into this one.",
+			boolSetting(w, "append_trailing_space", func(s *config.Settings) *bool { return &s.AppendTrailingSpace })),
+		w.row("Press Return after pasting", "Sends the message in chat apps.",
+			boolSetting(w, "auto_submit", func(s *config.Settings) *bool { return &s.AutoSubmit })),
+	)
 
 	return settingsPage("Advanced",
 		group("App",
@@ -62,36 +90,9 @@ func (w *SettingsWindow) advancedPage() fyne.CanvasObject {
 				choiceSetting(w, "model_unload_timeout", func(s *config.Settings) *config.UnloadTimeout { return &s.ModelUnloadTimeout },
 					unloadChoices, formatUnload)),
 		),
-		group("Output",
-			w.row("Paste method", "How the transcript reaches the app you are using.",
-				choiceSetting(w, "paste_method", func(s *config.Settings) *config.PasteMethod { return &s.PasteMethod },
-					[]choice[config.PasteMethod]{
-						{config.PasteClipboard, "Paste through the clipboard"},
-						{config.PasteDirect, "Type the text"},
-						{config.PasteNone, "Copy only, never paste"},
-					}, nil)),
-			w.row("Clipboard", "After pasting through the clipboard.",
-				choiceSetting(w, "clipboard_handling", func(s *config.Settings) *config.ClipboardHandling { return &s.ClipboardHandling },
-					[]choice[config.ClipboardHandling]{
-						{config.ClipboardRestore, "Put back what was there"},
-						{config.ClipboardKeep, "Keep the transcript"},
-					}, nil)),
-			w.row("Delay before pasting", "Between writing the clipboard and pressing the paste keys.",
-				sliderSetting(w, "paste_delay_ms", func(s *config.Settings) *int { return &s.PasteDelayMS }, 0, 1000, 10, formatMS)),
-			w.row("Delay after pasting", "Before the clipboard is put back, so the app has read it.",
-				sliderSetting(w, "paste_delay_after_ms", func(s *config.Settings) *int { return &s.PasteDelayAfterMS }, 0, 1000, 10, formatMS)),
-			w.row("Add a trailing space", "So the next dictation does not run into this one.",
-				boolSetting(w, "append_trailing_space", func(s *config.Settings) *bool { return &s.AppendTrailingSpace })),
-			w.row("Press Return after pasting", "Sends the message in chat apps.",
-				boolSetting(w, "auto_submit", func(s *config.Settings) *bool { return &s.AutoSubmit })),
-		),
+		group("Output", output...),
 		group("Transcription",
-			w.row("Run the model on", "",
-				choiceSetting(w, "accelerator", func(s *config.Settings) *config.Accelerator { return &s.Accelerator },
-					[]choice[config.Accelerator]{
-						{config.AcceleratorAuto, "The GPU when there is one (Metal)"},
-						{config.AcceleratorCPU, "The CPU only"},
-					}, nil)),
+			w.row("Run the model on", acceleratorHint, accelerator),
 			w.row("Live text", "For streaming models: how soon words show against how accurate they are.",
 				choiceSetting(w, "streaming_latency", func(s *config.Settings) *config.StreamingLatency { return &s.StreamingLatency },
 					[]choice[config.StreamingLatency]{

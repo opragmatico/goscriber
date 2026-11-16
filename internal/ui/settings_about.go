@@ -35,13 +35,9 @@ var software = []attribution{
 
 func (w *SettingsWindow) aboutPage() fyne.CanvasObject {
 	info := w.opts.Info
-	engine := info.EngineVersion
-	if engine == "" {
-		engine = EngineNotBuiltIn
-	}
 	version := container.NewVBox(
 		w.row("Version", "", widget.NewLabel(info.Version)),
-		w.row("NeMo-Speech.cpp", "", widget.NewLabel(engine)),
+		w.row("NeMo-Speech.cpp", "", widget.NewLabel(engineLabel(info))),
 		w.row("Settings file", "", path(info.SettingsFile)),
 		w.row("Logs", "", path(info.LogsDir)),
 	)

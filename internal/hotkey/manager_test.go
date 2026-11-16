@@ -28,7 +28,7 @@ func newFakeBackend() *fakeBackend {
 	return &fakeBackend{active: map[string]*fakeReg{}, fail: map[string]error{}}
 }
 
-func (f *fakeBackend) Register(b Binding) (Registration, error) {
+func (f *fakeBackend) Register(_ Purpose, b Binding) (Registration, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	key := b.String()

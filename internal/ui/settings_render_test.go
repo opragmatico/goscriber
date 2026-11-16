@@ -10,6 +10,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 
 	"github.com/opragmatico/goscriber/internal/config"
+	"github.com/opragmatico/goscriber/internal/session"
 )
 
 // RenderDirEnv names a directory to write the settings pages to as PNGs,
@@ -74,6 +75,31 @@ func TestRenderSettingsPages(t *testing.T) {
 			delete(tw.models.downloads, parakeetV2)
 		}
 	}
+
+	// Linux on Wayland, with a CPU-only engine: the pages and the
+	// onboarding step that differ there.
+	tw := newTestWindow(t, func(o *SettingsOptions) {
+		o.Info.OS, o.Info.Session, o.Info.EngineGPU = "linux", session.Wayland, ""
+		o.Info.TypingTools = []config.TypingTool{config.TypingWtype, config.TypingYdotool}
+	})
+	tw.app.Settings().SetTheme(theme.LightTheme()) //nolint:staticcheck // a fixed variant, whatever the OS uses
+	tw.show(PageGeneral)
+	tw.Window().Resize(fyne.NewSize(760, 2700))
+	for _, p := range []Page{PageGeneral, PageAdvanced, PagePermissions, PageAbout} {
+		tw.selectPage(p)
+		capture(t, tw, filepath.Join(dir, "linux-wayland-"+p.String()+".png"))
+	}
+	tw.showOnboarding(StepPermissions)
+	capture(t, tw, filepath.Join(dir, "linux-wayland-onboarding-permissions.png"))
+
+	// The same once the desktop's global shortcuts portal bound the keys.
+	tw.endOnboarding(true)
+	tw.SetDesktopShortcuts(DesktopShortcuts{State: PortalBound, Transcribe: "Ctrl+Alt+Space", CanChange: true})
+	tw.show(PageGeneral)
+	tw.Window().Resize(fyne.NewSize(760, 2700))
+	capture(t, tw, filepath.Join(dir, "linux-wayland-portal-"+PageGeneral.String()+".png"))
+	tw.showOnboarding(StepTry)
+	capture(t, tw, filepath.Join(dir, "linux-wayland-portal-onboarding-try.png"))
 }
 
 // capture writes the window as a PNG.

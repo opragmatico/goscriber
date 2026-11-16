@@ -360,7 +360,10 @@ func (s *Supervisor) spawn(ctx context.Context, spec engine.LoadSpec) (*proc, en
 		p.shutdown("no model information", s.t.Stop)
 		return nil, engine.ModelInfo{}, &engine.Error{Op: "load", Kind: engine.ErrRuntime, Detail: "the engine worker sent no model information"}
 	}
-	p.log.Info("engine worker ready", "model", spec.ID, "cpu", spec.CPU, "took", time.Since(began).Round(time.Millisecond))
+	if resp.Info.CPU && !spec.CPU {
+		p.log.Info("the model runs on the CPU: the engine has no GPU backend, or no GPU could take the model", "model", spec.ID)
+	}
+	p.log.Info("engine worker ready", "model", spec.ID, "cpu", resp.Info.CPU, "took", time.Since(began).Round(time.Millisecond))
 	go s.heartbeat(p)
 	return p, *resp.Info, nil
 }

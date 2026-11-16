@@ -67,7 +67,7 @@ func systemServices(rt *Runtime, opts Options, notices *notice.Hub) services {
 	return services{
 		recorder: rec,
 		engine:   autounload.New(speechEngine(rt, opts, s, notices), s.ModelUnloadTimeout.Duration(), rt.Log.Logger),
-		output:   output.New(platform.GeneralPasteboard(), platform.Keyboard{}, rt.Log.Logger),
+		output:   output.New(platform.GeneralPasteboard(), platform.Keyboard{Settings: rt.Settings.Get, Log: rt.Log.Logger}, rt.Log.Logger),
 		models:   pipeline.CatalogModels{Manager: files},
 		files:    files,
 		feedback: audio.NewFeedback(audio.NewPlayer(), platform.MuteOutput, rt.Log.Logger),
