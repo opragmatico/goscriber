@@ -93,6 +93,7 @@ make deps                 # download Go modules and build the NeMo-Speech.cpp SD
 make build                # build ./goscriber, with the engine once make deps has run
 make run ARGS=--version   # build ./goscriber and run it
 make run ARGS=--debug     # run the app with debug logging and the tray's Debug menu
+./goscriber --toggle-transcription  # start or stop dictation in the running app (also --cancel)
 make app                  # macOS: assemble dist/Goscriber.app (ad-hoc signed development bundle)
 make test                 # go test -race ./..., then the CGo-free check
 make test-engine          # test the NeMo-Speech.cpp binding against the SDK

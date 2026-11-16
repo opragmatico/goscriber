@@ -214,6 +214,16 @@ func (w *SettingsWindow) Show(p Page) {
 	w.refreshHistory()
 }
 
+// Raise brings the window to the front as it is, on the page or onboarding
+// step it shows. It does nothing while the window is hidden.
+func (w *SettingsWindow) Raise() {
+	if w.win == nil || !w.visible {
+		return
+	}
+	w.win.Show()
+	w.win.RequestFocus()
+}
+
 // Hide takes the window off screen, as closing it does, without running
 // OnClose.
 func (w *SettingsWindow) Hide() {

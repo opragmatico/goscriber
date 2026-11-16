@@ -138,6 +138,8 @@ type shell struct {
 	askedPermissions sync.Once
 
 	unsubscribe func()
+	// stopControl ends serving the control socket; nil without one.
+	stopControl func()
 	following   sync.WaitGroup
 	quit        chan struct{} // closed when the app stops
 	quitOnce    sync.Once
@@ -212,6 +214,9 @@ func (sh *shell) start() {
 	})
 	sh.hotkeys.Apply(hotkey.ConfigFrom(s))
 	sh.startDictation()
+	// Later launches and SIGUSR2 reach dictation from here on.
+	sh.serveControl()
+	sh.watchToggleSignal()
 
 	sh.app.Lifecycle().SetOnStarted(sh.started)
 	// Stop following settings as soon as Fyne shuts down; stop then waits for
@@ -363,6 +368,9 @@ func (sh *shell) stopFollowing() {
 	}
 	sh.quitOnce.Do(func() {
 		close(sh.quit)
+		if sh.stopControl != nil {
+			sh.stopControl()
+		}
 		if sh.stopNotices != nil {
 			sh.stopNotices()
 		}
