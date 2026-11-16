@@ -18,6 +18,7 @@ func init() {
 			EngineInProcess: o.EngineInProcess,
 			EngineVersion:   engineVersion,
 			EngineGPU:       engineGPU,
+			Instance:        o.Instance,
 		})
 	}
 }

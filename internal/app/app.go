@@ -8,6 +8,7 @@ import (
 
 	"github.com/opragmatico/goscriber/internal/config"
 	"github.com/opragmatico/goscriber/internal/engine"
+	"github.com/opragmatico/goscriber/internal/instance"
 	"github.com/opragmatico/goscriber/internal/logging"
 )
 
@@ -33,6 +34,11 @@ type Options struct {
 	// "CUDA"), or "" when it runs on the CPU only, for the accelerator
 	// setting and the About page. Nil means this build has no engine.
 	EngineGPU func() string
+	// Instance is this launch's hold on being the only Goscriber, which the
+	// command line took; the app answers the commands later launches send
+	// on its control socket until it quits. Nil: no remote control. The
+	// caller closes it after Run returns.
+	Instance *instance.Instance
 }
 
 // Runtime is what every part of the app shares: where files live, the

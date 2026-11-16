@@ -44,7 +44,7 @@ cmd/goscriber/             # main: GUI by default; subcommands `transcribe`, `en
 internal/
 ├── app/                   # Fyne app bootstrap and object wiring
 ├── cli/                   # flags, subcommands, remote-control client
-├── instance/              # single-instance socket server
+├── instance/              # single-instance lock and control socket
 ├── config/                # paths and settings (JSON, defaults, migrations)
 ├── logging/               # slog setup, file sink, in-memory ring for the log viewer
 ├── notice/                # one place to report background errors: hub, de-duplication, fan-out
@@ -56,6 +56,7 @@ internal/
 │   ├── devices.go         # input / output device enumeration
 │   ├── feedback.go        # start / stop cues, mute while recording
 │   ├── sounds/            # the cues, made by gen_sounds.go
+│   ├── decode.go          # WAV or FLAC files, told apart by content, for the History page and the CLI
 │   └── wav.go             # WAV read / write for history and the CLI
 ├── engine/
 │   ├── engine.go          # Engine / Stream interfaces, Result, Word, options
@@ -114,6 +115,27 @@ third_party/
 - **macOS**: with a tray the app is an accessory app with no Dock icon. The bundle's Info.plist sets `LSUIElement`, and the app also sets the activation policy at startup, because GLFW makes every app a regular one and plain `go run` builds have no Info.plist. Without a tray the Dock icon stays as the way back in.
 - **Shutdown**: Quit, SIGINT and SIGTERM all end Fyne's main loop; the app then stops following settings and closes the log.
 
+### Single instance and remote control
+
+Only one Goscriber runs per config directory (`GOSCRIBER_HOME` makes another), and scripts can control it (`internal/instance`, `internal/cli`):
+
+| Command line | With Goscriber running | With none running |
+| --- | --- | --- |
+| `goscriber` (with or without `--start-hidden`, `--no-tray`, `--debug`) | brings the running one's settings window to the front, as it is, or on [onboarding](#onboarding) while that is not over, and exits | starts the app |
+| `goscriber --toggle-transcription` | starts dictation, or stops it and pastes the transcript, as the shortcut in toggle mode; exits quietly with 0 | says Goscriber is not running and exits with 1 |
+| `goscriber --cancel` | discards the dictation in progress | the same |
+| `kill -USR2 <pid>` | toggles dictation, as in Handy | |
+
+A remote-control flag takes no other flag. The commands reach the coordinator as the tray's do, so one that does not fit the state is refused there (a toggle while a transcript is on its way), and toggling without a model raises `no_model` in the app.
+
+**Lock.** Before the app starts, the command line takes an exclusive `flock` on `goscriber.lock` in the config directory, and holds it until the app has shut down. The kernel releases it however the process ends, so a crash never leaves Goscriber "running". Two launches at once cannot both win.
+
+**Control socket.** The app then listens on a Unix domain socket, `goscriber.sock` beside the lock, with mode 0600; one a crash left behind is replaced. A config directory too deep for a socket address (`sun_path` holds about 100 bytes) moves the socket to `goscriber-<uid>/` under `XDG_RUNTIME_DIR` or the temporary directory, which must be the user's own and closed to others. Each connection carries one request and one response, each a line of JSON: `{"version":1,"command":"toggle-transcription"}` (or `cancel`, `show-settings`), answered by `{"ok":true}` or `{"ok":false,"error":"…"}`. A request of another protocol version, an unknown command or a malformed line is refused with the reason, which the command line prints. While the app quits, the socket goes first and commands are refused; the lock stays until the end, so a launch then waits for it and starts once it is free.
+
+**Sending.** The command line connects to the socket. If nothing answers and no process holds the lock, Goscriber is not running. If the lock is held, the app is still starting, so it tries again every 50 ms for up to five seconds.
+
+Windows, where this would be a named pipe, has neither yet: the app runs without the lock and the flags say they are not supported.
+
 ## Settings window
 
 `internal/ui`'s `SettingsWindow` is one Fyne window with a sidebar of pages, opened from the tray (Settings…; "No model: Download…" opens it on the Models page) and by notices' buttons. Light and dark follow the OS, as Fyne does by default.
@@ -124,7 +146,7 @@ third_party/
 | **Models** | a card per catalog model: what it does, size, licence, quantisation (Parakeet TDT v2 has two), status, and Download (with progress, cancellable), Delete (asks first) and Use. With no model downloaded the page says so. Below the cards, the [language picker](#language) |
 | **Advanced** | app (start hidden, tray icon, launch at login, unload timeout, loading the model at launch), output (paste method, on Linux the paste keys and typing tool, clipboard, delays, trailing space, Return), transcription (accelerator, offering only what the engine was built with, live-text latency, decoding while recording, always-on microphone, VAD and its thresholds, shortest recording, silence threshold) and text (filler words, custom words with their [boost and correction threshold](#custom-vocabulary)) |
 | **Permissions** | each macOS permission, with a button to System Settings when missing ([permissions.md](permissions.md)); on Linux, what a Wayland session needs set up ([linux.md](linux.md)) |
-| **History** | how many dictations and how long recordings are kept; the list itself comes with #32 |
+| **History** | how many dictations and how long recordings are kept; [transcribing audio files](#transcribing-files), chosen or dropped on the window, with progress and Cancel; then the latest dictations (up to 100), newest first, each with Copy, Paste again, Play, Transcribe again and Delete, and Delete all ([history](#history)) |
 | **Debug** | only in debug mode: debug mode, log level, running the engine in the app ([profiling](#process-isolation)), and a viewer over the last 400 records of the logger's in-memory ring |
 | **About** | Goscriber's version, the NeMo-Speech.cpp runtime's (or "not built in"), where settings and logs live, a button that runs [onboarding](#onboarding) again, and the licences of what Goscriber is built with and of the models |
 
@@ -310,12 +332,12 @@ shortcut up   ─► Capture.Stop() ─► speech gate (too short / too quiet �
 
 The `Coordinator` (`internal/pipeline/coordinator.go`) owns a single state machine: `idle → recording → transcribing → post_processing → outputting → idle`. A cancel from any state returns to `idle` and discards the session. Only one session is active at a time.
 
-- **Actions**: `Start`, `Stop`, `Toggle` and `Cancel` (also `Do(action)`), from the shortcut, the tray and later the command line (#33). They never block: they are queued and run in order on the coordinator's own goroutine, so they are safe on the UI thread. An action that does not fit the state is refused, not queued: the shortcut pressed while a transcript is on its way does nothing.
+- **Actions**: `Start`, `Stop`, `Toggle` and `Cancel` (also `Do(action)`), from the shortcut, the tray, the [command line](#single-instance-and-remote-control) and SIGUSR2. They never block: they are queued and run in order on the coordinator's own goroutine, so they are safe on the UI thread. An action that does not fit the state is refused, not queued: the shortcut pressed while a transcript is on its way does nothing.
 - **Events**: `Subscribe` delivers state changes, refusals, the microphone level while recording and the transcript so far (both coalesced, so a slow reader gets the latest), and the delivered transcript. A refusal carries the unchanged state, so the shortcut's activator, which guessed the press would start or stop a recording, resyncs. The shell follows the events to drive the tray icon and to register Escape only while recording.
 - **Model**: every `Start` resolves the selected model through a `ModelSource` (`CatalogModels` over the models manager: `selected_model`, in `model_quant` when the model has it, on the CPU when `accelerator` says so, with the Silero VAD when enabled and downloaded). With no model ready, `Start` records nothing and raises `no_model` afresh, so every press is answered; a damaged file raises `model_corrupt`. The engine goroutine loads the model when recording starts, if the engine does not hold it already (with `preload_model` it usually does: see [model lifecycle](#model-lifecycle)), and `Acquire`s it until the transcript is out.
 - **Decode**: the recording is decoded while it goes on ([live transcription](#live-transcription)). On `Stop`, the speech gate runs first (too short or too quiet ends the session quietly), then the engine goroutine finishes the decode: the stream's final, or the chunk still open, or the whole clip when neither applies.
 - **Session IDs**: each session has an ID and a context. A cancel ends the context (the decode, a text stage or the paste may stop early) and anything that finishes afterwards for that session is dropped, even while the next session is recording.
-- **Stages**: `Stages{Cleanup, LLM, Hook, History}` run after recognition, each optional; the app sets `Cleanup` to `CleanupStage` ([text cleanup](#text-cleanup)), and the others are nil until their issues land (#39, #38, #32). Each text stage gets the session's `SessionInfo`, with the settings the session started with. A failing text stage passes its input on; empty output pastes nothing. History saves after delivery, off the critical path.
+- **Stages**: `Stages{Cleanup, LLM, Hook, History}` run after recognition, each optional; the app sets `Cleanup` to `CleanupStage` ([text cleanup](#text-cleanup)) and `History` to the [history](#history); the others are nil until their issues land (#39, #38). Each text stage gets the session's `SessionInfo`, with the settings the session started with. A failing text stage passes its input on; empty output pastes nothing. History saves after delivery, off the critical path.
 - **Failures**: an engine error ends in `idle` with `transcription_failed`, `model_corrupt` or `no_model`; a failed delivery with `paste_failed` or `permission_missing`. Each is raised before the state returns to idle. No speech is not a failure.
 - **Timings**: each stage's duration is logged at debug level, and a summary line per session (`dictation timings`); the info-level line says only whether something was delivered and how many characters, never the text.
 
@@ -379,6 +401,24 @@ A filler matches whole words only, ignoring case, and also drawn out ("ummm"). T
 
 Settings files from before schema version 2 hold `filler_word_removal: false`, saved while the setting did nothing; the v2 migration turns it on.
 
+### History
+
+Every finished dictation is saved (`internal/history`, SQLite through the pure-Go `modernc.org/sqlite`), also when its delivery failed, so the text is never lost: when recording started, the delivered text, the model's raw transcript, the model, the transcript's language and the recording's length, with the recording as a 16-bit mono WAV beside the database. An entry [transcribed from a file](#transcribing-files) also keeps the file's name (schema version 2). The schema is versioned with SQLite's `user_version` and migrated forward, one transaction per step, when the app opens it; a database from a newer Goscriber is left alone, and the app runs on without saving.
+
+**Retention.** `history_limit` is how many of the latest dictations are kept (5 by default; 0 saves none). `recording_retention` is how long their recordings are: as long as the dictation (`preserve_limit`, the default), 3 days, 2 weeks, 3 months, or none (`never`, which saves no WAV). A recording past its age is deleted and its dictation kept. The history is pruned after every dictation, when it opens, and as soon as either setting changes.
+
+**History page.** The latest 100 dictations, newest first, each dated ("Today 14:22 · 6 s · Parakeet TDT 0.6B v2"). Copy puts the text on the clipboard. Paste again hides the settings window, so the app the user was in gets the keyboard back, and delivers the text as a dictation would. Play plays the recording on the output device in the settings, and Stop ends it. Transcribe again decodes the recording with the model the settings select now, as a file is decoded (below), runs the cleanup stage, and replaces the dictation's text and model. Delete removes a dictation and its recording; Delete all asks first.
+
+### Transcribing files
+
+The History page transcribes existing recordings without the command line: Choose a file… (Fyne's file dialog, filtered to `.wav` and `.flac`), or files dropped anywhere on the settings window, which switches to the page; drops during onboarding are ignored. Files go one at a time, the others waiting, with the file's name, how far it has got ("3 min 20 s of 10 min 0 s"), a progress bar and Cancel, which also drops the files waiting. Each transcript lands in the history like a dictation, named after its file ("Today 14:22 · interview.flac · 10 min 0 s · Parakeet TDT 0.6B v2"), with the file's audio as its recording, so it can be played and transcribed again; it is not pasted. Once done the page offers Copy, which matters when `history_limit` is 0 and nothing is kept.
+
+- **Formats.** `audio.ReadFile` reads WAV (as before) and FLAC, through the pure-Go `mewkiz/flac`, told apart by their content, mixed down to mono at the file's own rate (NeMo-Speech.cpp resamples). MP3 is refused with a message to convert it: the one pure-Go decoder, `hajimehoshi/go-mp3` v0.3.4, returns distorted audio without an error for some common files (22.05 kHz at 32 kbps or less, as podcasts and audiobooks use), which would make a wrong transcript look right. `goscriber transcribe` reads FLAC too.
+- **Long files.** `Coordinator.Transcribe` decodes audio of any length the way dictation decodes a recording live ([live transcription](#live-transcription)): through a stream for a streaming model (Nemotron), and in chunks of 3 to 25 s cut at pauses for an offline one (Parakeet), whatever `long_form_chunking` says. The issue proposed a single pass for Parakeet up to its 24 minutes, but NeMo-Speech.cpp splits anything past 6 min 40 s anyway, and long inputs decoded at once can come back with whole stretches missing ([long audio](models/parakeet-tdt-0.6b-v2.md#long-audio)), while chunks of that size have never failed. The custom words and the cleanup stage apply as to a dictation.
+- **Sharing the engine.** The decode runs on the coordinator's engine goroutine one 10 s slice at a time, each handed to the decoder a second at a time, and progress is reported after each slice. A dictation started meanwhile queues its own work behind at most one slice, so it is not held up by a long file, and the file resumes once the dictation's decode is done (reloading its model if the dictation used another; a stream that breaks then falls back to decoding the file whole). The model is held loaded from the first slice to the end. Cancelling stops between pushes, closes the stream and leaves nothing in the history.
+
+**Measured** (`TestTranscribeTenMinuteFile` in `internal/engine/nemo`, M4 Max, Metal, in process): a 10 min 4 s WAV, the JFK fixture 53 times over, read back from disk and transcribed word for word by both models, with 61 progress reports. Parakeet TDT 0.6B v2 took 5.4 s in chunks; Nemotron Streaming 3.5 took 22.3 s through its stream, which decodes 320 ms at a time.
+
 ### Live transcription
 
 From the moment recording starts, the coordinator hands the recorder's 10 ms frames (`Recorder.Frames`) to a pump on the engine goroutine, queued behind the model load, so audio that arrives while the model loads waits in the recorder and nothing is lost. What the pump does depends on the model the load reported (`internal/pipeline/live.go`):
@@ -417,6 +457,7 @@ The output then waits `paste_delay_ms` (60 ms) before pressing the paste key.
 - **Fyne main thread**: all widgets, tray, overlay. Other goroutines update the UI only through `fyne.Do` / `fyne.DoAndWait`.
 - **Audio callback (miniaudio thread)**: copies frames into a ring buffer and returns; never blocks or calls into the engine.
 - **Hotkey goroutine**: owns the shortcut registrations and turns key-down / key-up events into coordinator actions, which it hands straight to the coordinator: its actions never block.
+- **Control socket goroutine**: accepts the [command line's](#single-instance-and-remote-control) connections and answers each on a goroutine of its own, handing the command to the coordinator (or the window to the main thread) without waiting; a signal goroutine does the same for SIGUSR2.
 - **Coordinator goroutine**: runs the actions in order (opening the microphone, stopping it, refusing what does not fit the state) and owns the session's state with a mutex.
 - **Engine goroutine**: one goroutine owns the engine client and serialises load, acquire and recognition, background loads included. While recording it pumps the recorder's frames into the live decode (`Push` / `Next`, or `Recognize` per chunk); on `Stop` it finishes the decode.
 - **Engine worker process**: runs NeMo-Speech.cpp. In the app, the supervisor has a goroutine per worker reading its responses, one re-logging its stderr and one sending heartbeats; calls wait for their response on the caller's goroutine.
@@ -431,3 +472,4 @@ Goroutines talk through channels and the coordinator; nothing outside the main t
 - **Models**: `os.UserCacheDir()/goscriber/models/` (GGUF files under their Hugging Face names, `*.part` while downloading, and `verified.json`, which remembers the files already hashed). Files already in the Hugging Face cache (`HF_HUB_CACHE`, `HF_HOME`, default `~/.cache/huggingface/hub`) are used from there.
 - **History**: `os.UserConfigDir()/goscriber/history.sqlite3` and `…/recordings/*.wav`
 - **Logs**: `os.UserCacheDir()/goscriber/logs/goscriber.log`
+- **Single instance**: `os.UserConfigDir()/goscriber/goscriber.lock` and `…/goscriber.sock` (the [control socket](#single-instance-and-remote-control))

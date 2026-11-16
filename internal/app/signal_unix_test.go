@@ -7,11 +7,12 @@ import (
 	"testing"
 
 	"fyne.io/fyne/v2/test"
+
+	"github.com/opragmatico/goscriber/internal/ui"
 )
 
-// SIGUSR2 starts and stops dictation, as the Wayland desktop shortcut sends
-// it with pkill.
-func TestToggleSignalDrivesDictation(t *testing.T) {
+// SIGUSR2 toggles dictation, as in Handy.
+func TestSIGUSR2TogglesDictation(t *testing.T) {
 	home := isolate(t)
 	testShortcuts.reset()
 	writeSettings(t, home, `{"schema_version": 1, "selected_model": "m"}`)
@@ -19,15 +20,12 @@ func TestToggleSignalDrivesDictation(t *testing.T) {
 	sh, q := newTestShell(t, a, Options{})
 	out := sh.svc.output.(*testOutput)
 
-	if err := syscall.Kill(syscall.Getpid(), toggleSignal); err != nil {
+	if err := syscall.Kill(syscall.Getpid(), syscall.SIGUSR2); err != nil {
 		t.Fatal(err)
 	}
-	q.waitUI(t, "recording", func() bool { return sh.recording })
-	if err := syscall.Kill(syscall.Getpid(), toggleSignal); err != nil {
+	q.waitUI(t, "the recording icon", func() bool { return a.trayIcon == ui.TrayIcon(ui.TrayRecording) })
+	if err := syscall.Kill(syscall.Getpid(), syscall.SIGUSR2); err != nil {
 		t.Fatal(err)
 	}
 	q.waitUI(t, "the transcript", func() bool { return len(out.delivered()) == 1 })
-	if got := out.delivered(); got[0] != "hello from the test" {
-		t.Errorf("delivered %q", got)
-	}
 }

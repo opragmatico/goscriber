@@ -31,6 +31,7 @@ var software = []attribution{
 	{"Fyne", "https://fyne.io", "BSD-3-Clause", "The windows, tray and overlay."},
 	{"malgo and miniaudio", "https://github.com/gen2brain/malgo", "Public domain (Unlicense)", "Audio capture and the sounds."},
 	{"golang.design/x/hotkey", "https://github.com/golang-design/hotkey", "MIT", "Global shortcuts."},
+	{"mewkiz/flac", "https://github.com/mewkiz/flac", "Public domain (Unlicense)", "Reading FLAC files to transcribe."},
 }
 
 func (w *SettingsWindow) aboutPage() fyne.CanvasObject {

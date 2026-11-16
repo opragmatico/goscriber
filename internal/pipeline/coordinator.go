@@ -679,17 +679,17 @@ func (c *Coordinator) prepare(s *session) {
 	if s.ctx.Err() != nil {
 		return
 	}
-	if c.loaded == nil || *c.loaded != s.model.Spec {
-		start := time.Now()
-		err := c.loadModel(s.ctx, s.id, s.model)
+	start := time.Now()
+	loaded, err := c.ensureLoaded(s.ctx, s.id, s.model)
+	if loaded {
 		s.timings.load = time.Since(start)
-		if err != nil {
-			if s.ctx.Err() == nil {
-				s.prepErr = &loadError{err: err}
-			}
-			return
-		}
 		c.stageDone(s, "load", s.timings.load)
+	}
+	if err != nil {
+		if s.ctx.Err() == nil {
+			s.prepErr = &loadError{err: err}
+		}
+		return
 	}
 	if a, ok := c.eng.(Acquirer); ok {
 		release, err := a.Acquire(s.ctx)
@@ -701,6 +701,19 @@ func (c *Coordinator) prepare(s *session) {
 		}
 		s.hold(release)
 	}
+}
+
+// ensureLoaded loads m into the engine unless it holds it already, for
+// session id (0 outside a dictation), and reports whether it loaded it. It
+// runs on the engine goroutine.
+func (c *Coordinator) ensureLoaded(ctx context.Context, id uint64, m Model) (loaded bool, err error) {
+	if c.loaded != nil && *c.loaded == m.Spec {
+		return false, nil
+	}
+	if err := c.loadModel(ctx, id, m); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // pump decodes the recording while it goes on: it feeds the audio to a live

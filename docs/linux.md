@@ -73,7 +73,7 @@ KDE Plasma, Sway and Hyprland support wtype, which needs no setup: `sudo apt ins
 
 `SIGUSR2` works in every session, with or without the portal. Without the portal Goscriber also registers its shortcut with XWayland. It is heard while an X11 window has the focus, and on KDE Plasma in every app when System Settings → Applications → Legacy X11 App Support lets X11 apps read keys typed with modifiers. A desktop shortcut on the same keys takes precedence, so the two never both fire.
 
-`SIGUSR2` reaches every process named `goscriber`: the engine workers, `goscriber transcribe` and the other subcommands ignore it, so only the app reacts. `goscriber --toggle-transcription`, which tells the running app over its control socket, comes with the single-instance work in [#33](https://github.com/opragmatico/goscriber/issues/33); the signal works without it.
+`SIGUSR2` reaches every process named `goscriber`: the engine workers, `goscriber transcribe` and the other subcommands ignore it, so only the app reacts. `goscriber --toggle-transcription` does the same through the running app's control socket, and `goscriber --cancel` discards the recording: either can be the desktop shortcut's command where `goscriber` is on the `PATH`, as the .deb puts it.
 
 ### The GlobalShortcuts portal
 

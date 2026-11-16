@@ -47,7 +47,7 @@ Names and jargon listed in the `custom_words` setting come out spelled your way:
 
 Filler words ("um", "uh") are removed, with the punctuation around them, and the `filler_word_removal` and `custom_filler_words` settings turn that off or change the list ([details](docs/architecture.md#text-cleanup)).
 
-Following Handy, Goscriber also plans transcription history, an external transcription hook and optional LLM post-processing.
+Following Handy, Goscriber keeps a history of past dictations with their recordings (copy, paste again, play, transcribe again), transcribes WAV and FLAC files dropped on its History page, however long, and plans an external transcription hook and optional LLM post-processing.
 
 ## Stack
 
@@ -61,6 +61,7 @@ Following Handy, Goscriber also plans transcription history, an external transcr
 | Clipboard and paste | `NSPasteboard` and Core Graphics key events through CGo on macOS (needs the Accessibility permission); X11 selections and XTEST key events through CGo on Linux, or wtype, dotool or ydotool on Wayland |
 | Settings | JSON under `os.UserConfigDir()` |
 | History | SQLite via [`modernc.org/sqlite`](https://pkg.go.dev/modernc.org/sqlite) (pure Go) |
+| Audio files | WAV by our own reader, FLAC via [`mewkiz/flac`](https://github.com/mewkiz/flac) (pure Go) |
 | Logging | `log/slog` |
 
 See [docs/architecture.md](docs/architecture.md) for the package layout, the CGo engine design, the dictation pipeline and the threading model.
@@ -93,6 +94,7 @@ make deps                 # download Go modules and build the NeMo-Speech.cpp SD
 make build                # build ./goscriber, with the engine once make deps has run
 make run ARGS=--version   # build ./goscriber and run it
 make run ARGS=--debug     # run the app with debug logging and the tray's Debug menu
+./goscriber --toggle-transcription  # start or stop dictation in the running app (also --cancel)
 make app                  # macOS: assemble dist/Goscriber.app (ad-hoc signed development bundle)
 make dist-linux           # Linux: a tarball and a .deb with the engine's libraries (docs/linux.md)
 make test                 # go test -race ./..., then the CGo-free check

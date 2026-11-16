@@ -2,5 +2,8 @@
 
 package app
 
-// listenToggleSignal does nothing: Windows has no SIGUSR2.
-func (sh *shell) listenToggleSignal() {}
+import "os"
+
+// toggleSignals toggle dictation when sent to the app; this system has no
+// SIGUSR2.
+var toggleSignals []os.Signal
