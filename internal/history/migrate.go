@@ -23,6 +23,9 @@ var migrations = []string{
 		recording   TEXT    NOT NULL DEFAULT ''
 	);
 	CREATE INDEX entries_at ON entries (at);`,
+	// 2: the name of the audio file an entry was transcribed from, or ''
+	// for a dictation.
+	`ALTER TABLE entries ADD COLUMN source TEXT NOT NULL DEFAULT '';`,
 }
 
 // migrate brings db's schema, versioned by SQLite's user_version, up to

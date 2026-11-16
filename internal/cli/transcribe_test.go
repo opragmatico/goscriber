@@ -108,7 +108,7 @@ func TestTranscribeManyFiles(t *testing.T) {
 	if want := fixture + ": one\n" + fixture + ": two\n"; stdout != want {
 		t.Errorf("stdout %q, want %q", stdout, want)
 	}
-	if !strings.Contains(stderr, bad) || !strings.Contains(stderr, "not a supported WAV file") {
+	if !strings.Contains(stderr, bad) || !strings.Contains(stderr, "not a WAV or FLAC file") {
 		t.Errorf("stderr %q", stderr)
 	}
 	if len(s.eng.Loads()) != 1 {

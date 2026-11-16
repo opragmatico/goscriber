@@ -47,7 +47,7 @@ Names and jargon listed in the `custom_words` setting come out spelled your way:
 
 Filler words ("um", "uh") are removed, with the punctuation around them, and the `filler_word_removal` and `custom_filler_words` settings turn that off or change the list ([details](docs/architecture.md#text-cleanup)).
 
-Following Handy, Goscriber keeps a history of past dictations with their recordings (copy, paste again, play, transcribe again), and plans an external transcription hook and optional LLM post-processing.
+Following Handy, Goscriber keeps a history of past dictations with their recordings (copy, paste again, play, transcribe again), transcribes WAV and FLAC files dropped on its History page, however long, and plans an external transcription hook and optional LLM post-processing.
 
 ## Stack
 
@@ -61,6 +61,7 @@ Following Handy, Goscriber keeps a history of past dictations with their recordi
 | Clipboard and paste | `NSPasteboard` and Core Graphics key events through CGo on macOS (needs the Accessibility permission) |
 | Settings | JSON under `os.UserConfigDir()` |
 | History | SQLite via [`modernc.org/sqlite`](https://pkg.go.dev/modernc.org/sqlite) (pure Go) |
+| Audio files | WAV by our own reader, FLAC via [`mewkiz/flac`](https://github.com/mewkiz/flac) (pure Go) |
 | Logging | `log/slog` |
 
 See [docs/architecture.md](docs/architecture.md) for the package layout, the CGo engine design, the dictation pipeline and the threading model.

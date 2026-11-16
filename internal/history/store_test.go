@@ -364,3 +364,38 @@ func TestMigrations(t *testing.T) {
 		t.Errorf("Open of a newer database: %v", err)
 	}
 }
+
+// A history from before entries recorded their source file (schema 1)
+// opens as it was, its dictations with no source, and takes entries
+// transcribed from files.
+func TestSourceColumnMigration(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "history.sqlite3")
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := migrate(ctx, db, migrations[:1]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO entries (at, text, raw_text, model, duration_ms) VALUES (1, 'old dictation', 'old dictation', 'm', 1000)`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	s := reopen(t, path, filepath.Join(dir, "recordings"), keepAll)
+	entries, err := s.List(ctx, 0)
+	if err != nil || len(entries) != 1 || entries[0].Text != "old dictation" || entries[0].Source != "" {
+		t.Fatalf("the old dictation after migrating: %+v, %v", entries, err)
+	}
+	rec := record(2)
+	rec.Source = "interview.flac"
+	added, err := s.Add(ctx, rec)
+	if err != nil || added.Source != "interview.flac" {
+		t.Fatalf("Add: %+v, %v", added, err)
+	}
+	got, err := s.Get(ctx, added.ID)
+	if err != nil || got.Source != "interview.flac" {
+		t.Errorf("Get: %+v, %v", got, err)
+	}
+}

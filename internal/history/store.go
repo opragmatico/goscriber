@@ -45,6 +45,9 @@ type Entry struct {
 	// Recording is the WAV file's path, or "" when its recording is not
 	// kept.
 	Recording string
+	// Source is the name of the audio file it was transcribed from, or ""
+	// for a dictation.
+	Source string
 }
 
 // Record is a finished dictation to add.
@@ -59,6 +62,9 @@ type Record struct {
 	// recording.
 	Samples    []float32
 	SampleRate int
+	// Source is the name of the audio file it was transcribed from, or ""
+	// for a dictation.
+	Source string
 }
 
 // Retention says what a Store keeps, from the history_limit and
@@ -165,7 +171,7 @@ func (s *Store) Add(ctx context.Context, rec Record) (Entry, error) {
 	}
 	e := Entry{
 		At: rec.At, Text: rec.Text, RawText: rec.RawText, Model: rec.Model,
-		Language: rec.Language, Duration: rec.Duration,
+		Language: rec.Language, Duration: rec.Duration, Source: rec.Source,
 	}
 	file := ""
 	if _, keep := s.retention.maxAge(); keep && len(rec.Samples) > 0 && rec.SampleRate > 0 {
@@ -175,8 +181,8 @@ func (s *Store) Add(ctx context.Context, rec Record) (Entry, error) {
 		}
 	}
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO entries (at, text, raw_text, model, language, duration_ms, recording) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		e.At.UnixMilli(), e.Text, e.RawText, e.Model, e.Language, e.Duration.Milliseconds(), file)
+		`INSERT INTO entries (at, text, raw_text, model, language, duration_ms, recording, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		e.At.UnixMilli(), e.Text, e.RawText, e.Model, e.Language, e.Duration.Milliseconds(), file, e.Source)
 	if err != nil {
 		s.removeRecording(file)
 		return Entry{}, fmt.Errorf("history: add: %w", err)
@@ -393,7 +399,7 @@ func (s *Store) recordingPath(name string) string {
 	return filepath.Join(s.dir, filepath.Base(name))
 }
 
-const columns = `id, at, text, raw_text, model, language, duration_ms, recording`
+const columns = `id, at, text, raw_text, model, language, duration_ms, recording, source`
 
 func (s *Store) scan(row interface{ Scan(...any) error }) (Entry, error) {
 	var (
@@ -401,7 +407,7 @@ func (s *Store) scan(row interface{ Scan(...any) error }) (Entry, error) {
 		at, dur  int64
 		filename string
 	)
-	if err := row.Scan(&e.ID, &at, &e.Text, &e.RawText, &e.Model, &e.Language, &dur, &filename); err != nil {
+	if err := row.Scan(&e.ID, &at, &e.Text, &e.RawText, &e.Model, &e.Language, &dur, &filename, &e.Source); err != nil {
 		return Entry{}, err
 	}
 	e.At = time.UnixMilli(at)
