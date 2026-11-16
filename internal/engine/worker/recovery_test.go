@@ -46,7 +46,10 @@ func TestDictationSurvivesAWorkerKilledMidStream(t *testing.T) {
 	c.Start()
 	ev.wait(t, "the first interim", func(e pipeline.Event) bool { return e.Kind == pipeline.EventInterim })
 	killed := h.kill(t)
-	time.Sleep(150 * time.Millisecond) // the recording goes on after the crash
+	// The recording goes on after the crash, well past the shortest one the
+	// speech gate passes (min_recording_ms, 250 ms by default): one it
+	// drops ends without a result.
+	rec.waitRecorded(t, max(rec.recorded()+150*time.Millisecond, 500*time.Millisecond))
 	c.Stop()
 	res := ev.wait(t, "the first result", func(e pipeline.Event) bool { return e.Kind == pipeline.EventResult })
 	if res.Text != wholeText {
@@ -58,7 +61,7 @@ func TestDictationSurvivesAWorkerKilledMidStream(t *testing.T) {
 	// The next dictation streams in the new worker.
 	c.Start()
 	ev.wait(t, "the second interim", func(e pipeline.Event) bool { return e.Kind == pipeline.EventInterim })
-	time.Sleep(600 * time.Millisecond) // every word of the dictation
+	rec.waitRecorded(t, 600*time.Millisecond) // every word of the dictation, at 100 ms a word
 	c.Stop()
 	res = ev.wait(t, "the second result", func(e pipeline.Event) bool { return e.Kind == pipeline.EventResult })
 	if res.Text != streamText {
@@ -82,7 +85,9 @@ func (staticModel) Resolve(config.Settings) (pipeline.Model, error) {
 }
 
 // liveRecorder records a loud tone in real time: 10 ms frames every 10 ms
-// from Start to Stop.
+// from Start to Stop. A busy machine misses ticks, so the audio can fall
+// short of the time spent recording: wait for it with waitRecorded, not
+// with a sleep.
 type liveRecorder struct {
 	levels chan audio.Level
 
@@ -135,6 +140,26 @@ func (r *liveRecorder) Stop() []float32 {
 }
 
 func (r *liveRecorder) SampleRate() int { return 16000 }
+
+// recorded is how much audio the current recording holds.
+func (r *liveRecorder) recorded() time.Duration {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return time.Duration(len(r.samples)) * time.Second / time.Duration(r.SampleRate())
+}
+
+// waitRecorded waits until the current recording holds at least d of
+// audio.
+func (r *liveRecorder) waitRecorded(t *testing.T, d time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for r.recorded() < d {
+		if time.Now().After(deadline) {
+			t.Fatalf("the recording holds %v of audio, want %v", r.recorded(), d)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
 
 func (r *liveRecorder) Frames() <-chan []float32 {
 	r.mu.Lock()
