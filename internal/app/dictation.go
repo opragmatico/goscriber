@@ -10,6 +10,7 @@ import (
 	"github.com/opragmatico/goscriber/internal/config"
 	"github.com/opragmatico/goscriber/internal/engine"
 	"github.com/opragmatico/goscriber/internal/engine/autounload"
+	"github.com/opragmatico/goscriber/internal/engine/warmup"
 	"github.com/opragmatico/goscriber/internal/engine/worker"
 	"github.com/opragmatico/goscriber/internal/models"
 	"github.com/opragmatico/goscriber/internal/notice"
@@ -55,7 +56,10 @@ var newServices = systemServices
 
 // systemServices are the real microphone, engine, clipboard and keyboard.
 // Without a speech engine in this build, dictation records but every
-// transcription fails with a notice that says so.
+// transcription fails with a notice that says so. The engine warms each model
+// up as it loads, including the reloads after an idle unload, on as long a
+// clip as dictation hands it at once, so no dictation pays for a cold first
+// decode.
 func systemServices(rt *Runtime, opts Options, notices *notice.Hub) services {
 	s := rt.Settings.Get()
 	rec := audio.NewRecorder(audio.Options{
@@ -66,7 +70,9 @@ func systemServices(rt *Runtime, opts Options, notices *notice.Hub) services {
 	files := models.NewManager(rt.Paths.ModelsDir(), models.Options{HFCache: models.HFCacheDir(os.Getenv)})
 	return services{
 		recorder: rec,
-		engine:   autounload.New(speechEngine(rt, opts, s, notices), s.ModelUnloadTimeout.Duration(), rt.Log.Logger),
+		engine: autounload.New(
+			warmup.New(speechEngine(rt, opts, s, notices), warmup.Options{Longest: pipeline.LongestChunk, Log: rt.Log.Logger}),
+			s.ModelUnloadTimeout.Duration(), rt.Log.Logger),
 		output:   output.New(platform.GeneralPasteboard(), platform.Keyboard{Settings: rt.Settings.Get, Log: rt.Log.Logger}, rt.Log.Logger),
 		models:   pipeline.CatalogModels{Manager: files},
 		files:    files,
@@ -91,8 +97,9 @@ func speechEngine(rt *Runtime, opts Options, s config.Settings, notices *notice.
 	}
 }
 
-// startDictation creates the coordinator and the overlay and follows the
-// coordinator's state. It runs from start, on the main goroutine.
+// startDictation creates the coordinator and the overlay, follows the
+// coordinator's state and, with preload_model, starts loading the selected
+// model. It runs from start, on the main goroutine.
 func (sh *shell) startDictation() {
 	s := sh.rt.Settings.Get()
 	sh.overlay = ui.NewOverlay(sh.app, ui.OverlayOptions{
@@ -138,6 +145,7 @@ func (sh *shell) startDictation() {
 		}
 	})
 	sh.following.Go(sh.tickOverlay)
+	sh.dictation.SyncModel()
 }
 
 // overlayTick is how often the overlay's clock and, on macOS, its
@@ -186,8 +194,8 @@ func (sh *shell) dictate(a pipeline.Action) {
 }
 
 // dictationEvent follows the coordinator, on the main thread: the tray icon
-// shows the state, and the shortcuts learn whether a recording is in
-// progress, so Escape is only taken while it is.
+// shows the state and the menu a model loading, and the shortcuts learn
+// whether a recording is in progress, so Escape is only taken while it is.
 func (sh *shell) dictationEvent(ev pipeline.Event) {
 	switch ev.Kind {
 	case pipeline.EventState:
@@ -207,6 +215,14 @@ func (sh *shell) dictationEvent(ev pipeline.Event) {
 		// The shortcut assumed its press would start or stop a recording;
 		// tell it what happened instead.
 		sh.syncRecording(ev.State == pipeline.StateRecording, true)
+	case pipeline.EventModel:
+		if sh.tray != nil {
+			loading := ""
+			if ev.Load == pipeline.ModelLoading {
+				loading = ev.Model
+			}
+			sh.tray.SetLoading(loading)
+		}
 	}
 }
 
@@ -232,7 +248,8 @@ func (sh *shell) syncRecording(on, force bool) {
 }
 
 // applyDictationSettings passes settings changes on to the services and
-// the overlay.
+// the overlay, and has the coordinator load another model in the background
+// when the change selects one.
 func (sh *shell) applyDictationSettings(s config.Settings) {
 	sh.overlay.SetStyle(s.OverlayStyle, s.OverlayPosition)
 	sh.svc.recorder.SetDevice(s.Microphone)
@@ -241,6 +258,9 @@ func (sh *shell) applyDictationSettings(s config.Settings) {
 	}
 	if e, ok := sh.svc.engine.(interface{ SetTimeout(time.Duration) }); ok {
 		e.SetTimeout(s.ModelUnloadTimeout.Duration())
+	}
+	if sh.dictation != nil {
+		sh.dictation.SyncModel()
 	}
 }
 

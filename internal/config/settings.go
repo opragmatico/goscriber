@@ -200,12 +200,17 @@ type Settings struct {
 	HoldThresholdMS    int            `json:"hold_threshold_ms"`
 
 	// Model. SelectedModel is empty until the user downloads a model and
-	// picks it: Goscriber never ships or selects one on its own.
+	// picks it: Goscriber never ships or selects one on its own. With
+	// PreloadModel the selected model loads at launch, and again in the
+	// background when another is selected; without it the first dictation
+	// loads it. An unload timeout of 0 turns preloading off, since the
+	// model would unload as soon as it was loaded.
 	SelectedModel      string        `json:"selected_model"`
 	ModelQuant         string        `json:"model_quant"`
 	Language           string        `json:"language"`
 	Accelerator        Accelerator   `json:"accelerator"`
 	ModelUnloadTimeout UnloadTimeout `json:"model_unload_timeout"` // the next dictation reloads an unloaded model
+	PreloadModel       bool          `json:"preload_model"`
 
 	// Live transcription. A streaming model (Nemotron) always decodes while
 	// the user speaks, looking ahead as far as StreamingLatency says. With
@@ -305,6 +310,7 @@ func defaultsFor(goos string) Settings {
 		Language:            "auto",
 		Accelerator:         AcceleratorAuto,
 		ModelUnloadTimeout:  30,
+		PreloadModel:        true,
 		StreamingLatency:    LatencyBalanced,
 		LongFormChunking:    true,
 		VADEnabled:          true,

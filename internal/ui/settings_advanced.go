@@ -89,6 +89,9 @@ func (w *SettingsWindow) advancedPage() fyne.CanvasObject {
 			w.row("Unload the model", "Frees its memory once dictation has been idle this long. The next dictation loads it again.",
 				choiceSetting(w, "model_unload_timeout", func(s *config.Settings) *config.UnloadTimeout { return &s.ModelUnloadTimeout },
 					unloadChoices, formatUnload)),
+			w.row("Load the model at launch", "So the first dictation does not wait for it; a model you switch to loads in the background too. "+
+				"Off, the first dictation loads it. Nothing loads early while the model unloads as soon as it is idle.",
+				boolSetting(w, "preload_model", func(s *config.Settings) *bool { return &s.PreloadModel })),
 		),
 		group("Output", output...),
 		group("Transcription",

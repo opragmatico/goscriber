@@ -49,8 +49,8 @@ func TestDefaultsAreValidAndSelectNoModel(t *testing.T) {
 	if d.ActivationMode != ActivationHoldOrToggle || d.HistoryLimit != 5 {
 		t.Errorf("defaults drifted from Handy's: %+v", d)
 	}
-	if d.ModelUnloadTimeout != 30 {
-		t.Errorf("ModelUnloadTimeout = %d, want 30 seconds", d.ModelUnloadTimeout)
+	if d.ModelUnloadTimeout != 30 || !d.PreloadModel {
+		t.Errorf("ModelUnloadTimeout = %d, PreloadModel %v; want 30 seconds, loading the model at launch", d.ModelUnloadTimeout, d.PreloadModel)
 	}
 	if d.StreamingLatency != LatencyBalanced || !d.LongFormChunking {
 		t.Errorf("live transcription defaults: latency %q, chunking %v", d.StreamingLatency, d.LongFormChunking)

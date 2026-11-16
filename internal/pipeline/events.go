@@ -28,7 +28,33 @@ const (
 	// EventResult: Text is the transcript that was delivered to the
 	// focused app.
 	EventResult
+	// EventModel: the engine started or finished loading Model, as Load
+	// says: in the background (Session 0) or for a recording's session.
+	EventModel
 )
+
+// ModelLoad is how a model load stands, for EventModel.
+type ModelLoad int
+
+// Model load states.
+const (
+	ModelLoading ModelLoad = iota + 1 // the load has started
+	ModelReady                        // the model is loaded and warmed up
+	ModelFailed                       // the load failed or was cancelled; no model is loaded
+)
+
+func (l ModelLoad) String() string {
+	switch l {
+	case ModelLoading:
+		return "loading"
+	case ModelReady:
+		return "ready"
+	case ModelFailed:
+		return "failed"
+	default:
+		return "none"
+	}
+}
 
 func (k EventKind) String() string {
 	switch k {
@@ -42,6 +68,8 @@ func (k EventKind) String() string {
 		return "interim"
 	case EventResult:
 		return "result"
+	case EventModel:
+		return "model"
 	default:
 		return "unknown"
 	}
@@ -68,6 +96,10 @@ type Event struct {
 	// Languages are the languages the model detected in the recording, for
 	// EventResult; empty when it reports none.
 	Languages []string
+	// Model is the display name of the model, and Load how its load
+	// stands, for EventModel.
+	Model string
+	Load  ModelLoad
 }
 
 // subscriber is an unbounded queue in front of a channel, so publishing never
