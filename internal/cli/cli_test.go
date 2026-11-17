@@ -32,7 +32,7 @@ func TestHelp(t *testing.T) {
 			t.Errorf("%s: exit code %d, want 0", flag, code)
 		}
 		if !strings.Contains(stdout, "Usage:") || !strings.Contains(stdout, "--version") || !strings.Contains(stdout, "models pull") ||
-			!strings.Contains(stdout, "--start-hidden") || !strings.Contains(stdout, "--no-tray") {
+			!strings.Contains(stdout, "--start-hidden") || !strings.Contains(stdout, "--no-tray") || !strings.Contains(stdout, "--at-login") {
 			t.Errorf("%s: usage not printed to stdout: %q", flag, stdout)
 		}
 		if stderr != "" {
@@ -91,6 +91,7 @@ func TestRunsAppWithFlags(t *testing.T) {
 		{nil, AppOptions{}},
 		{[]string{"--debug"}, AppOptions{Debug: true}},
 		{[]string{"--start-hidden"}, AppOptions{StartHidden: true}},
+		{[]string{"--at-login"}, AppOptions{AtLogin: true}},
 		{[]string{"--no-tray"}, AppOptions{NoTray: true}},
 		{[]string{"--no-tray", "--start-hidden", "--debug"}, AppOptions{Debug: true, StartHidden: true, NoTray: true}},
 		{[]string{"--engine-in-process"}, AppOptions{EngineInProcess: true}},

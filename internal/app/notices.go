@@ -90,6 +90,8 @@ func (sh *shell) noticeAction(id notice.ActionID) {
 		sh.openURL(platform.PermAccessibility.SettingsURL())
 	case notice.ActionOpenMicrophone:
 		sh.openURL(platform.PermMicrophone.SettingsURL())
+	case notice.ActionOpenLoginItems:
+		sh.openURL(platform.LoginItemsSettingsURL)
 	default:
 		sh.settings.Show(ui.PageGeneral)
 	}

@@ -71,6 +71,10 @@ type SettingsInfo struct {
 	// TypingTools are the typing tools installed, which the typing tool
 	// setting names.
 	TypingTools []config.TypingTool
+	// LoginItemUnavailable says why Goscriber cannot launch at login, such
+	// as from a bare executable on macOS; the setting is then disabled. ""
+	// means it can.
+	LoginItemUnavailable string
 }
 
 func (i SettingsInfo) os() string {

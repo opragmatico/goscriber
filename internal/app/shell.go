@@ -51,6 +51,7 @@ const ID = "io.github.opragmatico.goscriber"
 // item or on SIGINT / SIGTERM, which Fyne turns into a quit. The runtime is
 // closed on the way out.
 func Run(opts Options) error {
+	platform.WatchLaunch() // before Fyne starts AppKit
 	return run(opts, func() fyne.App { return fyneapp.NewWithID(ID) })
 }
 
@@ -73,7 +74,7 @@ func run(opts Options, newApp func() fyne.App) error {
 type launch struct {
 	Tray   bool // install the tray icon and menu
 	Window bool // open the settings window at launch
-	Hidden bool // start_hidden or --start-hidden asked for no window at launch
+	Hidden bool // start_hidden, --start-hidden or a launch at login asked for no window at launch
 	// Onboarding opens the window on onboarding, where the user left it,
 	// in place of the settings pages.
 	Onboarding bool
@@ -85,11 +86,13 @@ type launch struct {
 // to hide yet). Without one the settings window is the only way in, so it
 // opens even when starting hidden, and macOS keeps the Dock icon.
 //
+// A launch at login starts hidden, as --start-hidden does.
+//
 // Onboarding that is not finished opens at launch, unless the app starts
 // hidden with a tray: the tray's "No model: Download…" leads back to it.
 func planLaunch(s config.Settings, opts Options, traySupported, onboarding bool) launch {
 	tray := traySupported && s.ShowTrayIcon && !opts.NoTray
-	hidden := s.StartHidden || opts.StartHidden
+	hidden := s.StartHidden || opts.StartHidden || opts.AtLogin
 	return launch{
 		Tray:       tray,
 		Window:     !tray,
@@ -237,11 +240,13 @@ func (sh *shell) start() {
 	// the follower to finish.
 	sh.app.Lifecycle().SetOnStopped(sh.stopFollowing)
 	sh.follow()
+	sh.startLoginItem()
 
 	sh.rt.Log.Info("app shell ready",
 		"tray", sh.plan.Tray,
 		"window_at_launch", sh.plan.Window,
 		"start_hidden", sh.plan.Hidden,
+		"at_login", sh.opts.AtLogin,
 		"onboarding", sh.plan.Onboarding,
 		"model", model,
 		"shortcut", s.TranscribeShortcut,
@@ -251,6 +256,7 @@ func (sh *shell) start() {
 // started runs on the main thread once Fyne is up. Onboarding asks for the
 // permissions on its own step, so the launch leaves them to it.
 func (sh *shell) started() {
+	sh.noteLaunchedAtLogin()
 	platform.SetDockIcon(!sh.plan.Tray)
 	switch {
 	case sh.plan.Onboarding:
@@ -334,6 +340,8 @@ func (sh *shell) newSettingsWindow() *ui.SettingsWindow {
 			LogsDir:       sh.rt.Paths.LogsDir(),
 			Session:       sh.session,
 			TypingTools:   tools,
+			// The login item's support does not change while the app runs.
+			LoginItemUnavailable: loginItemUnavailable(),
 		},
 		Store: sh.rt.Settings,
 		// The language-independent fillers and English's: the list most

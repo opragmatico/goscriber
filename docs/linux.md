@@ -131,6 +131,12 @@ A GPU driver that crashes the engine worker moves later loads to the CPU, as on 
 - **Overlay**: off by default (`overlay_style: none`), as in Handy: on several desktops a new window takes the keyboard focus, so the paste would land in the overlay. Turned on, it is centred on the screen. Audio feedback (`audio_feedback`) is the alternative for knowing when recording starts.
 - **Tray**: Fyne's tray is a StatusNotifierItem over D-Bus, which KDE Plasma, Xfce, Cinnamon and wlroots bars show. GNOME needs the AppIndicator extension, which Ubuntu installs and turns on; on other GNOME systems install `gnome-shell-extension-appindicator`. Without a tray, the settings window opens at launch and closing it quits. The idle and transcribing icons are light grey with a dark outline, which shows on GNOME's dark top bar and on light panels alike.
 
+## Launch at login
+
+Settings → Advanced → Launch at login writes `~/.config/autostart/io.github.opragmatico.goscriber.desktop` (under `$XDG_CONFIG_HOME` when it is set), which GNOME, KDE Plasma, Xfce, Cinnamon, MATE, LXQt and other desktops following the XDG Autostart specification start at login. It runs the executable Goscriber was started from, the .deb's `/opt/goscriber/bin/goscriber` or wherever the tarball is unpacked, with `--at-login`, which starts it hidden in the tray and does nothing if Goscriber is already running. Each launch writes it again if the executable has moved, so after moving the tarball start Goscriber once from its new place.
+
+Turning it off in the desktop's own startup applications (GNOME Tweaks, Xfce's Session and Startup) turns the setting off at Goscriber's next launch. Sway and Hyprland do not read the autostart directory themselves: start Goscriber from their configuration instead (`exec goscriber --at-login` in Sway's, `exec-once = goscriber --at-login` in Hyprland's), or through a tool such as `dex`.
+
 ## Packages
 
 Decision: a **tarball** and a **`.deb`**, not an AppImage. The tarball runs anywhere with a recent glibc; the `.deb` covers Ubuntu and Debian, installs the desktop entry and icon, and lets apt pull in the libraries the binary links (OpenGL, X11, XTEST, libgomp and, in a Vulkan build, libvulkan), which `dpkg-shlibdeps` reads from the binaries. An AppImage needs FUSE 2, which Ubuntu 24.04 no longer installs by default, and would carry the same files as the tarball.

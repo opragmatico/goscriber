@@ -281,7 +281,9 @@ type Settings struct {
 	RecordingRetention RecordingRetention `json:"recording_retention"`
 
 	// App. DebugMode reveals debug-only UI such as the Debug settings page;
-	// --debug turns it on for one session without saving it.
+	// --debug turns it on for one session without saving it. Autostart is
+	// the OS's login item, which opens Goscriber hidden when the user logs
+	// in; the app keeps the two in step.
 	LogLevel     LogLevel `json:"log_level"`
 	DebugMode    bool     `json:"debug_mode"`
 	StartHidden  bool     `json:"start_hidden"`

@@ -222,3 +222,29 @@ func TestDesktopShortcutsFromThePortal(t *testing.T) {
 		t.Errorf("after a refusal:\n%s", got)
 	}
 }
+
+// Launch at login is a check box that saves the setting, unless there can
+// be no login item, as from a bare executable on macOS: then it is
+// disabled, and says why.
+func TestLaunchAtLoginSetting(t *testing.T) {
+	tw := newTestWindow(t, nil)
+	tw.show(PageAdvanced)
+	c := tw.bound(t, "autostart").(*widget.Check)
+	if c.Disabled() || !strings.Contains(tw.pageText(PageAdvanced), LaunchAtLoginHint) {
+		t.Errorf("disabled %v; page %q", c.Disabled(), tw.pageText(PageAdvanced))
+	}
+	test.Tap(c)
+	if !tw.store.Get().Autostart {
+		t.Error("ticking launch at login did not save it")
+	}
+
+	bare := newTestWindow(t, func(o *SettingsOptions) {
+		o.Info.LoginItemUnavailable = "only Goscriber.app can open at login, not a bare executable"
+	})
+	bare.show(PageAdvanced)
+	c = bare.bound(t, "autostart").(*widget.Check)
+	text := bare.pageText(PageAdvanced)
+	if !c.Disabled() || !strings.Contains(text, "Only Goscriber.app can open at login, not a bare executable.") || strings.Contains(text, LaunchAtLoginHint) {
+		t.Errorf("disabled %v; page %q", c.Disabled(), text)
+	}
+}

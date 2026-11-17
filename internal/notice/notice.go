@@ -26,6 +26,7 @@ const (
 	CodeTranscriptionFailed   Code = "transcription_failed"
 	CodePasteFailed           Code = "paste_failed"
 	CodeShortcutFailed        Code = "shortcut_failed"
+	CodeLoginItemFailed       Code = "login_item_failed"
 )
 
 // Level is how bad a problem is.
@@ -58,6 +59,7 @@ const (
 	SourceEngine      Source = "engine"
 	SourceOutput      Source = "output"
 	SourceShortcut    Source = "shortcut"
+	SourceApp         Source = "app"
 )
 
 // ActionID is what a notice's button does; the UI carries it out.
@@ -75,6 +77,8 @@ const (
 	ActionOpenMicrophone ActionID = "open_microphone"
 	// ActionOpenSettings opens the settings window.
 	ActionOpenSettings ActionID = "open_settings"
+	// ActionOpenLoginItems opens the Login Items pane of System Settings.
+	ActionOpenLoginItems ActionID = "open_login_items"
 )
 
 // Action is a notice's button.
@@ -114,6 +118,7 @@ var kinds = map[Code]struct {
 	CodeTranscriptionFailed:   {"Transcription failed", LevelError, SourceEngine, false},
 	CodePasteFailed:           {"Could not paste", LevelError, SourceOutput, false},
 	CodeShortcutFailed:        {"Shortcut unavailable", LevelError, SourceShortcut, false},
+	CodeLoginItemFailed:       {"Launch at login failed", LevelWarning, SourceApp, false},
 }
 
 // Title is a short heading for the notice, for an OS notification or the
@@ -227,6 +232,25 @@ func ForShortcutError(err error, trusted bool) Notice {
 	}
 	n := New(CodeShortcutFailed, sentence(fmt.Sprintf("%v. Choose another shortcut in the settings.", err)))
 	n.Action = Action{Label: "Open Settings", ID: ActionOpenSettings}
+	return n
+}
+
+// LoginItemFailed is the notice for the launch at login setting not
+// reaching the OS: Goscriber could not be added to the apps that open at
+// login (on true), or removed from them.
+func LoginItemFailed(on bool, err error) Notice {
+	what := "add Goscriber to the apps that open when you log in"
+	if !on {
+		what = "remove Goscriber from the apps that open when you log in"
+	}
+	return New(CodeLoginItemFailed, fmt.Sprintf("Could not %s: %v.", what, err))
+}
+
+// LoginItemNeedsApproval is the notice for a macOS login item that opens
+// Goscriber only once the user allows it in System Settings.
+func LoginItemNeedsApproval() Notice {
+	n := New(CodeLoginItemFailed, "macOS opens Goscriber at login once you allow it in System Settings → General → Login Items.")
+	n.Action = Action{Label: "Open System Settings", ID: ActionOpenLoginItems}
 	return n
 }
 

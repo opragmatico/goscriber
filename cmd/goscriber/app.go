@@ -12,6 +12,7 @@ func init() {
 		return app.Run(app.Options{
 			Debug:           o.Debug,
 			StartHidden:     o.StartHidden,
+			AtLogin:         o.AtLogin,
 			NoTray:          o.NoTray,
 			Version:         o.Version,
 			NewEngine:       newEngine,
