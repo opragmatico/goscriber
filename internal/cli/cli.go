@@ -92,6 +92,7 @@ func (env Env) modelManager() (*models.Manager, error) {
 type AppOptions struct {
 	Debug       bool
 	StartHidden bool // open no window at launch, whatever the start_hidden setting says
+	AtLogin     bool // the login item started Goscriber (Linux, Windows): start hidden
 	NoTray      bool // run without the tray icon, whatever the show_tray_icon setting says
 	// EngineInProcess runs the speech engine inside the app rather than in
 	// a worker process, whatever the engine_in_process setting says.
@@ -123,6 +124,8 @@ Commands:
 Run 'goscriber COMMAND --help' for a command's flags.
 
 Flags:
+      --at-login       how the login item starts Goscriber: hidden, and not at
+                       all if one is running already
       --debug          verbose logging and debug mode for this session
       --engine-in-process
                        run the speech engine inside the app, for profiling;
@@ -173,6 +176,8 @@ func Run(args []string, env Env) int {
 	showVersion := fs.Bool("version", false, "print the version and exit")
 	debug := fs.Bool("debug", false, "verbose logging and debug mode for this session")
 	startHidden := fs.Bool("start-hidden", false, "open no window at launch")
+	// platform.AtLoginFlag, which this package cannot import.
+	atLogin := fs.Bool("at-login", false, "started by the login item")
 	noTray := fs.Bool("no-tray", false, "run without the tray icon")
 	inProcess := fs.Bool("engine-in-process", false, "run the speech engine inside the app")
 	toggle := fs.Bool(string(instance.Toggle), false, "start or stop dictation in the running app")
@@ -208,7 +213,7 @@ func Run(args []string, env Env) int {
 		fmt.Fprintln(env.Stderr, "goscriber: the desktop app is not available in this build; run 'goscriber --help'")
 		return 0
 	}
-	inst, code, done := claimInstance(env)
+	inst, code, done := claimInstance(env, *atLogin)
 	if done {
 		return code
 	}
@@ -216,6 +221,7 @@ func Run(args []string, env Env) int {
 	opts := AppOptions{
 		Debug:           *debug,
 		StartHidden:     *startHidden,
+		AtLogin:         *atLogin,
 		NoTray:          *noTray,
 		EngineInProcess: *inProcess,
 		Version:         ResolveVersion(env.Version),
@@ -275,10 +281,11 @@ func runRemote(cmd instance.Command, env Env) int {
 }
 
 // claimInstance makes this launch the only Goscriber running. When another
-// one runs, it asks that one to show its settings window, and done is true
-// with the exit code. Where the system has no single-instance support, or
-// the lock cannot be taken, the app runs anyway, without remote control.
-func claimInstance(env Env) (inst *instance.Instance, code int, done bool) {
+// one runs, it asks that one to show its settings window, unless the login
+// item started this one (atLogin), and done is true with the exit code.
+// Where the system has no single-instance support, or the lock cannot be
+// taken, the app runs anyway, without remote control.
+func claimInstance(env Env, atLogin bool) (inst *instance.Instance, code int, done bool) {
 	paths, err := config.ResolvePaths()
 	if err != nil {
 		return nil, 0, false // the app reports it when it starts
@@ -295,6 +302,8 @@ func claimInstance(env Env) (inst *instance.Instance, code int, done bool) {
 		case !errors.Is(err, instance.ErrRunning):
 			fmt.Fprintf(env.Stderr, "goscriber: cannot make sure only one Goscriber runs: %v\n", err)
 			return nil, 0, false
+		case atLogin:
+			return nil, exitOK, true // already running: nothing to start or show
 		}
 		switch err := instance.Send(context.Background(), paths.ConfigDir, instance.Show); {
 		case err == nil:

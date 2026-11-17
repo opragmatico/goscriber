@@ -291,7 +291,7 @@ func TestNoticeKinds(t *testing.T) {
 	for _, code := range []Code{
 		CodeNoModel, CodeMicrophoneUnavailable, CodePermissionMissing, CodeModelCorrupt,
 		CodeEngineCrashed, CodeEngineCPUFallback, CodePasteFailed, CodeShortcutFailed,
-		CodeTranscriptionFailed, CodeMicrophoneDenied,
+		CodeTranscriptionFailed, CodeMicrophoneDenied, CodeLoginItemFailed,
 	} {
 		n := New(code, "m")
 		if n.Title() == string(code) || n.Source == "" {
@@ -315,6 +315,25 @@ func TestNoticeKinds(t *testing.T) {
 	}
 	if New("unknown", "").Title() != "unknown" || LevelError.String() != "error" || LevelWarning.String() != "warning" {
 		t.Error("fallbacks")
+	}
+}
+
+func TestLoginItemNotices(t *testing.T) {
+	err := errors.New("permission denied")
+	for _, tt := range []struct {
+		on   bool
+		want string
+	}{
+		{true, "Could not add Goscriber to the apps that open when you log in: permission denied."},
+		{false, "Could not remove Goscriber from the apps that open when you log in: permission denied."},
+	} {
+		n := LoginItemFailed(tt.on, err)
+		if n.Code != CodeLoginItemFailed || n.Level != LevelWarning || n.Persistent() || n.Message != tt.want || n.Action != (Action{}) {
+			t.Errorf("LoginItemFailed(%v): %+v", tt.on, n)
+		}
+	}
+	if n := LoginItemNeedsApproval(); n.Code != CodeLoginItemFailed || n.Action.ID != ActionOpenLoginItems || !strings.Contains(n.Message, "Login Items") {
+		t.Errorf("LoginItemNeedsApproval: %+v", n)
 	}
 }
 

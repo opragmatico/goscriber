@@ -154,3 +154,20 @@ func TestSingleInstance(t *testing.T) {
 		t.Errorf("the running app got %v, want a request to show its window", got)
 	}
 }
+
+// The login item starting Goscriber while it already runs changes nothing:
+// no second app, no window brought to the front, no output.
+func TestLaunchAtLoginLeavesARunningAppBe(t *testing.T) {
+	app := startRunningApp(t, isolate(t))
+	var out, errOut bytes.Buffer
+	code := Run([]string{"--at-login"}, Env{Stdout: &out, Stderr: &errOut, RunApp: func(AppOptions) error {
+		t.Error("a second Goscriber started")
+		return nil
+	}})
+	if code != 0 || out.String() != "" || errOut.String() != "" {
+		t.Errorf("exit %d, stdout %q, stderr %q; want a quiet 0", code, out.String(), errOut.String())
+	}
+	if got := app.got(); len(got) != 0 {
+		t.Errorf("the running app got %v, want nothing", got)
+	}
+}

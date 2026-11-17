@@ -81,7 +81,7 @@ internal/
 ├── hotkey/                # global shortcuts, push-to-talk and toggle
 │   └── portal/            # the XDG GlobalShortcuts portal, for Wayland (D-Bus)
 ├── history/               # SQLite history + saved recordings
-├── platform/              # permissions, clipboard and key events, the overlay's native window tweaks (per-OS, CGo)
+├── platform/              # permissions, clipboard and key events, the overlay's native window tweaks, login items (per-OS, CGo)
 │   └── x11test/           # another X11 app, for the Linux clipboard and key-event tests
 └── ui/
     ├── tray.go
@@ -124,6 +124,7 @@ Only one Goscriber runs per config directory (`GOSCRIBER_HOME` makes another), a
 | `goscriber` (with or without `--start-hidden`, `--no-tray`, `--debug`) | brings the running one's settings window to the front, as it is, or on [onboarding](#onboarding) while that is not over, and exits | starts the app |
 | `goscriber --toggle-transcription` | starts dictation, or stops it and pastes the transcript, as the shortcut in toggle mode; exits quietly with 0 | says Goscriber is not running and exits with 1 |
 | `goscriber --cancel` | discards the dictation in progress | the same |
+| `goscriber --at-login` (the [login item](#launch-at-login)'s command on Linux and Windows) | exits quietly: no window comes to the front | starts the app hidden |
 | `kill -USR2 <pid>` | toggles dictation, as in Handy | |
 
 A remote-control flag takes no other flag. The commands reach the coordinator as the tray's do, so one that does not fit the state is refused there (a toggle while a transcript is on its way), and toggling without a model raises `no_model` in the app.
@@ -135,6 +136,22 @@ A remote-control flag takes no other flag. The commands reach the coordinator as
 **Sending.** The command line connects to the socket. If nothing answers and no process holds the lock, Goscriber is not running. If the lock is held, the app is still starting, so it tries again every 50 ms for up to five seconds.
 
 Windows, where this would be a named pipe, has neither yet: the app runs without the lock and the flags say they are not supported.
+
+### Launch at login
+
+The `autostart` setting (Settings → Advanced → Launch at login) is the OS's login item for Goscriber, which the shell keeps in step with it (`internal/app/login.go`) through `internal/platform`:
+
+| OS | Login item | How the app tells a launch at login |
+| --- | --- | --- |
+| macOS 13 and later | `SMAppService.mainApp`, listed in System Settings → General → Login Items under "Open at Login"; registering it shows macOS's "Login Item Added" notification | the open-application Apple Event carries `keyAELaunchedAsLogInItem`; an observer of `NSApplicationDidFinishLaunchingNotification`, installed before Fyne starts GLFW, reads it |
+| Linux | `io.github.opragmatico.goscriber.desktop` in the XDG autostart directory (`$XDG_CONFIG_HOME/autostart`, by default `~/.config/autostart`), which starts the running executable with `--at-login` ([linux.md](linux.md#launch-at-login)) | `--at-login` |
+| Windows | the `Goscriber` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`: `"…\goscriber.exe" --at-login` | `--at-login` |
+
+- **Hidden.** A launch at login starts hidden, as `--start-hidden` does: behind the tray no window opens, not even unfinished onboarding, which the tray's "No model: Download…" leads back to; without a tray the settings window opens anyway. macOS tells the launch only once the app has started, so the shell plans the launch again then.
+- **At launch the OS is the truth.** The user may turn the login item off outside Goscriber: in System Settings, in GNOME's startup applications (`X-GNOME-Autostart-enabled=false`), Xfce's session settings (`Hidden=true`) or Task Manager's Startup apps (an odd first byte under `…\Explorer\StartupApproved\Run`). So at launch the setting takes the login item's state. A login item that is on is written again, so it starts this executable wherever it is now: Linux and Windows record its path.
+- **Changes.** Turning the setting on or off adds or removes the login item at once, on a goroutine of the shell's. When the OS refuses, a `login_item_failed` notice says why and the setting goes back to what the OS has. When macOS keeps the login item until the user allows it, the notice's button opens System Settings at Login Items. Turning it on in Goscriber also clears Task Manager's "off".
+- **Only the app bundle, on macOS.** A bare executable (`go run`, `make run`) has no login item, nor has macOS before 13: the setting is disabled with the reason, and left as it is. The development bundle from `make app` has one.
+- **Already running.** The login item finding Goscriber running (`--at-login`) exits quietly rather than bringing its window to the front.
 
 ## Settings window
 
@@ -227,6 +244,7 @@ The app shell routes each new notice once: an OS notification (`fyne.App.SendNot
 | `engine_crashed` | error | no | | the engine supervisor, when a worker process crashes or stops answering ([process isolation](#process-isolation)) |
 | `engine_cpu_fallback` | warning | no | | the engine supervisor, when a worker crashes or hangs while it loads or decodes on the GPU, and the engine moves to the CPU |
 | `transcription_failed` | error | no | | the coordinator, when a decode fails or a model will not load for a reason other than a damaged file |
+| `login_item_failed` | warning | no | Open System Settings, when macOS waits for the user to allow the login item | the shell, when the [login item](#launch-at-login) cannot be added or removed |
 
 ## Output
 
@@ -473,3 +491,4 @@ Goroutines talk through channels and the coordinator; nothing outside the main t
 - **History**: `os.UserConfigDir()/goscriber/history.sqlite3` and `…/recordings/*.wav`
 - **Logs**: `os.UserCacheDir()/goscriber/logs/goscriber.log`
 - **Single instance**: `os.UserConfigDir()/goscriber/goscriber.lock` and `…/goscriber.sock` (the [control socket](#single-instance-and-remote-control))
+- **Login item** on Linux: `$XDG_CONFIG_HOME/autostart/io.github.opragmatico.goscriber.desktop` ([launch at login](#launch-at-login)); `GOSCRIBER_HOME` does not move it

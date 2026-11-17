@@ -16,6 +16,7 @@ import (
 type Options struct {
 	Debug       bool      // --debug: debug logging and debug mode for this session
 	StartHidden bool      // --start-hidden: open no window at launch
+	AtLogin     bool      // --at-login: the login item started the app (Linux, Windows), so it starts hidden
 	NoTray      bool      // --no-tray: no tray icon; the settings window opens instead
 	Version     string    // shown in the startup log line
 	Stderr      io.Writer // nil means os.Stderr

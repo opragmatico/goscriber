@@ -50,6 +50,7 @@ func (w *SettingsWindow) advancedPage() fyne.CanvasObject {
 	keepOrder := func(s *config.Settings) { s.VADOffset = min(s.VADOffset, s.VADOnset) }
 	onset.fix, offset.fix = keepOrder, keepOrder
 	accelerator, acceleratorHint := w.acceleratorSetting()
+	autostart, autostartHint := w.autostartSetting()
 
 	output := []fyne.CanvasObject{
 		w.row("Paste method", "How the transcript reaches the app you are using.",
@@ -84,8 +85,7 @@ func (w *SettingsWindow) advancedPage() fyne.CanvasObject {
 				boolSetting(w, "start_hidden", func(s *config.Settings) *bool { return &s.StartHidden })),
 			w.row("Show the tray icon", "Takes effect at the next launch. Without it, this window opens at launch and closing it quits.",
 				boolSetting(w, "show_tray_icon", func(s *config.Settings) *bool { return &s.ShowTrayIcon })),
-			w.row("Launch at login", "Saved for when launching at login is supported; it does nothing yet.",
-				boolSetting(w, "autostart", func(s *config.Settings) *bool { return &s.Autostart })),
+			w.row("Launch at login", autostartHint, autostart),
 			w.row("Unload the model", "Frees its memory once dictation has been idle this long. The next dictation loads it again.",
 				choiceSetting(w, "model_unload_timeout", func(s *config.Settings) *config.UnloadTimeout { return &s.ModelUnloadTimeout },
 					unloadChoices, formatUnload)),
@@ -129,6 +129,21 @@ func (w *SettingsWindow) advancedPage() fyne.CanvasObject {
 					0, 1, 0.02, formatOff)),
 		),
 	)
+}
+
+// LaunchAtLoginHint explains the launch at login setting where Goscriber
+// can launch at login.
+const LaunchAtLoginHint = "Opens Goscriber when you log in, without a window, as with Start hidden."
+
+// autostartSetting is the launch at login check box, disabled with the
+// reason where there can be no login item.
+func (w *SettingsWindow) autostartSetting() (*widget.Check, string) {
+	c := boolSetting(w, "autostart", func(s *config.Settings) *bool { return &s.Autostart })
+	if why := w.opts.Info.LoginItemUnavailable; why != "" {
+		c.Disable()
+		return c, sentenceCase(why) + "."
+	}
+	return c, LaunchAtLoginHint
 }
 
 // customWordsSetting edits the custom words.
