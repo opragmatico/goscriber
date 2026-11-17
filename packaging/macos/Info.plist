@@ -8,6 +8,8 @@
 	<string>Goscriber</string>
 	<key>CFBundleExecutable</key>
 	<string>goscriber</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>io.github.opragmatico.goscriber</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -22,6 +24,10 @@
 	<string>@VERSION@</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
+	<!-- The deployment target of the executable and the NeMo-Speech.cpp
+	     libraries (MACOS_MIN in the Makefile). -->
+	<key>LSMinimumSystemVersion</key>
+	<string>@MACOS_MIN@</string>
 	<!-- A menu bar app: no Dock icon and no app menu. -->
 	<key>LSUIElement</key>
 	<true/>

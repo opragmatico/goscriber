@@ -140,7 +140,7 @@ NEMO_SPEECH_CMAKE_ARGS=-DGGML_NATIVE=OFF make deps   # portable CPU code for oth
 make dist-linux                                      # dist/goscriber-VERSION-linux-ARCH.tar.gz and goscriber_VERSION_ARCH.deb
 ```
 
-Both hold `bin/goscriber` and the NeMo-Speech.cpp and ggml libraries in `lib/`, found through a `$ORIGIN/../lib` run path set with patchelf; the `.deb` installs them in `/opt/goscriber`, links `/usr/bin/goscriber`, and adds the desktop entry, the icon, the licences and this page. Build them on the oldest distribution to support: the libraries need its glibc and libstdc++ or newer. Publishing them with the releases comes with [#34](https://github.com/opragmatico/goscriber/issues/34).
+Both hold `bin/goscriber` and the NeMo-Speech.cpp and ggml libraries in `lib/`, found through a `$ORIGIN/../lib` run path set with patchelf; the `.deb` installs them in `/opt/goscriber`, links `/usr/bin/goscriber`, and adds the desktop entry, the icon, the licences and this page. Build them on the oldest distribution to support: the libraries need its glibc and libstdc++ or newer. Each release carries both, built on Ubuntu 24.04 for x86-64 and arm64 with the CPU engine ([releasing.md](releasing.md#linux-packages)).
 
 ## Building from source
 

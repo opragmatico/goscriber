@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Goscriber's app icon on Apple's macOS grid: an 824 pt rounded square
+       centred on a 1024 pt canvas, with room for its shadow. The microphone
+       is internal/ui/assets/goscriber.svg's, scaled from 64 to 824.
+       scripts/make-macos-icon.sh renders it into AppIcon.icns. -->
+  <defs>
+    <linearGradient id="fill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4c6ef5"/>
+      <stop offset="1" stop-color="#364fc7"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="14"/>
+      <feOffset dy="12" result="blur"/>
+      <feComponentTransfer>
+        <feFuncA type="linear" slope="0.3"/>
+      </feComponentTransfer>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#fill)" filter="url(#shadow)"/>
+  <g transform="translate(100 100) scale(12.875)" fill="#ffffff">
+    <path d="M32 11a9 9 0 0 1 9 9v9a9 9 0 0 1-18 0V20a9 9 0 0 1 9-9z"/>
+    <path d="M17 29h3.75a11.25 11.25 0 0 0 22.5 0H47a15 15 0 0 1-13.125 14.883V49.25H41V53H23v-3.75h7.125v-5.367A15 15 0 0 1 17 29z"/>
+  </g>
+</svg>
