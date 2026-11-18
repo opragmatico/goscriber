@@ -4,7 +4,7 @@
 
 Press a shortcut, speak, release, and your words are pasted into whatever app you are using. Audio never leaves your computer.
 
-Goscriber is modelled on [Handy](https://github.com/cjpais/Handy) by CJ Pais, a Tauri (Rust + React) app that runs Whisper, Parakeet, Moonshine, Canary and other model families through its own `transcribe.cpp` engine. Goscriber is written in Go and follows Handy's dictation flow and many of its defaults, with a few pieces adapted from Handy's code (see [Acknowledgements](#acknowledgements)), but it is not a full port: it runs **three NVIDIA models locally through [NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) via CGo** and nothing else, ships a single native binary with a [Fyne](https://fyne.io) UI, and does not yet have all of Handy's features or platforms. As in Handy, the speech engine runs in a supervised worker process (the same binary), so a crash in the native code restarts the engine instead of closing the app.
+Goscriber is a Go re-implementation of [Handy](https://github.com/cjpais/Handy) by CJ Pais. Handy is a Tauri (Rust + React) app that runs many model families through `transcribe.cpp`. Goscriber keeps Handy's dictation behaviour but deliberately narrows the speech stack to **three NVIDIA models running locally through [NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) via CGo**, and ships a single native binary with a [Fyne](https://fyne.io) UI. As in Handy, the speech engine runs in a supervised worker process (the same binary), so a crash in the native code restarts the engine instead of closing the app.
 
 > **Status: early development.** `goscriber` runs as a menu bar / tray icon: the shortcut or the tray records, transcribes while you speak (Nemotron shows the words in the overlay as you say them; Parakeet decodes the recording in chunks at your pauses), and pastes the text the moment you stop. The settings window (Settings… in the tray) downloads and selects the model, records the shortcut and holds every other setting; at the first launch it walks you through the permissions, downloading a model and a first dictation. `goscriber transcribe` transcribes WAV files from the command line. See the [roadmap](#roadmap) and the [issue tracker](https://github.com/opragmatico/goscriber/issues).
 
@@ -126,7 +126,7 @@ No model file is committed here. [`scripts/convert-models.sh`](scripts/convert-m
 
 ## Acknowledgements
 
-- Goscriber's design follows [Handy](https://github.com/cjpais/Handy) (MIT, © CJ Pais), and some of it is adapted from Handy's code: the built-in filler-word lists are Handy's, the custom-word correction is Handy's matching translated into Go and changed, and many default settings are Handy's. Handy's licence is in [third_party/handy/LICENSE](third_party/handy/LICENSE).
+- Goscriber is a Go re-implementation of [Handy](https://github.com/cjpais/Handy) (MIT, © CJ Pais). The main difference is speech recognition: Goscriber runs three NVIDIA models through NeMo-Speech.cpp, where Handy runs many model families through transcribe.cpp.
 - Speech recognition runs on [NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) (Apache-2.0, © NVIDIA).
 - The models are released by NVIDIA: Nemotron Streaming 3.5 under the OpenMDW License 1.1 (at the revision Goscriber pins), Parakeet TDT 0.6B v2 under CC-BY-4.0. See each model card for terms.
 - Voice activity detection uses [Silero VAD](https://github.com/snakers4/silero-vad) (MIT, © Silero Team).

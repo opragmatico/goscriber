@@ -1,8 +1,8 @@
 # Architecture
 
-Goscriber is modelled on [Handy](https://github.com/cjpais/Handy): press a shortcut, speak, and the transcription is pasted into whatever app has focus, fully offline.
+Goscriber is a Go re-implementation of [Handy](https://github.com/cjpais/Handy): press a shortcut, speak, and the transcription is pasted into whatever app has focus, fully offline.
 
-Handy is built with Tauri (Rust backend + React UI) and runs a broad catalog of GGUF models through its own `transcribe.cpp`. Goscriber follows Handy's dictation flow and many of its defaults, swaps the stack for Go + Fyne, and narrows speech recognition to three NVIDIA models served by [NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) through CGo. It is not a full port, and where it differs from Handy the sections below say so. Its built-in filler words and its custom-word correction are adapted from Handy's code (MIT, © CJ Pais; [licence](../third_party/handy/LICENSE)).
+Handy is built with Tauri (Rust backend + React UI) and runs a broad catalog of GGUF models through `transcribe.cpp`. Goscriber keeps the same product behaviour, swaps the stack for Go + Fyne, and narrows speech recognition to three NVIDIA models served by [NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) through CGo.
 
 | Concern | Handy | Goscriber |
 | --- | --- | --- |
