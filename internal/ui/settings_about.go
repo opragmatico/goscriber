@@ -22,7 +22,7 @@ type attribution struct {
 var software = []attribution{
 	{
 		"Handy", "https://github.com/cjpais/Handy", "MIT, © CJ Pais",
-		"Goscriber's design follows Handy. No Handy source code is copied.",
+		"Goscriber's design follows Handy, and its filler words and word correction are adapted from Handy's code.",
 	},
 	{
 		"NeMo-Speech.cpp", "https://github.com/NVIDIA/NeMo-Speech.cpp", "Apache-2.0, © NVIDIA",

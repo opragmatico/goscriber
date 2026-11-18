@@ -1,3 +1,6 @@
+// The built-in filler-word lists are Handy's (src-tauri/src/audio_toolkit/text.rs),
+// Copyright (c) 2025 CJ Pais, under the MIT License in third_party/handy/LICENSE.
+
 package text
 
 import (
@@ -11,7 +14,7 @@ import (
 // language the models write, so they are removed whatever the transcript's
 // language. Anything that is a word somewhere ("um" in Portuguese and
 // German, "ah", "eh", "mm" for millimetres) belongs in languageFillers.
-// After Handy's list.
+// Both lists are Handy's.
 var universalFillers = []string{
 	"uh", "uhm", "umm", "uhh", "uhhh", "ehh", "ehm", "ahm", "hmm", "hm", "mmm", "хм", "ммм",
 }

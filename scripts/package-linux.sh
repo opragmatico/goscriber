@@ -93,7 +93,7 @@ trap 'rm -rf "$work"' EXIT
 # stage DIR: the app's files under DIR/{bin,lib} and DIR/share.
 stage() {
     local dir="$1" share="$2"
-    mkdir -p "$dir/bin" "$dir/lib" "$share/applications" "$share/icons/hicolor/scalable/apps" "$share/doc/goscriber"
+    mkdir -p "$dir/bin" "$dir/lib" "$share/applications" "$share/icons/hicolor/scalable/apps" "$share/doc/goscriber/handy"
     install -m 0755 "$BIN" "$dir/bin/goscriber"
     patchelf --set-rpath '$ORIGIN/../lib' "$dir/bin/goscriber"
     # The shared libraries with their version symlinks, each finding the
@@ -108,6 +108,8 @@ stage() {
     install -m 0644 "$ROOT/packaging/linux/$APP_ID.desktop" "$share/applications/$APP_ID.desktop"
     install -m 0644 "$ROOT/internal/ui/assets/goscriber.svg" "$share/icons/hicolor/scalable/apps/$APP_ID.svg"
     install -m 0644 "$ROOT/LICENSE" "$share/doc/goscriber/LICENSE"
+    # Handy's, for the code adapted from it (see the README's Acknowledgements).
+    install -m 0644 "$ROOT/third_party/handy/LICENSE" "$share/doc/goscriber/handy/LICENSE"
     install -m 0644 "$ROOT/docs/linux.md" "$share/doc/goscriber/linux.md"
     # NeMo-Speech.cpp's licence, NOTICE and third-party notices, and those of
     # ggml, miniaudio and SentencePiece with what it bundles, as the SDK
