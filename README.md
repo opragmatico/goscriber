@@ -126,7 +126,7 @@ No model file is committed here. [`scripts/convert-models.sh`](scripts/convert-m
 
 ## Acknowledgements
 
-- Goscriber's design follows [Handy](https://github.com/cjpais/Handy) (MIT, © CJ Pais). No Handy source code is copied; this is an independent implementation in Go.
+- Goscriber is a Go re-implementation of [Handy](https://github.com/cjpais/Handy) (MIT, © CJ Pais). The main difference is speech recognition: Goscriber runs three NVIDIA models through NeMo-Speech.cpp, where Handy runs many model families through transcribe.cpp.
 - Speech recognition runs on [NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) (Apache-2.0, © NVIDIA).
 - The models are released by NVIDIA: Nemotron Streaming 3.5 under the OpenMDW License 1.1 (at the revision Goscriber pins), Parakeet TDT 0.6B v2 under CC-BY-4.0. See each model card for terms.
 - Voice activity detection uses [Silero VAD](https://github.com/snakers4/silero-vad) (MIT, © Silero Team).

@@ -1,3 +1,7 @@
+// The custom-word matching is adapted from Handy's apply_custom_words
+// (src-tauri/src/audio_toolkit/text.rs), Copyright (c) 2025 CJ Pais, under
+// the MIT License in third_party/handy/LICENSE.
+
 package text
 
 import (
