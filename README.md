@@ -47,7 +47,48 @@ Names and jargon listed in the `custom_words` setting come out spelled your way:
 
 Filler words ("um", "uh") are removed, with the punctuation around them, and the `filler_word_removal` and `custom_filler_words` settings turn that off or change the list ([details](docs/architecture.md#text-cleanup)).
 
-Following Handy, Goscriber keeps a history of past dictations with their recordings (copy, paste again, play, transcribe again), transcribes WAV and FLAC files dropped on its History page, however long, and plans an external transcription hook and optional LLM post-processing.
+Following Handy, Goscriber keeps a history of past dictations with their recordings (copy, paste again, play, transcribe again), transcribes WAV and FLAC files dropped on its History page, however long, and runs your own [transcription hook](#transcription-hook) on every dictation before pasting it. Optional LLM post-processing is planned.
+
+## Transcription hook
+
+Advanced users can rewrite the text right before Goscriber pastes it, with Handy's contract. Put an executable at `hooks/transcription` in Goscriber's config folder: `~/Library/Application Support/goscriber/` on macOS, `~/.config/goscriber/` on Linux, or `$GOSCRIBER_HOME` when it is set. Goscriber looks for it before every paste, so there is nothing to restart.
+
+- The text arrives on the hook's standard input, after the text cleanup, and what the hook prints on standard output is pasted instead. One trailing newline is removed, and empty output pastes nothing.
+- If the hook cannot start, exits with a status other than 0 or runs longer than 30 seconds, the original text is pasted and a notice says why. A hook still running is stopped with SIGTERM, then SIGKILL a second later, along with whatever it started. Cancelling the dictation stops it too, and nothing is pasted.
+- The history keeps both the model's transcript and the text that was pasted.
+
+The hook does not get your shell's environment. Goscriber started from the Finder, the Dock or at login on macOS has only launchd's `PATH`, `/usr/bin:/bin:/usr/sbin:/sbin`, and on Linux the desktop session's, without what your shell's startup files add. Name anything else by its full path, such as `/opt/homebrew/bin/jq`. The hook also gets `GOSCRIBER_MODEL`, the model's ID, and `GOSCRIBER_LANGUAGE`, the transcript's language when known (`en-US`, `es`…). Scripts need a `#!` line.
+
+An example that turns "comma" and "full stop", said aloud, into punctuation in English dictations (macOS):
+
+```bash
+mkdir -p ~/Library/Application\ Support/goscriber/hooks
+cat > ~/Library/Application\ Support/goscriber/hooks/transcription <<'EOF'
+#!/bin/sh
+case "$GOSCRIBER_LANGUAGE" in
+en*) exec /usr/bin/sed -e 's/ comma/,/g' -e 's/ full stop/./g' ;;
+*) exec /bin/cat ;;
+esac
+EOF
+chmod +x ~/Library/Application\ Support/goscriber/hooks/transcription
+```
+
+A hook can be a Go program too: package [`hook`](hook/hook.go) has both ends of the contract, and a hook built with `hook.Main` can hand each dictation to a workflow or an agent and paste its answer ([docs/library.md](docs/library.md#a-dictation-through-a-workflow)).
+
+## Use from Go
+
+Goscriber's transcription is also a Go library, for programs where speech-to-text is one step of the work, such as a workflow node or an agent's tool:
+
+```go
+scriber, err := goscriber.New(goscriber.Options{Model: "parakeet-tdt-0.6b-v2"}) // the engine runs in a goscriber worker process
+if err != nil {
+	return err
+}
+defer scriber.Close()
+tr, err := scriber.TranscribeFile(ctx, "memo.flac") // tr.Text, tr.Language, tr.Duration…
+```
+
+It transcribes like the app, with the models you downloaded, and needs no CGo of its own: the engine runs in the worker process of an installed `goscriber`. [docs/library.md](docs/library.md) covers the options, the errors and how it fits [agentic-ai-go](docs/library.md#with-goagents)'s graphs and agents.
 
 ## Stack
 
@@ -108,11 +149,11 @@ make help                 # every target
 
 ### Where CGo is allowed
 
-Only `internal/app`, `internal/ui`, `internal/platform` and `internal/engine/nemo` may use CGo (Fyne, native OS code and the NeMo-Speech.cpp binding). Everything else must build and test with `CGO_ENABLED=0`, which keeps most tests fast and portable; `make test-nocgo` enforces it, and CI runs it on macOS and Linux. `cmd/goscriber` links the desktop app only when CGo is on, so a `CGO_ENABLED=0` build is a command-line-only binary. The one exception is `internal/audio`: its malgo (miniaudio) backend sits in a `cgo`-tagged file, so the package, with its ring buffer, levels, recorder and WAV code, still builds and tests without CGo, just with no devices.
+Only `internal/app`, `internal/ui`, `internal/platform` and `internal/engine/nemo` may use CGo (Fyne, native OS code and the NeMo-Speech.cpp binding). Everything else, the public `goscriber` and `hook` packages included, must build and test with `CGO_ENABLED=0`, which keeps most tests fast and portable; `make test-nocgo` enforces it, and CI runs it on macOS and Linux. `cmd/goscriber` links the desktop app only when CGo is on, so a `CGO_ENABLED=0` build is a command-line-only binary. The one exception is `internal/audio`: its malgo (miniaudio) backend sits in a `cgo`-tagged file, so the package, with its ring buffer, levels, recorder and WAV code, still builds and tests without CGo, just with no devices.
 
 `goscriber debug devices` lists the audio devices, and `goscriber debug record [--device NAME] [--seconds 10] out.wav` records the microphone and reports the sample rate, dropped samples and levels.
 
-The NeMo-Speech.cpp binding also needs the SDK from `make deps` and, until it is wired into the app, the `nemo` build tag, so CGo builds keep working without the SDK; `make test-engine` passes it, and `make build` does too once the SDK is there, which gives `goscriber transcribe` its engine. A `goscriber` built without it says so. Its tests that need a real model run when `GOSCRIBER_TEST_MODELS` names a directory holding the model's GGUF. See [docs/engine-sdk.md](docs/engine-sdk.md#model-tests).
+The NeMo-Speech.cpp binding also needs the SDK from `make deps` and, until it is wired into the app, the `nemo` build tag (so do `cmd/goscriber/engine.go` and the library's `engine_nemo.go`, which link it in), so CGo builds keep working without the SDK; `make test-engine` passes it, and `make build` does too once the SDK is there, which gives `goscriber transcribe` its engine. A `goscriber` built without it says so. Its tests that need a real model run when `GOSCRIBER_TEST_MODELS` names a directory holding the model's GGUF. See [docs/engine-sdk.md](docs/engine-sdk.md#model-tests).
 
 Shared test fixtures live in [`testdata/`](testdata/README.md).
 

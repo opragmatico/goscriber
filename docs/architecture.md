@@ -40,6 +40,8 @@ Handy's own GGUFs (`handy-computer/*-gguf`) target `transcribe.cpp`, not NeMo-Sp
 ## Package layout
 
 ```text
+goscriber.go               # the library: Transcriber, for programs that transcribe (docs/library.md)
+hook/                      # the transcription hook's contract, both ends: Script runs a hook, Main makes one
 cmd/goscriber/             # main: GUI by default; subcommands `transcribe`, `engine-worker`
 internal/
 ├── app/                   # Fyne app bootstrap and object wiring
@@ -72,8 +74,9 @@ internal/
 │   ├── hfcache.go         # finds files already in the Hugging Face cache
 │   └── manager.go         # list, download, delete; status per model and quantisation
 ├── pipeline/
-│   └── coordinator.go     # recording → transcription → output state machine
-├── text/                  # cleanup, filler words, custom-word correction, hook
+│   ├── coordinator.go     # recording → transcription → output state machine
+│   └── hook.go            # the transcription hook stage
+├── text/                  # cleanup, filler words, custom-word correction
 ├── llm/                   # optional post-processing
 ├── output/                # clipboard paste with restore, direct typing
 ├── typing/                # Linux typing tools: xdotool, wtype, dotool, ydotool
@@ -245,6 +248,7 @@ The app shell routes each new notice once: an OS notification (`fyne.App.SendNot
 | `engine_cpu_fallback` | warning | no | | the engine supervisor, when a worker crashes or hangs while it loads or decodes on the GPU, and the engine moves to the CPU |
 | `transcription_failed` | error | no | | the coordinator, when a decode fails or a model will not load for a reason other than a damaged file |
 | `login_item_failed` | warning | no | Open System Settings, when macOS waits for the user to allow the login item | the shell, when the [login item](#launch-at-login) cannot be added or removed |
+| `hook_failed` | warning | no | | the [transcription hook](#transcription-hook) stage, when the hook cannot run, fails or runs too long, so the original text was pasted |
 
 ## Output
 
@@ -355,7 +359,7 @@ The `Coordinator` (`internal/pipeline/coordinator.go`) owns a single state machi
 - **Model**: every `Start` resolves the selected model through a `ModelSource` (`CatalogModels` over the models manager: `selected_model`, in `model_quant` when the model has it, on the CPU when `accelerator` says so, with the Silero VAD when enabled and downloaded). With no model ready, `Start` records nothing and raises `no_model` afresh, so every press is answered; a damaged file raises `model_corrupt`. The engine goroutine loads the model when recording starts, if the engine does not hold it already (with `preload_model` it usually does: see [model lifecycle](#model-lifecycle)), and `Acquire`s it until the transcript is out.
 - **Decode**: the recording is decoded while it goes on ([live transcription](#live-transcription)). On `Stop`, the speech gate runs first (too short or too quiet ends the session quietly), then the engine goroutine finishes the decode: the stream's final, or the chunk still open, or the whole clip when neither applies.
 - **Session IDs**: each session has an ID and a context. A cancel ends the context (the decode, a text stage or the paste may stop early) and anything that finishes afterwards for that session is dropped, even while the next session is recording.
-- **Stages**: `Stages{Cleanup, LLM, Hook, History}` run after recognition, each optional; the app sets `Cleanup` to `CleanupStage` ([text cleanup](#text-cleanup)) and `History` to the [history](#history); the others are nil until their issues land (#39, #38). Each text stage gets the session's `SessionInfo`, with the settings the session started with. A failing text stage passes its input on; empty output pastes nothing. History saves after delivery, off the critical path.
+- **Stages**: `Stages{Cleanup, LLM, Hook, History}` run after recognition, each optional; the app sets `Cleanup` to `CleanupStage` ([text cleanup](#text-cleanup)), `Hook` to `HookStage` ([transcription hook](#transcription-hook)) and `History` to the [history](#history); `LLM` is nil until its issue lands (#39). Each text stage gets the session's `SessionInfo`, with the settings the session started with. A failing text stage passes its input on; empty output pastes nothing. History saves after delivery, off the critical path.
 - **Failures**: an engine error ends in `idle` with `transcription_failed`, `model_corrupt` or `no_model`; a failed delivery with `paste_failed` or `permission_missing`. Each is raised before the state returns to idle. No speech is not a failure.
 - **Timings**: each stage's duration is logged at debug level, and a summary line per session (`dictation timings`); the info-level line says only whether something was delivered and how many characters, never the text.
 
@@ -419,6 +423,19 @@ A filler matches whole words only, ignoring case, and also drawn out ("ummm"). T
 
 Settings files from before schema version 2 hold `filler_word_removal: false`, saved while the setting did nothing; the v2 migration turns it on.
 
+### Transcription hook
+
+`HookStage` (`internal/pipeline/hook.go`) runs the user's own program on the transcript, after the cleanup and before the paste, with [Handy's contract](https://github.com/cjpais/Handy#transcription-hook): the program at `hooks/transcription` in the config directory gets the text on standard input, and its standard output is pasted instead. The public package `hook` holds the contract and both ends of it, so other programs can run hooks and be hooks ([library](#library)); the stage is the app's use of it.
+
+- **Lookup.** The stage stats the program for every transcript, so a hook added, edited or removed applies at the next dictation, with no setting and no restart. A blank transcript skips it. A symbolic link is followed. Something that is not a file, or a file without execute permission, is a hook that cannot run (below).
+- **Output.** One trailing newline, `\n` or `\r\n`, is dropped, so the output of `echo` pastes no line break; invalid UTF-8 is replaced by U+FFFD; empty output pastes nothing. Output past 1 MiB fails the hook: no transcript comes near it, so a program printing that much has gone wrong. The extra is drained, never refused, so the program is not left blocked on a full pipe.
+- **Input.** The transcript is written to the program while its output is read, so neither side blocks on a full pipe, and a program that exits without reading its input is fine.
+- **Failure.** A program that cannot start, exits with a status other than 0 or runs past 30 s (`hook.DefaultTimeout`) makes the stage fail, so the coordinator pastes the text the stage was given. The user hears why in a warning, `hook_failed`: the program ran too long, is not executable, has no `#!` line, or failed, with the last line it printed on standard error ("exit status 1: KeyError: 'text'"). The log line has the same, and the history keeps the model's transcript beside what was pasted.
+- **Stopping.** The program leads a process group of its own. When it times out, or the session is cancelled, the group gets SIGTERM; a second later os/exec kills the program if it still runs and closes its pipes, and the group gets SIGKILL, so nothing it started outlives it. The second lets a hook end what it started elsewhere, such as a workflow run (Handy kills its hook at once). A cancelled session raises no notice and pastes nothing. A program that exits on its own keeps whatever it left running in the background, and its output counts even when such a child holds the pipe open: the pipe is closed a second after the program exits. On Windows the program alone is killed.
+- **Environment.** The program inherits Goscriber's environment, which is not a login shell's: started from the Finder, the Dock or at login, a macOS app has launchd's `PATH`, `/usr/bin:/bin:/usr/sbin:/sbin`, and a Linux desktop session's `PATH` lacks what an interactive shell's startup files add. `GOSCRIBER_MODEL` (the catalog ID) and `GOSCRIBER_LANGUAGE` (`SessionInfo.TextLanguage`) are added, always set, empty when unknown, so a stale value inherited from a terminal never leaks in. The working directory is Goscriber's, as in Handy.
+
+Everything Handy's hook does, Goscriber's does the same way, so a hook written for Handy runs unchanged; the variables, the second before SIGKILL, the process group, the output cap, the CRLF and the notice are additions. The tests run temporary scripts for each case: success, failure, timeout, empty output, cancellation, children that ignore SIGTERM, and a Go hook built with `hook.Main` (`hook/script_unix_test.go`, `internal/pipeline/hook_test.go`).
+
 ### History
 
 Every finished dictation is saved (`internal/history`, SQLite through the pure-Go `modernc.org/sqlite`), also when its delivery failed, so the text is never lost: when recording started, the delivered text, the model's raw transcript, the model, the transcript's language and the recording's length, with the recording as a 16-bit mono WAV beside the database. An entry [transcribed from a file](#transcribing-files) also keeps the file's name (schema version 2). The schema is versioned with SQLite's `user_version` and migrated forward, one transaction per step, when the app opens it; a database from a newer Goscriber is left alone, and the app runs on without saving.
@@ -470,6 +487,15 @@ The output then waits `paste_delay_ms` (60 ms) before pressing the paste key.
 
 **Long dictation.** A dictation is one stream with endpointing off, and that stays cheap however long it gets. Streaming ten minutes of speech, the process's footprint stays flat after the first stream allocates its compute buffers (about 300 MB, once per loaded model; about 1 MB more over the ten minutes), each `Next` stays at 14 to 27 ms, and `Finish` → final at about 20 ms. NeMo-Speech.cpp's cache-aware runner trims its audio and feature buffers as it goes and keeps a fixed-size encoder cache; only the transcript itself grows, by about 9 KB over ten minutes. Mid-stream endpointing (`endpointing.enable`, `stop_history_eou_ms`) would only split that transcript into finals: the runner keeps its caches across an end of utterance, so the memory is the same with it: forcing an endpoint after every sentence of the ten minutes gave the same footprint and timings. Goscriber therefore leaves endpointing off, and still joins finals in order in case a stream returns several.
 
+## Library
+
+Two public packages make Goscriber usable from other Go programs, such as a workflow that transcribes a voice memo or an agent with transcription as a tool ([docs/library.md](library.md) has the guide, with [goagents](library.md#with-goagents) examples):
+
+- **`hook`** is the transcription hook's contract, both ends of it, on the standard library alone: `Script` runs a hook program (the stage above runs it), `Main` makes a Go program a hook, and `Hook`, with `Func`, is what both rewrite with. `Default` finds the hook installed for the app.
+- **`goscriber`** (the module's root package) is `Transcriber`: files, streams or samples to text, as the History page transcribes a file. It runs the dictation coordinator for its `Transcribe` alone, with a recorder that never records, an output that never pastes and notices that go nowhere (it reports through errors), so long audio, custom words, the cleanup stage and the engine goroutine are the app's own. Its settings are the user's (`config.Load`), with `Options` on top, as for `goscriber transcribe`; `New` resolves the model through the models manager and fails early when it is missing or damaged.
+
+The engine of a `Transcriber` is by default a `worker.Supervisor` over the `engine-worker` subcommand of an installed `goscriber` binary (`Options.Executable`, else `PATH`), wrapped in `engine/warmup` as in the app: the library itself needs no CGo, and the engine's crashes stay in its worker. The worker protocol's handshake refuses a binary of another protocol version. With the `nemo` build tag, `engine_nemo.go` links the binding, and `Options.InProcess` runs the engine inside the program. `Transcript` has JSON names, so it can be a workflow's state as it is, and the errors that no retry can fix (`ErrNoSpeech`, `ErrUnsupportedAudio`, `ErrNoModel`, `ErrModelCorrupt`, `ErrNoEngine`) are sentinels for `errors.Is`. Measured with Parakeet TDT 0.6B v2 on an M4 Max, through the worker: the first transcription of `jfk.wav` (11 s) takes about 250–600 ms with the worker's start, the load and the warm-up, the next ones about 100 ms.
+
 ## Threading model
 
 - **Fyne main thread**: all widgets, tray, overlay. Other goroutines update the UI only through `fyne.Do` / `fyne.DoAndWait`.
@@ -490,5 +516,6 @@ Goroutines talk through channels and the coordinator; nothing outside the main t
 - **Models**: `os.UserCacheDir()/goscriber/models/` (GGUF files under their Hugging Face names, `*.part` while downloading, and `verified.json`, which remembers the files already hashed). Files already in the Hugging Face cache (`HF_HUB_CACHE`, `HF_HOME`, default `~/.cache/huggingface/hub`) are used from there.
 - **History**: `os.UserConfigDir()/goscriber/history.sqlite3` and `…/recordings/*.wav`
 - **Logs**: `os.UserCacheDir()/goscriber/logs/goscriber.log`
+- **Transcription hook**: `os.UserConfigDir()/goscriber/hooks/transcription`, written by the user ([transcription hook](#transcription-hook))
 - **Single instance**: `os.UserConfigDir()/goscriber/goscriber.lock` and `…/goscriber.sock` (the [control socket](#single-instance-and-remote-control))
 - **Login item** on Linux: `$XDG_CONFIG_HOME/autostart/io.github.opragmatico.goscriber.desktop` ([launch at login](#launch-at-login)); `GOSCRIBER_HOME` does not move it
