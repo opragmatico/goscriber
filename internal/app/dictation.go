@@ -119,8 +119,12 @@ func (sh *shell) startDictation() {
 		Settings:         sh.rt.Settings.Get,
 		Feedback:         sh.svc.feedback,
 		MicrophoneAccess: microphoneAccess,
-		Stages:           pipeline.Stages{Cleanup: pipeline.CleanupStage{}, History: sh.historySink()},
-		Log:              sh.rt.Log.Logger,
+		Stages: pipeline.Stages{
+			Cleanup: pipeline.CleanupStage{},
+			Hook:    pipeline.HookStage{ConfigDir: sh.rt.Paths.ConfigDir, Notices: sh.notices},
+			History: sh.historySink(),
+		},
+		Log: sh.rt.Log.Logger,
 	})
 	events, stop := sh.dictation.Subscribe()
 	sh.stopDictationEvents = stop

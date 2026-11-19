@@ -3,10 +3,12 @@ package notice
 import (
 	"errors"
 	"fmt"
+	"syscall"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/opragmatico/goscriber/hook"
 	"github.com/opragmatico/goscriber/internal/engine"
 	"github.com/opragmatico/goscriber/internal/output"
 )
@@ -27,6 +29,7 @@ const (
 	CodePasteFailed           Code = "paste_failed"
 	CodeShortcutFailed        Code = "shortcut_failed"
 	CodeLoginItemFailed       Code = "login_item_failed"
+	CodeHookFailed            Code = "hook_failed"
 )
 
 // Level is how bad a problem is.
@@ -60,6 +63,7 @@ const (
 	SourceOutput      Source = "output"
 	SourceShortcut    Source = "shortcut"
 	SourceApp         Source = "app"
+	SourceText        Source = "text"
 )
 
 // ActionID is what a notice's button does; the UI carries it out.
@@ -119,6 +123,7 @@ var kinds = map[Code]struct {
 	CodePasteFailed:           {"Could not paste", LevelError, SourceOutput, false},
 	CodeShortcutFailed:        {"Shortcut unavailable", LevelError, SourceShortcut, false},
 	CodeLoginItemFailed:       {"Launch at login failed", LevelWarning, SourceApp, false},
+	CodeHookFailed:            {"Transcription hook failed", LevelWarning, SourceText, false},
 }
 
 // Title is a short heading for the notice, for an OS notification or the
@@ -252,6 +257,37 @@ func LoginItemNeedsApproval() Notice {
 	n := New(CodeLoginItemFailed, "macOS opens Goscriber at login once you allow it in System Settings → General → Login Items.")
 	n.Action = Action{Label: "Open System Settings", ID: ActionOpenLoginItems}
 	return n
+}
+
+// HookFailed is the notice for a transcription hook that could not run,
+// failed or ran too long, so the transcript was pasted as it was.
+func HookFailed(err error) Notice {
+	reason := "failed: " + err.Error()
+	herr, isHook := errors.AsType[*hook.Error](err)
+	switch {
+	case errors.Is(err, hook.ErrTimeout):
+		reason = fmt.Sprintf("ran longer than %d seconds and was stopped", int(hook.DefaultTimeout/time.Second))
+	case errors.Is(err, hook.ErrNotExecutable):
+		reason = "is not executable: give it permission with chmod +x"
+	case errors.Is(err, syscall.ENOEXEC):
+		reason = "could not start: a script needs a #! line, such as #!/bin/sh"
+	case isHook:
+		reason = "failed: " + herr.Reason()
+	}
+	return New(CodeHookFailed, fmt.Sprintf("The transcription hook %s. The original text was pasted.", clip(reason, hookReasonLen)))
+}
+
+// hookReasonLen is the most of a hook's failure a notice shows, in
+// characters: the last line of its standard error can be long.
+const hookReasonLen = 200
+
+// clip shortens s to n characters, ending it with an ellipsis when it cuts.
+func clip(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	r := []rune(s)
+	return string(r[:n-1]) + "…"
 }
 
 // sentence capitalises the first letter of s.

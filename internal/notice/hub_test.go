@@ -4,12 +4,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
+	"unicode/utf8"
 
+	"github.com/opragmatico/goscriber/hook"
 	"github.com/opragmatico/goscriber/internal/engine"
 	"github.com/opragmatico/goscriber/internal/output"
 )
@@ -291,7 +295,7 @@ func TestNoticeKinds(t *testing.T) {
 	for _, code := range []Code{
 		CodeNoModel, CodeMicrophoneUnavailable, CodePermissionMissing, CodeModelCorrupt,
 		CodeEngineCrashed, CodeEngineCPUFallback, CodePasteFailed, CodeShortcutFailed,
-		CodeTranscriptionFailed, CodeMicrophoneDenied, CodeLoginItemFailed,
+		CodeTranscriptionFailed, CodeMicrophoneDenied, CodeLoginItemFailed, CodeHookFailed,
 	} {
 		n := New(code, "m")
 		if n.Title() == string(code) || n.Source == "" {
@@ -334,6 +338,52 @@ func TestLoginItemNotices(t *testing.T) {
 	}
 	if n := LoginItemNeedsApproval(); n.Code != CodeLoginItemFailed || n.Action.ID != ActionOpenLoginItems || !strings.Contains(n.Message, "Login Items") {
 		t.Errorf("LoginItemNeedsApproval: %+v", n)
+	}
+}
+
+func TestHookFailed(t *testing.T) {
+	const path = "/cfg/hooks/transcription"
+	exit := errors.New("exit status 3") // as an *exec.ExitError says it
+	for _, tt := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			"timeout", &hook.Error{Path: path, Err: hook.ErrTimeout, Stderr: "waiting"},
+			"The transcription hook ran longer than 30 seconds and was stopped. The original text was pasted.",
+		},
+		{
+			"not executable", fmt.Errorf("hook %s: %w", path, hook.ErrNotExecutable),
+			"The transcription hook is not executable: give it permission with chmod +x. The original text was pasted.",
+		},
+		{
+			"no #! line", &hook.Error{Path: path, Err: &fs.PathError{Op: "fork/exec", Path: path, Err: syscall.ENOEXEC}},
+			"The transcription hook could not start: a script needs a #! line, such as #!/bin/sh. The original text was pasted.",
+		},
+		{
+			"exit status", &hook.Error{Path: path, Err: exit, Stderr: "Traceback\nKeyError: 'text'"},
+			"The transcription hook failed: exit status 3: KeyError: 'text'. The original text was pasted.",
+		},
+		{
+			"too much output", &hook.Error{Path: path, Err: hook.ErrOutputTooLarge},
+			"The transcription hook failed: printed more than 1 MiB. The original text was pasted.",
+		},
+		{
+			"something else", errors.New("hook /cfg/hooks/transcription: not a file"),
+			"The transcription hook failed: hook /cfg/hooks/transcription: not a file. The original text was pasted.",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			n := HookFailed(tt.err)
+			if n.Code != CodeHookFailed || n.Level != LevelWarning || n.Source != SourceText || n.Persistent() || n.Message != tt.want {
+				t.Errorf("HookFailed: %+v\nwant message %q", n, tt.want)
+			}
+		})
+	}
+	long := HookFailed(&hook.Error{Path: path, Err: exit, Stderr: strings.Repeat("é", 500)})
+	if n := utf8.RuneCountInString(long.Message); n > hookReasonLen+60 || !strings.Contains(long.Message, "…. The original") {
+		t.Errorf("a long reason is not clipped (%d characters): %q", n, long.Message)
 	}
 }
 
