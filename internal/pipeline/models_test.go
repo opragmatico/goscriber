@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/opragmatico/goscriber/internal/config"
 	"github.com/opragmatico/goscriber/internal/engine"
@@ -131,8 +132,20 @@ func TestCatalogModels(t *testing.T) {
 		t.Errorf("model %+v", m)
 	}
 
-	// A damaged file.
+	// A damaged file: other bytes of the same size, and a later modification
+	// time, as a file changed after it was verified has. The time is moved on
+	// by hand because Linux stamps it from a coarse clock, so a rewrite as
+	// quick as this one keeps the old time, and the verifier rightly trusts
+	// its record of a file whose size and time have not changed.
+	fi, err := os.Stat(eng)
+	if err != nil {
+		t.Fatal(err)
+	}
 	put(t, dir, "english.gguf", "english.ggux")
+	later := fi.ModTime().Add(time.Second)
+	if err := os.Chtimes(eng, later, later); err != nil {
+		t.Fatal(err)
+	}
 	m, err = src.Resolve(settings(func(s *config.Settings) { s.SelectedModel = "english" }))
 	if !errors.Is(err, ErrModelCorrupt) || m.Name != "Model english" {
 		t.Errorf("model %+v, err %v; want ErrModelCorrupt with the name", m, err)
