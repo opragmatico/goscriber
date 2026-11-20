@@ -25,12 +25,28 @@ type calls map[string]int
 func (c calls) actions() TrayActions {
 	count := func(name string) func() { return func() { c[name]++ } }
 	return TrayActions{
-		StartDictation: count("start"),
-		StopDictation:  count("stop"),
-		Cancel:         count("cancel"),
-		OpenModels:     count("models"),
-		OpenSettings:   count("settings"),
-		Quit:           count("quit"),
+		StartDictation:     count("start"),
+		StopDictation:      count("stop"),
+		Cancel:             count("cancel"),
+		CopyLastTranscript: count("copy"),
+		UseModel:           func(m TrayModel) { c["use "+m.ID+" "+m.Quant]++ },
+		OpenModels:         count("models"),
+		UnloadModel:        count("unload"),
+		OpenSettings:       count("settings"),
+		CheckForUpdates:    count("updates"),
+		Quit:               count("quit"),
+	}
+}
+
+var (
+	trayParakeet = TrayModel{ID: "parakeet-tdt-0.6b-v2", Name: "Parakeet TDT 0.6B v2", Quant: "Q8_0"}
+	trayNemotron = TrayModel{ID: "nemotron-3.5-asr-streaming-0.6b", Name: "Nemotron Streaming 3.5", Quant: "Q8_0"}
+)
+
+func sameLabels(t *testing.T, m *fyne.Menu, want ...string) {
+	t.Helper()
+	if got := labels(m); strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("menu = %v, want %v", got, want)
 	}
 }
 
@@ -89,12 +105,13 @@ func TestTrayWithoutModelOffersDownload(t *testing.T) {
 	if host.icon != TrayIcon(TrayIdle) {
 		t.Error("the tray should start with the idle icon")
 	}
-	want := []string{LabelStartDictation, LabelCancel, "---", LabelNoModel, "---", LabelSettings, "---", LabelQuit}
-	if got := labels(host.menu); strings.Join(got, "|") != strings.Join(want, "|") {
-		t.Errorf("menu = %v, want %v", got, want)
-	}
+	sameLabels(t, host.menu, LabelStartDictation, LabelCancel, LabelCopyLastTranscript, "---",
+		LabelNoModel, LabelUnloadModel, "---", LabelSettings, LabelCheckForUpdates, "---", LabelQuit)
 	if !findItem(t, host.menu, LabelStartDictation).Disabled || !findItem(t, host.menu, LabelCancel).Disabled {
 		t.Error("dictation items must be disabled without a model")
+	}
+	if !findItem(t, host.menu, LabelUnloadModel).Disabled {
+		t.Error("nothing to unload without a model")
 	}
 	click(t, findItem(t, host.menu, LabelNoModel))
 	click(t, findItem(t, host.menu, LabelSettings))
@@ -105,16 +122,19 @@ func TestTrayWithoutModelOffersDownload(t *testing.T) {
 
 func TestTrayWithModel(t *testing.T) {
 	host, c := &fakeHost{}, calls{}
-	NewTray(host, TrayOptions{Actions: c.actions(), Model: "Parakeet TDT 0.6B v2"})
+	NewTray(host, TrayOptions{Actions: c.actions(), Model: trayParakeet})
 
-	model := findItem(t, host.menu, LabelModelPrefix)
-	if model.Label != "Model: Parakeet TDT 0.6B v2" {
-		t.Errorf("model item = %q", model.Label)
+	model := findItem(t, host.menu, trayParakeet.Name)
+	if model.ChildMenu == nil {
+		t.Fatal("the model item should open a submenu")
 	}
 	if hasItem(host.menu, LabelNoModel) {
 		t.Error("the download item should be gone once a model is ready")
 	}
-	click(t, model)
+	// Before the downloaded models are listed, the submenu still leads to
+	// the Models page.
+	sameLabels(t, model.ChildMenu, LabelManageModels)
+	click(t, findItem(t, model.ChildMenu, LabelManageModels))
 	click(t, findItem(t, host.menu, LabelStartDictation))
 	if !findItem(t, host.menu, LabelCancel).Disabled {
 		t.Error("Cancel should be disabled while idle")
@@ -126,7 +146,7 @@ func TestTrayWithModel(t *testing.T) {
 
 func TestTrayStatesChangeIconAndItems(t *testing.T) {
 	host, c := &fakeHost{}, calls{}
-	tray := NewTray(host, TrayOptions{Actions: c.actions(), Model: "m"})
+	tray := NewTray(host, TrayOptions{Actions: c.actions(), Model: trayParakeet})
 
 	tray.SetState(TrayRecording)
 	if host.icon != TrayIcon(TrayRecording) || tray.State() != TrayRecording {
@@ -159,6 +179,9 @@ func TestTrayWithoutModelKeepsDictationDisabledInEveryState(t *testing.T) {
 	for _, s := range TrayStates {
 		tray.SetState(s)
 		dictate := host.menu.Items[0]
+		if dictate.Label == LabelCopyLastTranscript {
+			t.Fatalf("%v: no dictation item first", s)
+		}
 		if !dictate.Disabled || !findItem(t, host.menu, LabelCancel).Disabled {
 			t.Errorf("%v: dictation items enabled without a model", s)
 		}
@@ -168,11 +191,11 @@ func TestTrayWithoutModelKeepsDictationDisabledInEveryState(t *testing.T) {
 func TestTrayModelCanComeAndGo(t *testing.T) {
 	host := &fakeHost{}
 	tray := NewTray(host, TrayOptions{Actions: calls{}.actions()})
-	tray.SetModel("Nemotron")
+	tray.SetModel(trayNemotron)
 	if findItem(t, host.menu, LabelStartDictation).Disabled {
 		t.Error("Start should be enabled once a model is ready")
 	}
-	tray.SetModel("")
+	tray.SetModel(TrayModel{})
 	if !hasItem(host.menu, LabelNoModel) || !findItem(t, host.menu, LabelStartDictation).Disabled {
 		t.Error("removing the model should bring back the download item")
 	}
@@ -182,13 +205,12 @@ func TestTrayModelCanComeAndGo(t *testing.T) {
 // dictation stays available.
 func TestTrayShowsTheModelLoading(t *testing.T) {
 	host, c := &fakeHost{}, calls{}
-	tray := NewTray(host, TrayOptions{Actions: c.actions(), Model: "parakeet-tdt-0.6b-v2"})
+	tray := NewTray(host, TrayOptions{Actions: c.actions(), Model: trayParakeet})
 
 	tray.SetLoading("Parakeet TDT 0.6B v2")
-	want := []string{LabelStartDictation, LabelCancel, "---", "Model: parakeet-tdt-0.6b-v2", "Loading Parakeet TDT 0.6B v2…", "---", LabelSettings, "---", LabelQuit}
-	if got := labels(host.menu); strings.Join(got, "|") != strings.Join(want, "|") {
-		t.Errorf("menu = %v, want %v", got, want)
-	}
+	sameLabels(t, host.menu, LabelStartDictation, LabelCancel, LabelCopyLastTranscript, "---",
+		trayParakeet.Name, "Loading Parakeet TDT 0.6B v2…", LabelUnloadModel, "---",
+		LabelSettings, LabelCheckForUpdates, "---", LabelQuit)
 	if !findItem(t, host.menu, LabelLoadingPrefix).Disabled {
 		t.Error("the loading item is only a status")
 	}
@@ -268,15 +290,18 @@ func TestTrayDebugMenuDrivesTheIcon(t *testing.T) {
 
 func TestTraySkipsUnchangedUpdates(t *testing.T) {
 	host := &fakeHost{}
-	tray := NewTray(host, TrayOptions{Actions: calls{}.actions(), Model: "m"})
+	tray := NewTray(host, TrayOptions{Actions: calls{}.actions(), Model: trayParakeet})
+	tray.SetModels([]TrayModel{trayParakeet, trayNemotron})
 	menus, icons := host.menus, host.icons
 	tray.SetState(TrayIdle)
-	tray.SetModel("m")
+	tray.SetModel(trayParakeet)
+	tray.SetModels([]TrayModel{trayParakeet, trayNemotron})
+	tray.SetResident(false)
 	tray.SetDebug(false)
 	if host.menus != menus || host.icons != icons {
 		t.Errorf("unchanged updates touched the tray: %d menus, %d icons", host.menus-menus, host.icons-icons)
 	}
-	tray.SetModel("other")
+	tray.SetModel(trayNemotron)
 	if host.menus != menus+1 || host.icons != icons {
 		t.Error("a model change should rebuild the menu only")
 	}
@@ -367,5 +392,130 @@ func TestTrayAlert(t *testing.T) {
 	}
 	if !bytes.HasPrefix(trayAttentionSVG, []byte("<svg ")) {
 		t.Error("the attention icon is not an SVG")
+	}
+}
+
+// The menu follows Handy's: the version, Copy Last Transcript, the model
+// with its submenu and Unload Model, Settings… and Check for Updates…, Quit;
+// with dictation's own items alongside.
+func TestTrayMenuLayout(t *testing.T) {
+	host, c := &fakeHost{}, calls{}
+	tray := NewTray(host, TrayOptions{Actions: c.actions(), Version: "v1.2.3", Model: trayParakeet})
+	tray.SetModels([]TrayModel{trayParakeet, trayNemotron})
+	tray.SetResident(true)
+
+	sameLabels(t, host.menu, "Goscriber v1.2.3", "---",
+		LabelStartDictation, LabelCancel, LabelCopyLastTranscript, "---",
+		trayParakeet.Name, LabelUnloadModel, "---",
+		LabelSettings, LabelCheckForUpdates, "---",
+		LabelQuit)
+	version := findItem(t, host.menu, "Goscriber v1.2.3")
+	if !version.Disabled {
+		t.Error("the version is only a heading")
+	}
+	if s := findItem(t, host.menu, LabelSettings).Shortcut; s == nil || s.ShortcutName() == "" {
+		t.Error("Settings… should keep its shortcut")
+	}
+
+	click(t, findItem(t, host.menu, LabelCopyLastTranscript))
+	click(t, findItem(t, host.menu, LabelCheckForUpdates))
+	click(t, findItem(t, host.menu, LabelUnloadModel))
+	if c["copy"] != 1 || c["updates"] != 1 || c["unload"] != 1 {
+		t.Errorf("calls = %v", c)
+	}
+
+	// An alert goes under the version.
+	tray.SetAlert(&TrayAlert{Label: "⚠ Alert"})
+	if got := labels(host.menu); got[0] != "Goscriber v1.2.3" || got[2] != "⚠ Alert" || got[3] != "---" {
+		t.Errorf("menu %v, want the alert under the version", got)
+	}
+}
+
+// The model submenu lists the downloaded models, checks the selected one,
+// and switches to another with its quantisation.
+func TestTrayModelSubmenuSwitchesModels(t *testing.T) {
+	host, c := &fakeHost{}, calls{}
+	tray := NewTray(host, TrayOptions{Actions: c.actions(), Model: TrayModel{ID: trayParakeet.ID, Name: trayParakeet.Name}})
+	tray.SetModels([]TrayModel{trayParakeet, trayNemotron})
+
+	sub := findItem(t, host.menu, trayParakeet.Name).ChildMenu
+	sameLabels(t, sub, trayParakeet.Name, trayNemotron.Name, "---", LabelManageModels)
+	if !findItem(t, sub, trayParakeet.Name).Checked || findItem(t, sub, trayNemotron.Name).Checked {
+		t.Error("only the selected model should be checked")
+	}
+
+	click(t, findItem(t, sub, trayParakeet.Name))
+	click(t, findItem(t, sub, trayNemotron.Name))
+	if len(c) != 1 || c["use "+trayNemotron.ID+" Q8_0"] != 1 {
+		t.Errorf("calls = %v; want only the switch to Nemotron", c)
+	}
+
+	tray.SetModel(TrayModel{ID: trayNemotron.ID, Name: trayNemotron.Name})
+	sub = findItem(t, host.menu, trayNemotron.Name).ChildMenu
+	if findItem(t, sub, trayParakeet.Name).Checked || !findItem(t, sub, trayNemotron.Name).Checked {
+		t.Error("the check should follow the selected model")
+	}
+}
+
+// Downloaded models with none selected: the submenu asks for a choice, and
+// dictation waits for it.
+func TestTrayAsksForAModelWhenNoneIsSelected(t *testing.T) {
+	host, c := &fakeHost{}, calls{}
+	tray := NewTray(host, TrayOptions{Actions: c.actions()})
+	tray.SetModels([]TrayModel{trayNemotron})
+
+	if hasItem(host.menu, LabelNoModel) {
+		t.Error("with a model downloaded, the menu should not offer the download")
+	}
+	sub := findItem(t, host.menu, LabelChooseModel).ChildMenu
+	if sub == nil {
+		t.Fatal("no model submenu")
+	}
+	if findItem(t, sub, trayNemotron.Name).Checked {
+		t.Error("nothing is selected")
+	}
+	if !findItem(t, host.menu, LabelStartDictation).Disabled {
+		t.Error("dictation needs a selected model")
+	}
+	click(t, findItem(t, sub, trayNemotron.Name))
+	if c["use "+trayNemotron.ID+" Q8_0"] != 1 {
+		t.Errorf("calls = %v", c)
+	}
+
+	tray.SetModels(nil)
+	if !hasItem(host.menu, LabelNoModel) {
+		t.Error("with nothing downloaded, the download item should return")
+	}
+}
+
+// Unload Model is there only for a model in memory that nothing is using.
+func TestTrayUnloadModel(t *testing.T) {
+	host, c := &fakeHost{}, calls{}
+	tray := NewTray(host, TrayOptions{Actions: c.actions(), Model: trayParakeet})
+	if !findItem(t, host.menu, LabelUnloadModel).Disabled {
+		t.Error("nothing to unload before a model is in memory")
+	}
+
+	tray.SetResident(true)
+	click(t, findItem(t, host.menu, LabelUnloadModel))
+	if c["unload"] != 1 {
+		t.Errorf("calls = %v", c)
+	}
+
+	for _, s := range []TrayState{TrayRecording, TrayTranscribing} {
+		tray.SetState(s)
+		if !findItem(t, host.menu, LabelUnloadModel).Disabled {
+			t.Errorf("%v: the model is in use", s)
+		}
+	}
+	tray.SetState(TrayIdle)
+	tray.SetLoading(trayParakeet.Name)
+	if !findItem(t, host.menu, LabelUnloadModel).Disabled {
+		t.Error("a model loading cannot be unloaded")
+	}
+	tray.SetLoading("")
+	tray.SetResident(false)
+	if !findItem(t, host.menu, LabelUnloadModel).Disabled {
+		t.Error("an unloaded model cannot be unloaded again")
 	}
 }

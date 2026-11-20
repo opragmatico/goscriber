@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -508,4 +509,110 @@ func (b *lockedBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
+}
+
+// UnloadNow frees the model as the idle timeout would: it stays selected, and
+// the next call loads the same spec again.
+func TestUnloadNowKeepsTheModelSelected(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		inner, e := loaded(t, fake.Script{Replies: []fake.Reply{fake.Transcript("hello")}}, timeout)
+		unloaded, err := e.UnloadNow(t.Context())
+		if err != nil || !unloaded {
+			t.Fatalf("UnloadNow() = %v, %v; want the model unloaded", unloaded, err)
+		}
+		wantResident(t, e, inner, false)
+		if info, ok := e.Model(); !ok || info.ID != spec.ID {
+			t.Errorf("Model() = %+v, %v; UnloadNow must keep the model selected", info, ok)
+		}
+		sleep(2 * timeout) // the cancelled idle timer must not unload again
+		if inner.Unloads() != 1 {
+			t.Errorf("inner unloads = %d, want 1", inner.Unloads())
+		}
+
+		recognize(t, e)
+		wantResident(t, e, inner, true)
+		if loads := inner.Loads(); len(loads) != 2 || loads[1] != spec {
+			t.Errorf("inner loads = %+v, want the same spec loaded again", loads)
+		}
+	})
+}
+
+// A model in use, or not in memory, is left as it is.
+func TestUnloadNowLeavesABusyOrAbsentModel(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		inner, e := loaded(t, fake.Script{}, timeout)
+		release, err := e.Acquire(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if unloaded, err := e.UnloadNow(t.Context()); err != nil || unloaded {
+			t.Errorf("UnloadNow() while held = %v, %v; want nothing unloaded", unloaded, err)
+		}
+		wantResident(t, e, inner, true)
+		release()
+
+		sleep(timeout)
+		wantResident(t, e, inner, false)
+		if unloaded, err := e.UnloadNow(t.Context()); err != nil || unloaded {
+			t.Errorf("UnloadNow() after an idle unload = %v, %v; want nothing unloaded", unloaded, err)
+		}
+		if inner.Unloads() != 1 {
+			t.Errorf("inner unloads = %d, want only the idle one", inner.Unloads())
+		}
+	})
+
+	e := autounload.New(fake.New(fake.Script{}), timeout, quiet)
+	if unloaded, err := e.UnloadNow(t.Context()); err != nil || unloaded {
+		t.Errorf("UnloadNow() before a load = %v, %v; want nothing unloaded", unloaded, err)
+	}
+}
+
+// The change signal follows the model into memory and out of it, every way
+// it can go.
+func TestOnChangeFollowsTheModel(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		inner := fake.New(fake.Script{Replies: []fake.Reply{fake.Transcript("a"), fake.Transcript("b")}})
+		e := autounload.New(inner, timeout, quiet)
+		var (
+			mu   sync.Mutex // the idle unload signals from its timer
+			seen []bool
+		)
+		e.SetOnChange(func() {
+			mu.Lock()
+			defer mu.Unlock()
+			seen = append(seen, e.Resident())
+		})
+		want := func(what string, w ...bool) {
+			t.Helper()
+			mu.Lock()
+			defer mu.Unlock()
+			if !slices.Equal(seen, w) {
+				t.Fatalf("after %s: signals saw %v, want %v", what, seen, w)
+			}
+		}
+
+		if _, err := e.Load(t.Context(), spec); err != nil {
+			t.Fatal(err)
+		}
+		want("the load", true)
+		if _, err := e.UnloadNow(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		want("UnloadNow", true, false)
+		recognize(t, e)
+		want("the reload", true, false, true)
+		sleep(timeout)
+		want("the idle unload", true, false, true, false)
+		recognize(t, e)
+		if err := e.Unload(); err != nil {
+			t.Fatal(err)
+		}
+		want("Unload", true, false, true, false, true, false)
+
+		e.SetOnChange(nil)
+		if _, err := e.Load(t.Context(), spec); err != nil {
+			t.Fatal(err)
+		}
+		want("a load after the signal was stopped", true, false, true, false, true, false)
+	})
 }

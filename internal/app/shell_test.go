@@ -175,14 +175,19 @@ func TestTrayOpensSettingsPages(t *testing.T) {
 		t.Errorf("Settings… opened page %v (onboarding %v)", sh.settings.Page(), on)
 	}
 
-	// With a model selected, the model item opens the Models page.
+	// With a model selected, the model submenu's Manage Models… opens the
+	// Models page.
 	if err := sh.rt.Settings.Update(func(s *config.Settings) { s.SelectedModel = "parakeet-tdt-0.6b-v2" }); err != nil {
 		t.Fatal(err)
 	}
 	q.runNext(t)
-	item(t, a.menu, ui.LabelModelPrefix+"parakeet-tdt-0.6b-v2").Action()
+	model := item(t, a.menu, "Parakeet TDT 0.6B v2")
+	if model.ChildMenu == nil {
+		t.Fatal("the model item has no submenu")
+	}
+	item(t, model.ChildMenu, ui.LabelManageModels).Action()
 	if sh.settings.Page() != ui.PageModels {
-		t.Errorf("the model item opened page %v", sh.settings.Page())
+		t.Errorf("Manage Models… opened page %v", sh.settings.Page())
 	}
 
 	sh.settingsClosed()
@@ -204,7 +209,7 @@ func TestTrayFollowsSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	q.runNext(t)
-	item(t, a.menu, ui.LabelModelPrefix+"parakeet-tdt-0.6b-v2")
+	item(t, a.menu, "Parakeet TDT 0.6B v2")
 	if item(t, a.menu, ui.LabelStartDictation).Disabled {
 		t.Error("Start should be enabled once a model is selected")
 	}

@@ -43,6 +43,7 @@ type Engine struct {
 	timeout  time.Duration    // idle time before an unload; negative means never
 	timer    *time.Timer      // the pending idle unload, if any
 	armed    uint64           // bumped whenever the timer is replaced or stopped
+	onChange func()           // told when the model comes into or leaves memory; may be nil
 }
 
 var _ engine.Engine = (*Engine)(nil)
@@ -76,14 +77,17 @@ func (e *Engine) Load(ctx context.Context, spec engine.LoadSpec) (engine.ModelIn
 	info, err := e.inner.Load(ctx, spec)
 
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	if err != nil {
 		// The inner engine unloads the old model before it loads a new one.
 		e.spec, e.info, e.resident = nil, engine.ModelInfo{}, false
+		e.mu.Unlock()
+		e.changed()
 		return engine.ModelInfo{}, err
 	}
 	e.spec, e.info, e.resident = &spec, cloneInfo(info), true
 	e.armLocked()
+	e.mu.Unlock()
+	e.changed()
 	return info, nil
 }
 
@@ -99,7 +103,59 @@ func (e *Engine) Unload() error {
 	e.disarmLocked()
 	e.spec, e.info, e.resident = nil, engine.ModelInfo{}, false
 	e.mu.Unlock()
+	defer e.changed()
 	return e.inner.Unload()
+}
+
+// UnloadNow frees the model's memory at once, as the idle timeout would: the
+// model stays selected, and the next call loads it again. It reports whether
+// it unloaded anything: a model in use, or not in memory, stays as it is. It
+// waits for a load or unload in progress, giving up when ctx is done first.
+func (e *Engine) UnloadNow(ctx context.Context) (bool, error) {
+	if err := e.lock(ctx); err != nil {
+		return false, cancelled("unload", err)
+	}
+	defer e.unlock()
+
+	e.mu.Lock()
+	if e.busy > 0 || !e.resident {
+		e.mu.Unlock()
+		return false, nil
+	}
+	e.disarmLocked()
+	e.resident = false
+	model := e.spec.ID
+	e.mu.Unlock()
+	defer e.changed()
+
+	// As after an idle unload that failed, the model counts as unloaded:
+	// the next call loads it again.
+	if err := e.inner.Unload(); err != nil {
+		return false, err
+	}
+	e.log.Info("model unloaded on request", "model", model)
+	return true, nil
+}
+
+// SetOnChange has f told whenever the model comes into memory or leaves it:
+// a load, a reload after an idle unload, an idle unload, UnloadNow, Unload or
+// a failed load. It is a signal, so f reads Resident for the news; it runs on
+// the goroutine that made the change, while loads and unloads wait for it,
+// so it must return at once and not call into the Engine. nil stops it.
+func (e *Engine) SetOnChange(f func()) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.onChange = f
+}
+
+// changed tells onChange that the model came or went. e.mu must not be held.
+func (e *Engine) changed() {
+	e.mu.Lock()
+	f := e.onChange
+	e.mu.Unlock()
+	if f != nil {
+		f()
+	}
 }
 
 // Recognize implements engine.Engine, reloading the model first if it was
@@ -206,6 +262,7 @@ func (e *Engine) reload(ctx context.Context, spec engine.LoadSpec) error {
 	e.mu.Lock()
 	e.info, e.resident = cloneInfo(info), true
 	e.mu.Unlock()
+	e.changed()
 	e.log.Info("model reloaded after an idle unload", "model", spec.ID, "took", time.Since(start).Round(time.Millisecond))
 	return nil
 }
@@ -254,6 +311,7 @@ func (e *Engine) expire(id uint64) {
 	e.timer, e.resident = nil, false
 	model, idle := e.spec.ID, e.timeout
 	e.mu.Unlock()
+	defer e.changed()
 
 	// Holding sem keeps new calls out until the model is gone; they then
 	// reload it.
