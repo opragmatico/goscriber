@@ -181,13 +181,22 @@ func (testModels) Resolve(s config.Settings) (pipeline.Model, error) {
 }
 
 // waitUI runs UI updates until cond holds.
+//
+// cond is checked after each UI update and every few milliseconds besides:
+// many conditions change on a goroutine of their own, such as a delivery or
+// the login item's follower, and no UI update need come after the change.
+// Waiting for the next update alone would then sit out the deadline whenever
+// the change came after the last one, as it often does on Linux.
 func (q uiQueue) waitUI(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.After(3 * time.Second)
+	poll := time.NewTicker(5 * time.Millisecond)
+	defer poll.Stop()
 	for !cond() {
 		select {
 		case f := <-q:
 			f()
+		case <-poll.C:
 		case <-deadline:
 			t.Fatalf("timed out waiting for %s", what)
 		}
