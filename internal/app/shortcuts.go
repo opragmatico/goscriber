@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/opragmatico/goscriber/internal/config"
 	"github.com/opragmatico/goscriber/internal/hotkey"
 	"github.com/opragmatico/goscriber/internal/notice"
 	"github.com/opragmatico/goscriber/internal/session"
@@ -25,9 +26,9 @@ type desktopShortcuts interface {
 
 // desktopShortcutsOptions configure openDesktopShortcuts.
 type desktopShortcutsOptions struct {
-	// Suggest returns the shortcuts to suggest to the desktop, as settings
-	// store them.
-	Suggest func() (transcribe, cancel string)
+	// Suggest returns the shortcut to suggest to the desktop for a
+	// purpose, as settings store it.
+	Suggest func(hotkey.Purpose) string
 	// OnStatus is told each change in what the desktop bound.
 	OnStatus func(ui.DesktopShortcuts)
 	Log      *slog.Logger
@@ -68,10 +69,7 @@ func (sh *shell) openShortcutPortal() hotkey.Backend {
 	ctx, cancel := context.WithTimeout(context.Background(), portalTimeout)
 	defer cancel()
 	ds, err := openDesktopShortcuts(ctx, desktopShortcutsOptions{
-		Suggest: func() (string, string) {
-			s := sh.rt.Settings.Get()
-			return s.TranscribeShortcut, s.CancelShortcut
-		},
+		Suggest:  func(p hotkey.Purpose) string { return suggestedShortcut(sh.rt.Settings.Get(), p) },
 		OnStatus: sh.desktopShortcutsChanged,
 		Log:      sh.rt.Log.Logger,
 	})
@@ -88,6 +86,20 @@ func (sh *shell) openShortcutPortal() hotkey.Backend {
 		sh.portal = ds
 	}
 	return ds
+}
+
+// suggestedShortcut is the shortcut the settings give purpose p.
+func suggestedShortcut(s config.Settings, p hotkey.Purpose) string {
+	switch p {
+	case hotkey.PurposeTranscribe:
+		return s.TranscribeShortcut
+	case hotkey.PurposePostProcess:
+		return s.PostProcessShortcut
+	case hotkey.PurposeCancel:
+		return s.CancelShortcut
+	default:
+		return ""
+	}
 }
 
 // desktopShortcutsChanged shows what the desktop bound, and the problem

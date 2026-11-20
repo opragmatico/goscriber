@@ -261,15 +261,16 @@ func TestShortcutDrivesDictation(t *testing.T) {
 	writeSettings(t, home, `{"schema_version": 1, "selected_model": "m", "transcribe_shortcut": "ctrl+shift+d", "activation_mode": "toggle"}`)
 	a := &trayApp{plainApp: plainApp{App: test.NewTempApp(t)}}
 	sh, q := newTestShell(t, a, Options{})
-	testShortcuts.waitLog(t, "+ctrl+shift+d")
+	polish := "+" + defaultPolish(t)
+	testShortcuts.waitLog(t, "+ctrl+shift+d", polish)
 	out := sh.svc.output.(*testOutput)
 
 	testShortcuts.press(t, "ctrl+shift+d")
 	q.waitUI(t, "recording", func() bool { return sh.recording })
-	testShortcuts.waitLog(t, "+ctrl+shift+d", "+escape")
+	testShortcuts.waitLog(t, "+ctrl+shift+d", polish, "+escape")
 	testShortcuts.down(t, "escape")
 	q.waitUI(t, "idle", func() bool { return a.trayIcon == ui.TrayIcon(ui.TrayIdle) && !sh.recording })
-	testShortcuts.waitLog(t, "+ctrl+shift+d", "+escape", "-escape")
+	testShortcuts.waitLog(t, "+ctrl+shift+d", polish, "+escape", "-escape")
 
 	testShortcuts.press(t, "ctrl+shift+d")
 	q.waitUI(t, "recording", func() bool { return sh.recording })
@@ -286,7 +287,7 @@ func TestShortcutWithoutAModel(t *testing.T) {
 	writeSettings(t, home, `{"schema_version": 1, "transcribe_shortcut": "ctrl+shift+d"}`)
 	a := &trayApp{plainApp: plainApp{App: test.NewTempApp(t)}}
 	sh, q := newTestShell(t, a, Options{})
-	testShortcuts.waitLog(t, "+ctrl+shift+d")
+	testShortcuts.waitLog(t, "+ctrl+shift+d", "+"+defaultPolish(t))
 	q.runNext(t) // the launch notice
 	rec := sh.svc.recorder.(*testRecorder)
 

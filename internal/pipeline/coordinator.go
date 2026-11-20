@@ -59,6 +59,10 @@ const (
 	ActionStop                     // stop recording and transcribe it
 	ActionToggle                   // start when idle, stop when recording
 	ActionCancel                   // end the session and discard it
+	// ActionStartPostProcess starts recording a session whose transcript the
+	// LLM stage post-processes whatever llm_enabled says (see
+	// SessionInfo.PostProcess): the post-processing shortcut's start.
+	ActionStartPostProcess
 )
 
 func (a Action) String() string {
@@ -71,6 +75,8 @@ func (a Action) String() string {
 		return "toggle"
 	case ActionCancel:
 		return "cancel"
+	case ActionStartPostProcess:
+		return "start_post_process"
 	default:
 		return "none"
 	}
@@ -239,9 +245,12 @@ type session struct {
 	settings config.Settings
 	model    Model
 	phrases  []string // custom words the model is asked to favour
-	started  time.Time
-	frames   <-chan []float32 // the recording's audio as it arrives
-	rate     int              // of the recording
+	// postProcess asks the LLM stage to post-process the transcript
+	// whatever the settings say.
+	postProcess bool
+	started     time.Time
+	frames      <-chan []float32 // the recording's audio as it arrives
+	rate        int              // of the recording
 
 	// Written by one goroutine at a time, as the session moves on.
 	prepErr error       // why the model could not be made ready; engine goroutine only
@@ -314,8 +323,8 @@ func (c *Coordinator) do(a Action) {
 			return
 		}
 		switch a {
-		case ActionStart:
-			c.start()
+		case ActionStart, ActionStartPostProcess:
+			c.start(a)
 		case ActionStop:
 			c.stop()
 		case ActionToggle:
@@ -519,11 +528,12 @@ func (c *Coordinator) Close() {
 	}
 }
 
-// start runs on the actions goroutine.
-func (c *Coordinator) start() {
+// start runs on the actions goroutine, for ActionStart or
+// ActionStartPostProcess.
+func (c *Coordinator) start(a Action) {
 	c.mu.Lock()
 	if c.state != StateIdle {
-		c.refuseLocked(ActionStart, "a session is in progress")
+		c.refuseLocked(a, "a session is in progress")
 		c.mu.Unlock()
 		return
 	}
@@ -533,14 +543,14 @@ func (c *Coordinator) start() {
 	model, err := c.models.Resolve(settings)
 	if err != nil {
 		c.modelUnavailable(model, err)
-		c.refuse(ActionStart, "no model is ready")
+		c.refuse(a, "no model is ready")
 		return
 	}
 	if c.micOK != nil && !c.micOK() {
 		c.log.Info("dictation cannot start: no microphone permission")
 		c.notices.Resolve(notice.CodeMicrophoneDenied)
 		c.notices.Publish(notice.MicrophoneDenied())
-		c.refuse(ActionStart, "no microphone permission")
+		c.refuse(a, "no microphone permission")
 		return
 	}
 	// The start cue plays to its end before capture starts, so the
@@ -553,7 +563,7 @@ func (c *Coordinator) start() {
 	if err := c.rec.Start(); err != nil {
 		c.feedbackStop(settings, true)
 		c.notices.Publish(notice.MicrophoneUnavailable(fmt.Sprintf("The microphone could not be opened: %v.", err)))
-		c.refuse(ActionStart, "the microphone could not be opened")
+		c.refuse(a, "the microphone could not be opened")
 		return
 	}
 	frames, rate := c.rec.Frames(), c.rec.SampleRate()
@@ -562,20 +572,21 @@ func (c *Coordinator) start() {
 	c.mu.Lock()
 	c.lastID++
 	s := &session{
-		id:       c.lastID,
-		ctx:      ctx,
-		cancel:   cancel,
-		settings: settings,
-		model:    model,
-		phrases:  boostedWords(model, settings),
-		started:  time.Now(),
-		frames:   frames,
-		rate:     rate,
+		id:          c.lastID,
+		ctx:         ctx,
+		cancel:      cancel,
+		settings:    settings,
+		model:       model,
+		phrases:     boostedWords(model, settings),
+		postProcess: a == ActionStartPostProcess,
+		started:     time.Now(),
+		frames:      frames,
+		rate:        rate,
 	}
 	c.sess = s
 	c.setStateLocked(StateRecording, s.id)
 	c.mu.Unlock()
-	c.log.Info("dictation started", "session", s.id, "model", model.Spec.ID)
+	c.log.Info("dictation started", "session", s.id, "model", model.Spec.ID, "post_process", s.postProcess)
 	c.jobs.post(func() { c.prepare(s) })
 	c.jobs.post(func() { c.pump(s) })
 }
@@ -636,7 +647,7 @@ func (c *Coordinator) stop() {
 func (c *Coordinator) toggle() {
 	switch c.State() {
 	case StateIdle:
-		c.start()
+		c.start(ActionStart)
 	case StateRecording:
 		c.stop()
 	default:
@@ -867,6 +878,7 @@ func (c *Coordinator) finish(s *session, res engine.Result, samples []float32, r
 		TextLanguage: textLanguage(s.model, res.Languages),
 		Duration:     recordingLength(samples, rate, s.timings.recording),
 		Boosted:      len(s.phrases) > 0,
+		PostProcess:  s.postProcess,
 		Settings:     s.settings.Clone(),
 	}
 	text := res.Text

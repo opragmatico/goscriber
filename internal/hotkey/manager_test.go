@@ -406,11 +406,107 @@ func TestManagerSuspend(t *testing.T) {
 	h.wantAction(ActionStart)
 }
 
+// polish is how the backend names the post-processing shortcut in
+// withPostProcess, "option+shift+space".
+var polish = mustParse("option+shift+space").String()
+
+func withPostProcess(mode config.ActivationMode) Config {
+	c := cfg(mode)
+	c.PostProcess = "option+shift+space"
+	return c
+}
+
+func TestManagerPostProcessShortcut(t *testing.T) {
+	h := newHarness(t)
+	h.m.Apply(withPostProcess(config.ActivationToggle))
+	h.wantLog("+"+talk, "+"+polish)
+
+	h.be.send(t, polish, KeyDown)
+	h.wantAction(ActionStartPostProcess)
+	h.m.SetRecording(true)
+	h.be.send(t, polish, KeyUp)
+	h.be.send(t, talk, KeyDown) // the post-processing shortcut's recording
+	h.be.send(t, talk, KeyUp)
+	h.wantNoAction()
+	h.be.send(t, polish, KeyDown)
+	h.wantAction(ActionStop)
+	h.be.send(t, polish, KeyUp)
+	h.m.SetRecording(false)
+	h.wantLog("+"+talk, "+"+polish, "+escape", "-escape")
+
+	// Unset, it gives its keys back, and says nothing about it.
+	h.m.Apply(cfg(config.ActivationToggle))
+	h.wantLog("+"+talk, "+"+polish, "+escape", "-escape", "-"+polish)
+	select {
+	case err := <-h.errs:
+		t.Errorf("unexpected error %v", err)
+	default:
+	}
+}
+
+// The two shortcuts that start dictation may swap keys: both let go of
+// their keys before either registers.
+func TestManagerShortcutsSwapKeys(t *testing.T) {
+	h := newHarness(t)
+	h.m.Apply(withPostProcess(config.ActivationToggle))
+	swapped := withPostProcess(config.ActivationToggle)
+	swapped.Transcribe, swapped.PostProcess = swapped.PostProcess, swapped.Transcribe
+	h.m.Apply(swapped)
+	h.wantLog("+"+talk, "+"+polish, "-"+talk, "-"+polish, "+"+polish, "+"+talk)
+	h.be.send(t, talk, KeyDown)
+	h.wantAction(ActionStartPostProcess)
+}
+
+// The shortcuts may not share keys: the transcribe shortcut keeps them,
+// and the cancel shortcut gives way to both others.
+func TestManagerRefusesSharedKeys(t *testing.T) {
+	h := newHarness(t)
+	same := cfg(config.ActivationToggle)
+	same.PostProcess = "Option+Space"
+	h.m.Apply(same)
+	if rerr := h.wantError(PurposePostProcess); rerr.Error() != `the post-processing shortcut "Option+Space" is not available: it is the transcribe shortcut too` {
+		t.Errorf("error %v", rerr)
+	}
+	h.wantLog("+" + talk)
+
+	cancel := withPostProcess(config.ActivationToggle)
+	cancel.Cancel = "shift+option+space"
+	h.m.Apply(cancel)
+	h.m.SetRecording(true)
+	if rerr := h.wantError(PurposeCancel); rerr.Error() != `the cancel shortcut "shift+option+space" is not available: it is the post-processing shortcut too` {
+		t.Errorf("error %v", rerr)
+	}
+	h.wantLog("+"+talk, "+"+polish)
+}
+
+// Suspending gives the post-processing shortcut back too, and a press held
+// across the suspension does not linger.
+func TestManagerSuspendsThePostProcessShortcut(t *testing.T) {
+	h := newHarness(t)
+	h.m.Apply(withPostProcess(config.ActivationPushToTalk))
+	h.sync()
+	h.be.send(t, polish, KeyDown)
+	h.wantAction(ActionStartPostProcess)
+	h.m.SetRecording(false) // refused
+	h.m.Suspend(true)
+	h.wantLog("+"+talk, "+"+polish, "-"+talk, "-"+polish)
+	h.m.Suspend(false)
+	h.wantLog("+"+talk, "+"+polish, "-"+talk, "-"+polish, "+"+talk, "+"+polish)
+	h.be.send(t, talk, KeyDown) // the earlier press's key-up never came
+	h.wantAction(ActionStart)
+
+	h.m.Close()
+	<-h.m.Done()
+	if h.be.isActive(polish) {
+		t.Error("the post-processing shortcut is still registered after Close")
+	}
+}
+
 func TestConfigFrom(t *testing.T) {
 	s := config.Defaults()
-	s.TranscribeShortcut, s.CancelShortcut = "f5", "shift+escape"
+	s.TranscribeShortcut, s.PostProcessShortcut, s.CancelShortcut = "f5", "shift+f5", "shift+escape"
 	s.ActivationMode, s.HoldThresholdMS = config.ActivationPushToTalk, 450
-	want := Config{Transcribe: "f5", Cancel: "shift+escape", Mode: config.ActivationPushToTalk, HoldThreshold: 450 * time.Millisecond}
+	want := Config{Transcribe: "f5", PostProcess: "shift+f5", Cancel: "shift+escape", Mode: config.ActivationPushToTalk, HoldThreshold: 450 * time.Millisecond}
 	if got := ConfigFrom(s); got != want {
 		t.Errorf("ConfigFrom = %+v, want %+v", got, want)
 	}

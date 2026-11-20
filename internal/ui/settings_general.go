@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"errors"
 	"fmt"
 	"slices"
 
@@ -20,14 +19,12 @@ import (
 const SystemDefault = "System default"
 
 func (w *SettingsWindow) generalPage() fyne.CanvasObject {
-	transcribe := shortcutSetting(w, "transcribe_shortcut", hotkey.PurposeTranscribe,
-		func(s *config.Settings) *string { return &s.TranscribeShortcut },
-		func(s *config.Settings) *string { return &s.CancelShortcut })
-	cancel := shortcutSetting(w, "cancel_shortcut", hotkey.PurposeCancel,
-		func(s *config.Settings) *string { return &s.CancelShortcut },
-		func(s *config.Settings) *string { return &s.TranscribeShortcut })
+	transcribe := shortcutSetting(w, "transcribe_shortcut", hotkey.PurposeTranscribe, transcribeField, postProcessField, cancelField)
+	postProcess := shortcutSetting(w, "post_process_shortcut", hotkey.PurposePostProcess, postProcessField, transcribeField, cancelField)
+	cancel := shortcutSetting(w, "cancel_shortcut", hotkey.PurposeCancel, cancelField, transcribeField, postProcessField)
 
 	dictation := w.row("Dictation", dictationHint, transcribe)
+	postProcessRow := w.row("Post-processing", postProcessHint, postProcess)
 	cancelRow := w.row("Cancel", cancelHint, cancel)
 	var desktopKeys []fyne.CanvasObject
 	var keysView *desktopKeysView
@@ -36,6 +33,7 @@ func (w *SettingsWindow) generalPage() fyne.CanvasObject {
 		// the shortcuts, which the app learns after the window is built.
 		keysView = w.newDesktopKeysView()
 		dictation = w.row("Dictation", "", container.NewVBox(transcribe, keysView.dictationHint))
+		postProcessRow = w.row("Post-processing", "", container.NewVBox(postProcess, keysView.postProcessHint))
 		cancelRow = w.row("Cancel", "", container.NewVBox(cancel, keysView.cancelHint))
 		desktopKeys = append(desktopKeys, keysView.row)
 	}
@@ -43,6 +41,7 @@ func (w *SettingsWindow) generalPage() fyne.CanvasObject {
 	pg := settingsPage("General",
 		group("Shortcuts", append(desktopKeys,
 			dictation,
+			postProcessRow,
 			w.row("Activation", "How the dictation shortcut works.",
 				choiceSetting(w, "activation_mode", func(s *config.Settings) *config.ActivationMode { return &s.ActivationMode },
 					[]choice[config.ActivationMode]{
@@ -89,10 +88,26 @@ func (w *SettingsWindow) generalPage() fyne.CanvasObject {
 	return pg
 }
 
+// shortcutField is one of the shortcut settings, and how a refusal names
+// it.
+type shortcutField struct {
+	name  string
+	field func(*config.Settings) *string
+}
+
+var (
+	transcribeField  = shortcutField{"dictation", func(s *config.Settings) *string { return &s.TranscribeShortcut }}
+	postProcessField = shortcutField{"post-processing", func(s *config.Settings) *string { return &s.PostProcessShortcut }}
+	cancelField      = shortcutField{"cancel", func(s *config.Settings) *string { return &s.CancelShortcut }}
+)
+
 // shortcutSetting is a shortcut recorder bound to a shortcut field, with a
 // line for why a combination was refused and a button that puts the
-// default back. other is the other shortcut, which this one may not equal.
-func shortcutSetting(w *SettingsWindow, key string, purpose hotkey.Purpose, field, other func(*config.Settings) *string) fyne.CanvasObject {
+// default back. others are the other shortcuts, whose keys this one may
+// not take. The post-processing shortcut may also be none, which its
+// clear button sets.
+func shortcutSetting(w *SettingsWindow, key string, purpose hotkey.Purpose, setting shortcutField, others ...shortcutField) fyne.CanvasObject {
+	field := setting.field
 	in := NewShortcutInput(purpose)
 	problem := widget.NewLabel("")
 	problem.Importance = widget.DangerImportance
@@ -104,8 +119,10 @@ func shortcutSetting(w *SettingsWindow, key string, purpose hotkey.Purpose, fiel
 		problem.Refresh()
 	}
 	in.Check = func(b hotkey.Binding) error {
-		if o, err := hotkey.Parse(*other(&w.cur)); err == nil && o == b {
-			return errors.New("the other shortcut already uses it")
+		for _, o := range others {
+			if ob, err := hotkey.Parse(*o.field(&w.cur)); err == nil && ob == b {
+				return fmt.Errorf("the %s shortcut already uses it", o.name)
+			}
 		}
 		return nil
 	}
@@ -121,15 +138,33 @@ func shortcutSetting(w *SettingsWindow, key string, purpose hotkey.Purpose, fiel
 		in.OnError("")
 		setField(w, field, def)
 	})
+	buttons := container.NewHBox(reset)
+	var clearBtn *widget.Button
+	if purpose == hotkey.PurposePostProcess {
+		clearBtn = widget.NewButtonWithIcon("", theme.ContentClearIcon(), func() {
+			in.OnError("")
+			setField(w, field, "")
+		})
+		buttons.Objects = []fyne.CanvasObject{clearBtn, reset}
+	}
 	w.bind(key, anyField(field), in, func(s config.Settings) {
-		in.SetShortcut(*field(&s))
-		if *field(&s) == def {
-			reset.Disable()
-		} else {
-			reset.Enable()
+		cur := *field(&s)
+		in.SetShortcut(cur)
+		enable(reset, cur != def)
+		if clearBtn != nil {
+			enable(clearBtn, cur != "")
 		}
 	})
-	return container.NewVBox(container.NewBorder(nil, nil, nil, reset, in), problem)
+	return container.NewVBox(container.NewBorder(nil, nil, nil, buttons, in), problem)
+}
+
+// enable enables or disables b.
+func enable(b *widget.Button, on bool) {
+	if on {
+		b.Enable()
+	} else {
+		b.Disable()
+	}
 }
 
 // deviceState is what the device pickers offer.

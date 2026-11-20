@@ -3,6 +3,7 @@ package portal
 import (
 	"context"
 	"errors"
+	"maps"
 	"testing"
 	"time"
 
@@ -25,11 +26,14 @@ func TestTrigger(t *testing.T) {
 		{hotkey.PurposeTranscribe, "ctrl+f12", "CTRL+F12"},
 		{hotkey.PurposeTranscribe, "alt+7", "ALT+7"},
 		{hotkey.PurposeTranscribe, "ctrl+up", "CTRL+Up"},
+		{hotkey.PurposePostProcess, "ctrl+alt+shift+space", "CTRL+ALT+SHIFT+space"},
 		{hotkey.PurposeCancel, "ctrl+escape", "CTRL+Escape"},
 		{hotkey.PurposeCancel, "alt+tab", "ALT+Tab"},
 		// Plain keys the desktop would take from every app.
 		{hotkey.PurposeCancel, "escape", ""},
 		{hotkey.PurposeTranscribe, "space", ""},
+		{hotkey.PurposePostProcess, "shift+escape", "SHIFT+Escape"},
+		{hotkey.PurposePostProcess, "escape", ""},
 		{hotkey.PurposeTranscribe, "", ""},
 		{hotkey.PurposeTranscribe, "ctrl+nope", ""},
 	} {
@@ -42,14 +46,19 @@ func TestTrigger(t *testing.T) {
 func TestBindsTheShortcutsAndDeliversTheirKeys(t *testing.T) {
 	addr := newBus(t)
 	f := newFakePortal(t, addr, 1)
-	b, statuses := openTest(t, addr, Options{Suggest: func() (string, string) { return "ctrl+alt+space", "escape" }})
+	suggest := map[hotkey.Purpose]string{
+		hotkey.PurposeTranscribe: "ctrl+alt+space", hotkey.PurposePostProcess: "ctrl+alt+shift+space", hotkey.PurposeCancel: "escape",
+	}
+	b, statuses := openTest(t, addr, Options{Suggest: func(p hotkey.Purpose) string { return suggest[p] }})
 
 	if s := <-statuses; s.State != Asking || s.Configurable {
 		t.Fatalf("first status = %+v, want Asking and not configurable", s)
 	}
 	st := waitState(t, statuses, Bound)
-	want := map[hotkey.Purpose]string{hotkey.PurposeTranscribe: "CTRL+ALT+space", hotkey.PurposeCancel: ""}
-	if len(st.Triggers) != 2 || st.Triggers[hotkey.PurposeTranscribe] != want[hotkey.PurposeTranscribe] || st.Triggers[hotkey.PurposeCancel] != "" {
+	want := map[hotkey.Purpose]string{
+		hotkey.PurposeTranscribe: "CTRL+ALT+space", hotkey.PurposePostProcess: "CTRL+ALT+SHIFT+space", hotkey.PurposeCancel: "",
+	}
+	if !maps.Equal(st.Triggers, want) {
 		t.Fatalf("triggers = %v, want %v", st.Triggers, want)
 	}
 	f.mu.Lock()
@@ -59,20 +68,27 @@ func TestBindsTheShortcutsAndDeliversTheirKeys(t *testing.T) {
 		t.Errorf("registered app ID %q, want %q", appID, AppID)
 	}
 
-	// The desktop is asked for both shortcuts, with the transcribe one
-	// suggested and the cancel one's plain Escape not.
+	// The desktop is asked for the three shortcuts, with the transcribe
+	// and post-processing ones suggested and the cancel one's plain Escape
+	// not.
 	asked := f.askedFor()
-	if len(asked) != 2 || asked[0].ID != "transcribe" || asked[1].ID != "cancel" {
+	if len(asked) != 3 || asked[0].ID != "transcribe" || asked[1].ID != "post_process" || asked[2].ID != "cancel" {
 		t.Fatalf("asked for %+v", asked)
 	}
 	if got, _ := asked[0].Props["preferred_trigger"].Value().(string); got != "CTRL+ALT+space" {
 		t.Errorf("transcribe preferred_trigger = %q", got)
 	}
-	if _, ok := asked[1].Props["preferred_trigger"]; ok {
-		t.Errorf("cancel has a preferred_trigger: %v", asked[1].Props)
+	if got, _ := asked[1].Props["preferred_trigger"].Value().(string); got != "CTRL+ALT+SHIFT+space" {
+		t.Errorf("post_process preferred_trigger = %q", got)
+	}
+	if _, ok := asked[2].Props["preferred_trigger"]; ok {
+		t.Errorf("cancel has a preferred_trigger: %v", asked[2].Props)
 	}
 	if d, _ := asked[0].Props["description"].Value().(string); d != TranscribeDescription {
 		t.Errorf("transcribe description = %q", d)
+	}
+	if d, _ := asked[1].Props["description"].Value().(string); d != PostProcessDescription {
+		t.Errorf("post_process description = %q", d)
 	}
 
 	transcribe, err := b.Register(hotkey.PurposeTranscribe, hotkey.Binding{})
@@ -264,7 +280,9 @@ func TestCloseWhileTheDesktopAsks(t *testing.T) {
 func TestShortcutsChanged(t *testing.T) {
 	addr := newBus(t)
 	f := newFakePortal(t, addr, 1)
-	_, statuses := openTest(t, addr, Options{Suggest: func() (string, string) { return "ctrl+alt+space", "ctrl+escape" }})
+	_, statuses := openTest(t, addr, Options{Suggest: func(p hotkey.Purpose) string {
+		return map[hotkey.Purpose]string{hotkey.PurposeTranscribe: "ctrl+alt+space", hotkey.PurposeCancel: "ctrl+escape"}[p]
+	}})
 	waitState(t, statuses, Bound)
 
 	f.emit("ShortcutsChanged", dbus.ObjectPath("/org/freedesktop/portal/desktop/session/other/x"),

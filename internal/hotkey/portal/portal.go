@@ -109,11 +109,11 @@ func (s Status) clone() Status {
 
 // Options configure a Backend.
 type Options struct {
-	// Suggest returns the shortcuts to suggest to the desktop, as settings
-	// store them. The desktop asks the user about them the first time
-	// Goscriber binds its shortcuts and keeps the user's answer, so later
-	// suggestions change nothing. Nil suggests no keys.
-	Suggest func() (transcribe, cancel string)
+	// Suggest returns the shortcut to suggest to the desktop for a purpose,
+	// as settings store it. The desktop asks the user about them the first
+	// time Goscriber binds its shortcuts and keeps the user's answer, so
+	// later suggestions change nothing. Nil suggests no keys.
+	Suggest func(hotkey.Purpose) string
 	// OnStatus is told each change of Status, in order, from the
 	// Backend's goroutines. It must not block for long.
 	OnStatus func(Status)
@@ -128,8 +128,9 @@ type Options struct {
 }
 
 // Backend is a hotkey.Backend whose shortcuts the desktop binds through
-// the GlobalShortcuts portal. Open asks the desktop to bind the transcribe
-// and cancel shortcuts in one portal session, which lasts until Close:
+// the GlobalShortcuts portal. Open asks the desktop to bind the transcribe,
+// post-processing and cancel shortcuts in one portal session, which lasts
+// until Close:
 // the portal lets a session bind its shortcuts only once. Register only
 // connects a purpose's key events to a Registration, so the Manager may
 // register and unregister as often as it likes without asking the desktop
@@ -337,25 +338,25 @@ type shortcut struct {
 
 // Descriptions of the shortcuts, which the desktop shows.
 const (
-	TranscribeDescription = "Start and stop dictation"
-	CancelDescription     = "Cancel dictation"
+	TranscribeDescription  = "Start and stop dictation"
+	PostProcessDescription = "Start and stop dictation with post-processing"
+	CancelDescription      = "Cancel dictation"
 )
 
 func (b *Backend) shortcuts() []shortcut {
-	var transcribe, cancel string
-	if b.opts.Suggest != nil {
-		transcribe, cancel = b.opts.Suggest()
-	}
-	entry := func(p hotkey.Purpose, description, suggested string) shortcut {
+	entry := func(p hotkey.Purpose, description string) shortcut {
 		props := map[string]dbus.Variant{"description": dbus.MakeVariant(description)}
-		if t := Trigger(p, suggested); t != "" {
-			props["preferred_trigger"] = dbus.MakeVariant(t)
+		if b.opts.Suggest != nil {
+			if t := Trigger(p, b.opts.Suggest(p)); t != "" {
+				props["preferred_trigger"] = dbus.MakeVariant(t)
+			}
 		}
 		return shortcut{ID: string(p), Props: props}
 	}
 	return []shortcut{
-		entry(hotkey.PurposeTranscribe, TranscribeDescription, transcribe),
-		entry(hotkey.PurposeCancel, CancelDescription, cancel),
+		entry(hotkey.PurposeTranscribe, TranscribeDescription),
+		entry(hotkey.PurposePostProcess, PostProcessDescription),
+		entry(hotkey.PurposeCancel, CancelDescription),
 	}
 }
 

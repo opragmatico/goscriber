@@ -128,18 +128,56 @@ func TestShortcutFollowsSettings(t *testing.T) {
 	writeSettings(t, home, `{"schema_version": 1, "selected_model": "m", "transcribe_shortcut": "ctrl+shift+d", "activation_mode": "toggle"}`)
 	a := &trayApp{plainApp: plainApp{App: test.NewTempApp(t)}}
 	sh, q := newTestShell(t, a, Options{})
-	testShortcuts.waitLog(t, "+ctrl+shift+d")
+	polish := "+" + defaultPolish(t)
+	testShortcuts.waitLog(t, "+ctrl+shift+d", polish)
 
-	// A new shortcut in the settings replaces the old one without a restart.
+	// A new shortcut in the settings replaces the old one without a restart,
+	// and leaves the post-processing shortcut as it is.
 	if err := sh.rt.Settings.Update(func(s *config.Settings) { s.TranscribeShortcut = "f5" }); err != nil {
 		t.Fatal(err)
 	}
 	q.runNext(t)
-	testShortcuts.waitLog(t, "+ctrl+shift+d", "-ctrl+shift+d", "+f5")
+	testShortcuts.waitLog(t, "+ctrl+shift+d", polish, "-ctrl+shift+d", "+f5")
 
-	// Quitting gives the shortcut back.
+	// So does a new post-processing shortcut.
+	if err := sh.rt.Settings.Update(func(s *config.Settings) { s.PostProcessShortcut = "shift+f5" }); err != nil {
+		t.Fatal(err)
+	}
+	q.runNext(t)
+	testShortcuts.waitLog(t, "+ctrl+shift+d", polish, "-ctrl+shift+d", "+f5", "-"+defaultPolish(t), "+shift+f5")
+
+	// Quitting gives the shortcuts back.
 	sh.stopFollowing()
-	testShortcuts.waitLog(t, "+ctrl+shift+d", "-ctrl+shift+d", "+f5", "-f5")
+	testShortcuts.waitLog(t, "+ctrl+shift+d", polish, "-ctrl+shift+d", "+f5", "-"+defaultPolish(t), "+shift+f5", "-f5", "-shift+f5")
+}
+
+// The post-processing shortcut dictates and post-processes the transcript
+// with llm_enabled off; the dictation shortcut, beside it, does not.
+func TestPostProcessShortcutDictates(t *testing.T) {
+	srv, _ := fakeLLM(t, 0)
+	home := isolate(t)
+	testShortcuts.reset()
+	writeSettings(t, home, `{"schema_version": 2, "selected_model": "m", "activation_mode": "toggle",
+		"transcribe_shortcut": "ctrl+shift+d", "post_process_shortcut": "ctrl+shift+p",
+		"llm_enabled": false, "llm_base_url": "`+srv.URL+`/v1", "llm_model": "test", "llm_prompt": "[${output}]"}`)
+	a := &trayApp{plainApp: plainApp{App: test.NewTempApp(t)}}
+	sh, q := newTestShell(t, a, Options{})
+	testShortcuts.waitLog(t, "+ctrl+shift+d", "+ctrl+shift+p")
+	out := sh.svc.output.(*testOutput)
+
+	dictate := func(key string, n int) {
+		t.Helper()
+		testShortcuts.press(t, key)
+		q.waitUI(t, "recording", func() bool { return sh.recording })
+		testShortcuts.press(t, key)
+		q.waitUI(t, "the transcript", func() bool { return len(out.delivered()) == n })
+		q.waitUI(t, "idle", func() bool { return a.trayIcon == ui.TrayIcon(ui.TrayIdle) })
+	}
+	dictate("ctrl+shift+p", 1)
+	dictate("ctrl+shift+d", 2)
+	if got := out.delivered(); len(got) != 2 || got[0] != "HELLO FROM THE TEST" || strings.ToUpper(got[1]) == got[1] {
+		t.Errorf("delivered %q, want the first dictation post-processed and the second not", got)
+	}
 }
 
 // While the settings window records a shortcut, the global shortcuts are
@@ -151,7 +189,8 @@ func TestSettingsWindowSuspendsShortcutsWhileRecording(t *testing.T) {
 	writeSettings(t, home, `{"schema_version": 1, "transcribe_shortcut": "ctrl+shift+d"}`)
 	a := &trayApp{plainApp: plainApp{App: test.NewTempApp(t)}}
 	sh, q := newTestShell(t, a, Options{})
-	testShortcuts.waitLog(t, "+ctrl+shift+d")
+	polish := "+" + defaultPolish(t)
+	testShortcuts.waitLog(t, "+ctrl+shift+d", polish)
 
 	sh.settings.Show(ui.PageGeneral)
 	var in *ui.ShortcutInput
@@ -164,7 +203,7 @@ func TestSettingsWindowSuspendsShortcutsWhileRecording(t *testing.T) {
 		t.Fatal("no shortcut field on the General page")
 	}
 	test.Tap(in)
-	testShortcuts.waitLog(t, "+ctrl+shift+d", "-ctrl+shift+d")
+	testShortcuts.waitLog(t, "+ctrl+shift+d", polish, "-ctrl+shift+d", "-"+defaultPolish(t))
 	for _, k := range []fyne.KeyName{"LeftControl", "LeftShift", fyne.KeyK} {
 		in.KeyDown(&fyne.KeyEvent{Name: k})
 	}
@@ -172,7 +211,8 @@ func TestSettingsWindowSuspendsShortcutsWhileRecording(t *testing.T) {
 		t.Fatalf("saved %q", got)
 	}
 	q.runNext(t) // the shell applies the new settings
-	testShortcuts.waitLog(t, "+ctrl+shift+d", "-ctrl+shift+d", "+ctrl+shift+d", "-ctrl+shift+d", "+ctrl+shift+k")
+	testShortcuts.waitLog(t, "+ctrl+shift+d", polish, "-ctrl+shift+d", "-"+defaultPolish(t),
+		"+ctrl+shift+d", polish, "-ctrl+shift+d", "+ctrl+shift+k")
 }
 
 // syncBuffer is a bytes.Buffer the logger and the test can share.

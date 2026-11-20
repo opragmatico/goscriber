@@ -180,7 +180,19 @@ type Purpose string
 const (
 	PurposeTranscribe Purpose = "transcribe" // starts and stops dictation, registered all the time
 	PurposeCancel     Purpose = "cancel"     // discards the recording, registered only while recording
+	// PurposePostProcess starts and stops a dictation whose transcript is
+	// post-processed whatever llm_enabled says (Handy's
+	// transcribe_with_post_process), registered all the time it is set.
+	PurposePostProcess Purpose = "post_process"
 )
+
+// Name is how messages name the shortcut: "the post-processing shortcut".
+func (p Purpose) Name() string {
+	if p == PurposePostProcess {
+		return "post-processing"
+	}
+	return string(p)
+}
 
 // Validate checks that b may serve purpose. A global shortcut swallows its
 // key in every app, so a plain letter, digit or Space would make it

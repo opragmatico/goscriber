@@ -9,24 +9,25 @@ import (
 
 func TestDefaultsPerOS(t *testing.T) {
 	tests := []struct {
-		goos       string
-		shortcut   string
-		overlay    OverlayStyle
-		pasteKeys  PasteKeys
-		pasteAfter int
+		goos        string
+		shortcut    string
+		postProcess string
+		overlay     OverlayStyle
+		pasteKeys   PasteKeys
+		pasteAfter  int
 	}{
-		{"darwin", "option+space", OverlayLive, PasteCtrlV, 60},
-		{"windows", "ctrl+space", OverlayLive, PasteCtrlV, 60},
+		{"darwin", "option+space", "option+shift+space", OverlayLive, PasteCtrlV, 60},
+		{"windows", "ctrl+space", "ctrl+shift+space", OverlayLive, PasteCtrlV, 60},
 		// Handy's Linux defaults: no overlay (it can take the focus),
 		// Shift+Insert and a longer wait before the clipboard goes back.
-		{"linux", "ctrl+alt+space", OverlayNone, PasteShiftInsert, 500},
-		{"freebsd", "alt+space", OverlayLive, PasteCtrlV, 60},
+		{"linux", "ctrl+alt+space", "ctrl+alt+shift+space", OverlayNone, PasteShiftInsert, 500},
+		{"freebsd", "alt+space", "alt+shift+space", OverlayLive, PasteCtrlV, 60},
 	}
 	for _, tt := range tests {
 		d := defaultsFor(tt.goos)
-		if d.TranscribeShortcut != tt.shortcut || d.OverlayStyle != tt.overlay {
-			t.Errorf("%s: shortcut %q overlay %q, want %q %q",
-				tt.goos, d.TranscribeShortcut, d.OverlayStyle, tt.shortcut, tt.overlay)
+		if d.TranscribeShortcut != tt.shortcut || d.PostProcessShortcut != tt.postProcess || d.OverlayStyle != tt.overlay {
+			t.Errorf("%s: shortcuts %q and %q, overlay %q; want %q and %q, %q",
+				tt.goos, d.TranscribeShortcut, d.PostProcessShortcut, d.OverlayStyle, tt.shortcut, tt.postProcess, tt.overlay)
 		}
 		if d.PasteKeys != tt.pasteKeys || d.PasteDelayAfterMS != tt.pasteAfter || d.TypingTool != TypingAuto {
 			t.Errorf("%s: paste keys %q, delay after %d ms, typing tool %q; want %q, %d ms, auto",

@@ -194,11 +194,14 @@ const (
 type Settings struct {
 	SchemaVersion int `json:"schema_version"`
 
-	// Shortcuts
-	TranscribeShortcut string         `json:"transcribe_shortcut"`
-	CancelShortcut     string         `json:"cancel_shortcut"`
-	ActivationMode     ActivationMode `json:"activation_mode"`
-	HoldThresholdMS    int            `json:"hold_threshold_ms"`
+	// Shortcuts. The transcribe shortcut's dictations are post-processed
+	// with LLMEnabled; the post-processing shortcut's always are (Handy's
+	// transcribe_with_post_process). An empty PostProcessShortcut is none.
+	TranscribeShortcut  string         `json:"transcribe_shortcut"`
+	PostProcessShortcut string         `json:"post_process_shortcut"`
+	CancelShortcut      string         `json:"cancel_shortcut"`
+	ActivationMode      ActivationMode `json:"activation_mode"`
+	HoldThresholdMS     int            `json:"hold_threshold_ms"`
 
 	// Model. SelectedModel is empty until the user downloads a model and
 	// picks it: Goscriber never ships or selects one on its own. With
@@ -323,6 +326,7 @@ func defaultsFor(goos string) Settings {
 	return Settings{
 		SchemaVersion:       SchemaVersion,
 		TranscribeShortcut:  defaultShortcut(goos),
+		PostProcessShortcut: defaultPostProcessShortcut(goos),
 		CancelShortcut:      "escape",
 		ActivationMode:      ActivationHoldOrToggle,
 		HoldThresholdMS:     300,
@@ -381,6 +385,22 @@ func defaultShortcut(goos string) string {
 		return "ctrl+alt+space"
 	default:
 		return "alt+space"
+	}
+}
+
+// defaultPostProcessShortcut is Handy's transcribe_with_post_process
+// default: the transcribe shortcut with Shift added, except on Windows,
+// where Handy's is Ctrl+Shift+Space.
+func defaultPostProcessShortcut(goos string) string {
+	switch goos {
+	case "darwin":
+		return "option+shift+space"
+	case "windows":
+		return "ctrl+shift+space"
+	case "linux":
+		return "ctrl+alt+shift+space"
+	default:
+		return "alt+shift+space"
 	}
 }
 

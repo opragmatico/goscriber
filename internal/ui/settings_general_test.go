@@ -101,7 +101,7 @@ func TestGeneralPageShortcutRecorder(t *testing.T) {
 	cancel := tw.bound(t, "cancel_shortcut").(*ShortcutInput)
 	test.Tap(cancel)
 	press(cancel, "LeftControl", "LeftShift", fyne.KeyK)
-	if !cancel.Recording() || !strings.Contains(tw.shortcutProblem(cancel), "other shortcut") {
+	if !cancel.Recording() || tw.shortcutProblem(cancel) != "the dictation shortcut already uses it" {
 		t.Errorf("recording %v, problem %q", cancel.Recording(), tw.shortcutProblem(cancel))
 	}
 	press(cancel, "LeftShift", fyne.KeyEscape)
@@ -125,6 +125,94 @@ func TestGeneralPageShortcutRecorder(t *testing.T) {
 	if s := tw.store.Get(); s.TranscribeShortcut != config.Defaults().TranscribeShortcut || s.CancelShortcut != "escape" {
 		t.Errorf("after reset: %q, %q", s.TranscribeShortcut, s.CancelShortcut)
 	}
+}
+
+// The post-processing shortcut is recorded as the others are, may not take
+// their keys, and may be none.
+func TestGeneralPagePostProcessShortcut(t *testing.T) {
+	tw := newTestWindow(t, nil)
+	tw.show(PageGeneral)
+	def := config.Defaults()
+	in := tw.bound(t, "post_process_shortcut").(*ShortcutInput)
+	if in.Text != ShortcutLabel(def.PostProcessShortcut) {
+		t.Errorf("shows %q", in.Text)
+	}
+
+	// The dictation shortcut's keys are refused, and so are the cancel
+	// shortcut's.
+	transcribe, err := hotkey.Parse(def.TranscribeShortcut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := map[hotkey.Modifier]fyne.KeyName{hotkey.ModCtrl: "LeftControl", hotkey.ModAlt: "LeftAlt", hotkey.ModShift: "LeftShift", hotkey.ModSuper: "LeftSuper"}
+	var held []fyne.KeyName
+	for _, m := range []hotkey.Modifier{hotkey.ModCtrl, hotkey.ModAlt, hotkey.ModShift, hotkey.ModSuper} {
+		if transcribe.Has(m) {
+			held = append(held, keys[m])
+		}
+	}
+	test.Tap(in)
+	press(in, append(held, fyne.KeySpace)...)
+	if !in.Recording() || tw.shortcutProblem(in) != "the dictation shortcut already uses it" {
+		t.Errorf("dictation's keys: recording %v, problem %q", in.Recording(), tw.shortcutProblem(in))
+	}
+	if err := tw.store.Update(func(s *config.Settings) { s.CancelShortcut = "ctrl+shift+k" }); err != nil {
+		t.Fatal(err)
+	}
+	tw.SetSettings(tw.store.Get())
+	press(in, "LeftControl", "LeftShift", fyne.KeyK)
+	if !in.Recording() || tw.shortcutProblem(in) != "the cancel shortcut already uses it" {
+		t.Errorf("cancel's keys: recording %v, problem %q", in.Recording(), tw.shortcutProblem(in))
+	}
+	press(in, "LeftControl", "LeftShift", fyne.KeyP)
+	if got := tw.store.Get().PostProcessShortcut; got != "ctrl+shift+p" || in.Recording() {
+		t.Errorf("saved %q, recording %v", got, in.Recording())
+	}
+
+	// The clear button sets none, which the reset button undoes.
+	clearBtn, reset := tw.shortcutButtons(t, in)
+	test.Tap(clearBtn)
+	if got := tw.store.Get().PostProcessShortcut; got != "" || in.Text != "None" || !clearBtn.Disabled() || reset.Disabled() {
+		t.Errorf("after clearing: saved %q, shows %q, clear enabled %v, reset enabled %v", got, in.Text, !clearBtn.Disabled(), !reset.Disabled())
+	}
+	test.Tap(reset)
+	if got := tw.store.Get().PostProcessShortcut; got != def.PostProcessShortcut || clearBtn.Disabled() || !reset.Disabled() {
+		t.Errorf("after the reset: saved %q, clear enabled %v, reset enabled %v", got, !clearBtn.Disabled(), !reset.Disabled())
+	}
+	// The other shortcuts cannot be none.
+	if c, _ := tw.shortcutButtons(t, tw.bound(t, "transcribe_shortcut").(*ShortcutInput)); c != nil {
+		t.Error("the dictation shortcut has a clear button")
+	}
+}
+
+// shortcutButtons are the clear button, or nil, and the reset button
+// beside a shortcut input.
+func (tw *testWindow) shortcutButtons(t *testing.T, in *ShortcutInput) (clearBtn, reset *widget.Button) {
+	t.Helper()
+	for _, o := range tw.pageObjects(PageGeneral) {
+		row, ok := o.(*fyne.Container)
+		if !ok || !slices.Contains(row.Objects, fyne.CanvasObject(in)) {
+			continue
+		}
+		for _, side := range row.Objects {
+			box, ok := side.(*fyne.Container)
+			if !ok {
+				continue
+			}
+			for _, b := range box.Objects {
+				switch b := b.(*widget.Button); b.Icon {
+				case theme.ContentClearIcon():
+					clearBtn = b
+				case theme.ContentUndoIcon():
+					reset = b
+				}
+			}
+		}
+	}
+	if reset == nil {
+		t.Fatal("no reset button beside the shortcut")
+	}
+	return clearBtn, reset
 }
 
 func TestGeneralPageDevicesAndChoices(t *testing.T) {

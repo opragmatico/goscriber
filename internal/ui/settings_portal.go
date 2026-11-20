@@ -35,9 +35,9 @@ const (
 // Goscriber's shortcuts.
 type DesktopShortcuts struct {
 	State PortalState
-	// Transcribe and Cancel are the keys the desktop bound, in its own
-	// words, such as "Ctrl+Alt+Space"; "" when it bound none.
-	Transcribe, Cancel string
+	// Transcribe, PostProcess and Cancel are the keys the desktop bound,
+	// in its own words, such as "Ctrl+Alt+Space"; "" when it bound none.
+	Transcribe, PostProcess, Cancel string
 	// Problem is why the shortcuts are not bound, when State is
 	// PortalRefused or PortalFailed.
 	Problem string
@@ -54,7 +54,13 @@ const (
 	// portal holds the shortcuts.
 	DictationHintPortal = "Suggested to your desktop when Goscriber first asked for its shortcuts. " +
 		"The desktop keeps the keys you confirmed, shown under Desktop keys."
-	cancelHint = "Discards the recording. Taken from other apps only while recording."
+	postProcessHint = "Dictates as the shortcut above does, and has the language model set up on the Post-processing page " +
+		"clean the transcript, even with post-processing off."
+	postProcessHintCommand = postProcessHint + " Heard only in X11 apps."
+	// PostProcessHintPortal is the post-processing row's hint while the
+	// desktop's portal holds the shortcuts.
+	PostProcessHintPortal = postProcessHint + " Suggested to your desktop with the dictation shortcut."
+	cancelHint            = "Discards the recording. Taken from other apps only while recording."
 	// CancelHintPortal is the cancel row's hint while the desktop's portal
 	// holds the shortcuts.
 	CancelHintPortal = "Discards the recording. A key without modifiers, such as Escape, is not suggested to the desktop, " +
@@ -64,10 +70,10 @@ const (
 // desktopKeysView is the General page's view of what the portal bound, on
 // Wayland.
 type desktopKeysView struct {
-	dictationHint, cancelHint *widget.Label
-	keys                      *widget.Label
-	change                    *widget.Button
-	row                       fyne.CanvasObject
+	dictationHint, postProcessHint, cancelHint *widget.Label
+	keys                                       *widget.Label
+	change                                     *widget.Button
+	row                                        fyne.CanvasObject
 	// page is the General page's content, laid out again when the row
 	// shows or hides and the hints change length.
 	page fyne.CanvasObject
@@ -77,9 +83,10 @@ type desktopKeysView struct {
 // change with the portal.
 func (w *SettingsWindow) newDesktopKeysView() *desktopKeysView {
 	v := &desktopKeysView{
-		dictationHint: note(""),
-		cancelHint:    note(""),
-		keys:          paragraph(""),
+		dictationHint:   note(""),
+		postProcessHint: note(""),
+		cancelHint:      note(""),
+		keys:            paragraph(""),
 	}
 	v.change = widget.NewButton("Change…", func() {
 		if w.opts.ChangeDesktopShortcuts == nil {
@@ -118,11 +125,13 @@ func (w *SettingsWindow) refreshDesktopKeys() {
 	}
 	if d.State == PortalNone {
 		v.dictationHint.SetText(dictationHintCommand)
+		v.postProcessHint.SetText(postProcessHintCommand)
 		v.cancelHint.SetText(cancelHint)
 		v.row.Hide()
 		return
 	}
 	v.dictationHint.SetText(DictationHintPortal)
+	v.postProcessHint.SetText(PostProcessHintPortal)
 	v.cancelHint.SetText(CancelHintPortal)
 	v.keys.SetText(d.Text())
 	if d.State == PortalBound && d.CanChange && w.opts.ChangeDesktopShortcuts != nil {
@@ -145,7 +154,7 @@ func (d DesktopShortcuts) Text() string {
 	case PortalAsking:
 		return "Waiting for you to confirm Goscriber's shortcuts in the desktop's dialog."
 	case PortalBound:
-		s := fmt.Sprintf("Dictation: %s. Cancel: %s.", keys(d.Transcribe), keys(d.Cancel))
+		s := fmt.Sprintf("Dictation: %s. Post-processing: %s. Cancel: %s.", keys(d.Transcribe), keys(d.PostProcess), keys(d.Cancel))
 		if !d.CanChange {
 			s += " Change them in the desktop's keyboard settings."
 		}

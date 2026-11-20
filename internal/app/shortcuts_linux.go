@@ -33,9 +33,10 @@ var openDesktopShortcuts = func(ctx context.Context, opts desktopShortcutsOption
 // status.
 func desktopShortcutsFrom(s portal.Status) ui.DesktopShortcuts {
 	d := ui.DesktopShortcuts{
-		Transcribe: s.Triggers[hotkey.PurposeTranscribe],
-		Cancel:     s.Triggers[hotkey.PurposeCancel],
-		CanChange:  s.Configurable,
+		Transcribe:  s.Triggers[hotkey.PurposeTranscribe],
+		PostProcess: s.Triggers[hotkey.PurposePostProcess],
+		Cancel:      s.Triggers[hotkey.PurposeCancel],
+		CanChange:   s.Configurable,
 	}
 	switch s.State {
 	case portal.Asking:

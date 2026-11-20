@@ -12,8 +12,10 @@ import (
 )
 
 // Stage is the LLM text stage of dictation and file transcription: with
-// llm_enabled, it has the model the settings name clean the transcript
-// after the cleanup stage, and passes the rest on unchanged.
+// llm_enabled, or for a dictation started with the post-processing
+// shortcut (SessionInfo.PostProcess), it has the model the settings name
+// clean the transcript after the cleanup stage, and passes the rest on
+// unchanged.
 type Stage struct {
 	// Client sends the requests. Required.
 	Client *Client
@@ -36,7 +38,7 @@ var _ pipeline.TextStage = (*Stage)(nil)
 // in part comes back with the failed chunks as they were.
 func (s *Stage) Process(ctx context.Context, text string, info pipeline.SessionInfo) (string, error) {
 	set := info.Settings
-	if !set.LLMEnabled || strings.TrimSpace(text) == "" {
+	if (!set.LLMEnabled && !info.PostProcess) || strings.TrimSpace(text) == "" {
 		return text, nil
 	}
 	job, err := s.Job(set)

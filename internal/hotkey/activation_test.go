@@ -9,9 +9,10 @@ import (
 	"github.com/opragmatico/goscriber/internal/config"
 )
 
-// step is one synthetic event: "down@0", "up@500" (milliseconds), "cancel",
-// "rec" or "idle" (SetRecording true or false), with the action it must
-// produce.
+// step is one synthetic event: "down@0", "up@500" (milliseconds) of the
+// transcribe shortcut, "pdown@0" and "pup@500" of the post-processing
+// shortcut, "cancel", or "rec" or "idle" (SetRecording true or false), with
+// the action it must produce.
 type step struct {
 	ev   string
 	want Action
@@ -33,9 +34,13 @@ func runSteps(t *testing.T, mode config.ActivationMode, steps []step) {
 		now := base.Add(time.Duration(ms) * time.Millisecond)
 		switch name {
 		case "down":
-			got = a.Press(now)
+			got = a.Press(PurposeTranscribe, now)
 		case "up":
-			got = a.Release(now)
+			got = a.Release(PurposeTranscribe, now)
+		case "pdown":
+			got = a.Press(PurposePostProcess, now)
+		case "pup":
+			got = a.Release(PurposePostProcess, now)
 		case "cancel":
 			got = a.Cancel()
 		case "rec":
@@ -133,8 +138,86 @@ func TestSetRecordingOverridesTheShortcut(t *testing.T) {
 	})
 }
 
+// The post-processing shortcut drives dictation as the transcribe shortcut
+// does, starting post-processed dictations. A recording belongs to the
+// shortcut that started it: the other one does nothing until it ends.
+func TestPostProcessShortcut(t *testing.T) {
+	t.Run("toggle", func(t *testing.T) {
+		runSteps(t, config.ActivationToggle, []step{
+			{"pdown@0", ActionStartPostProcess},
+			{"pdown@30", ActionNone}, // key repeat
+			{"pup@100", ActionNone},
+			{"down@1000", ActionNone}, // the other shortcut's recording
+			{"up@1100", ActionNone},
+			{"pdown@2000", ActionStop},
+			{"pup@2100", ActionNone},
+			{"down@3000", ActionStart},
+			{"up@3100", ActionNone},
+			{"pdown@4000", ActionNone}, // and the other way round
+			{"pup@4100", ActionNone},
+			{"down@5000", ActionStop},
+			{"up@5100", ActionNone},
+		})
+	})
+	t.Run("push_to_talk", func(t *testing.T) {
+		runSteps(t, config.ActivationPushToTalk, []step{
+			{"pdown@0", ActionStartPostProcess},
+			{"down@100", ActionNone}, // the other key, while this one is held
+			{"up@200", ActionNone},
+			{"pup@1000", ActionStop},
+			// Held over the other key's release: the release that counts is
+			// the key's own.
+			{"down@2000", ActionStart},
+			{"pdown@2100", ActionNone},
+			{"up@2200", ActionStop},
+			{"pup@2300", ActionNone},
+			{"pdown@3000", ActionStartPostProcess},
+			{"cancel", ActionCancel},
+			{"pup@3500", ActionNone},
+		})
+	})
+	t.Run("hold_or_toggle", func(t *testing.T) {
+		runSteps(t, config.ActivationHoldOrToggle, []step{
+			{"pdown@0", ActionStartPostProcess},
+			{"pup@100", ActionNone}, // a tap latches it
+			{"down@1000", ActionNone},
+			{"up@1100", ActionNone},
+			{"pdown@2000", ActionStop},
+			{"pup@2100", ActionNone},
+			{"pdown@3000", ActionStartPostProcess},
+			{"pup@3500", ActionStop}, // held
+		})
+	})
+	// A recording started from the tray belongs to neither shortcut, so
+	// either stops it; so does one dictation ended and started again.
+	t.Run("started elsewhere", func(t *testing.T) {
+		runSteps(t, config.ActivationToggle, []step{
+			{"rec", ActionNone},
+			{"pdown@0", ActionStop},
+			{"pup@100", ActionNone},
+			{"down@1000", ActionStart},
+			{"up@1100", ActionNone},
+			{"idle", ActionNone}, // dictation stopped it (an error, the tray)
+			{"rec", ActionNone},  // and the tray started another
+			{"pdown@2000", ActionStop},
+		})
+	})
+	// A refused post-processed start leaves both shortcuts free.
+	t.Run("refused", func(t *testing.T) {
+		runSteps(t, config.ActivationPushToTalk, []step{
+			{"pdown@0", ActionStartPostProcess},
+			{"idle", ActionNone},
+			{"pup@100", ActionNone},
+			{"down@1000", ActionStart},
+		})
+	})
+}
+
 func TestActionString(t *testing.T) {
-	for a, want := range map[Action]string{ActionNone: "none", ActionStart: "start", ActionStop: "stop", ActionCancel: "cancel"} {
+	for a, want := range map[Action]string{
+		ActionNone: "none", ActionStart: "start", ActionStop: "stop", ActionCancel: "cancel",
+		ActionStartPostProcess: "start_post_process",
+	} {
 		if a.String() != want {
 			t.Errorf("%d: %q", a, a.String())
 		}
