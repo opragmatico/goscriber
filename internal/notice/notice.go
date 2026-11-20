@@ -27,6 +27,7 @@ const (
 	CodePasteFailed           Code = "paste_failed"
 	CodeShortcutFailed        Code = "shortcut_failed"
 	CodeLoginItemFailed       Code = "login_item_failed"
+	CodeWebhookFailed         Code = "webhook_failed"
 )
 
 // Level is how bad a problem is.
@@ -60,6 +61,7 @@ const (
 	SourceOutput      Source = "output"
 	SourceShortcut    Source = "shortcut"
 	SourceApp         Source = "app"
+	SourceWebhook     Source = "webhook"
 )
 
 // ActionID is what a notice's button does; the UI carries it out.
@@ -119,6 +121,7 @@ var kinds = map[Code]struct {
 	CodePasteFailed:           {"Could not paste", LevelError, SourceOutput, false},
 	CodeShortcutFailed:        {"Shortcut unavailable", LevelError, SourceShortcut, false},
 	CodeLoginItemFailed:       {"Launch at login failed", LevelWarning, SourceApp, false},
+	CodeWebhookFailed:         {"Transcription not sent", LevelWarning, SourceWebhook, false},
 }
 
 // Title is a short heading for the notice, for an OS notification or the
@@ -252,6 +255,24 @@ func LoginItemNeedsApproval() Notice {
 	n := New(CodeLoginItemFailed, "macOS opens Goscriber at login once you allow it in System Settings → General → Login Items.")
 	n.Action = Action{Label: "Open System Settings", ID: ActionOpenLoginItems}
 	return n
+}
+
+// WebhookFailed is the notice for a transcription that will not reach the
+// webhook at host: the server refused it, or every one of attempts failed,
+// the last for reason.
+func WebhookFailed(host string, attempts int, reason error) Notice {
+	tries := ""
+	if attempts > 1 {
+		tries = fmt.Sprintf(" in %d attempts", attempts)
+	}
+	return New(CodeWebhookFailed, fmt.Sprintf("A transcription could not be sent to %s%s: %v. It will not be sent again.", host, tries, reason))
+}
+
+// WebhookUnavailable is the notice for transcriptions that cannot be queued
+// for the webhook at host, because the database that holds them could not
+// be opened.
+func WebhookUnavailable(host string, err error) Notice {
+	return New(CodeWebhookFailed, fmt.Sprintf("Transcriptions cannot be sent to %s: the jobs database could not be opened (%v).", host, err))
 }
 
 // sentence capitalises the first letter of s.

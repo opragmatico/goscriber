@@ -424,7 +424,12 @@ func (w *SettingsWindow) historyRow(e history.Entry) fyne.CanvasObject {
 	buttons.Add(layout.NewSpacer())
 	buttons.Add(widget.NewButtonWithIcon(LabelDeleteEntry, theme.DeleteIcon(), func() { w.deleteHistory(e.ID) }))
 
-	row := container.NewVBox(widget.NewSeparator(), note(historyHeading(e, w.modelName(e.Model), historyNow())), text)
+	heading := historyHeading(e, w.modelName(e.Model), historyNow())
+	if w.cur.WebhookURL != "" {
+		// The number the webhook got as transcription_id.
+		heading += fmt.Sprintf(" · #%d", e.ID)
+	}
+	row := container.NewVBox(widget.NewSeparator(), note(heading), text)
 	if status := h.busy[e.ID]; status != "" {
 		row.Add(note(status))
 	}

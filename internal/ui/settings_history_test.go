@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -207,5 +208,24 @@ func TestHistoryHeading(t *testing.T) {
 		if got := historyHeading(history.Entry{At: tt.at, Duration: tt.dur}, "M", now); got != tt.want {
 			t.Errorf("%v: %q, want %q", tt.at, got, tt.want)
 		}
+	}
+}
+
+// While a webhook is set, each entry shows its number, the transcription_id
+// the webhook got.
+func TestHistoryShowsEntryNumbersWithAWebhook(t *testing.T) {
+	hw := newHistoryWindow(t)
+	e := hw.add(t, time.Now(), "Numbered.", false)
+	hw.show(PageHistory)
+	number := fmt.Sprintf(" · #%d", e.ID)
+	if strings.Contains(hw.pageText(PageHistory), number) {
+		t.Error("an entry shows its number without a webhook")
+	}
+	if err := hw.testWindow.store.Update(func(s *config.Settings) { s.WebhookURL = "https://hooks.example.com/x" }); err != nil {
+		t.Fatal(err)
+	}
+	hw.SetSettings(hw.testWindow.store.Get())
+	if got := hw.pageText(PageHistory); !strings.Contains(got, number) {
+		t.Errorf("no %q with a webhook:\n%s", number, got)
 	}
 }

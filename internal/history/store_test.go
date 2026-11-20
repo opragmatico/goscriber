@@ -198,7 +198,7 @@ func TestRetranscribed(t *testing.T) {
 }
 
 // history_limit keeps the latest dictations, with their recordings; 0 keeps
-// none, so nothing is saved at all.
+// none: an entry is added hidden, for its ID, and pruned at once.
 func TestRetentionByCount(t *testing.T) {
 	s := open(t, Retention{Limit: 2, Recordings: config.RetentionPreserveLimit})
 	oldest := s.add(t, 0)
@@ -226,11 +226,32 @@ func TestRetentionByCount(t *testing.T) {
 		t.Fatal(err)
 	}
 	e, err := s.Add(ctx, record(3))
-	if err != nil || e.ID != 0 {
-		t.Errorf("Add with a limit of 0: %+v, %v", e, err)
+	if err != nil || e.ID <= 0 || e.Visible || e.Recording != "" {
+		t.Errorf("Add with a limit of 0: %+v, %v; want a hidden entry with its ID", e, err)
 	}
 	if got, files := s.texts(t), s.recordings(t); len(got) != 0 || len(files) != 0 {
 		t.Errorf("a limit of 0 kept %v and %v", got, files)
+	}
+	if n, err := s.Count(ctx); err != nil || n != 0 {
+		t.Errorf("Count = %d, %v with a limit of 0", n, err)
+	}
+	var rows int
+	if err := s.db.QueryRow(`SELECT count(*) FROM entries`).Scan(&rows); err != nil || rows != 0 {
+		t.Errorf("%d rows left with a limit of 0, %v: the hidden entry should be pruned", rows, err)
+	}
+
+	// IDs go on rising past the hidden entry, and past deleted ones.
+	if err := s.SetRetention(ctx, Retention{Limit: 2, Recordings: config.RetentionPreserveLimit}); err != nil {
+		t.Fatal(err)
+	}
+	if next := s.add(t, 4); next.ID <= e.ID || !next.Visible {
+		t.Errorf("the next entry %+v after the hidden one, ID %d", next, e.ID)
+	}
+	if err := s.DeleteAll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if after := s.add(t, 5); after.ID <= e.ID+1 {
+		t.Errorf("ID %d after deleting everything: IDs must not be reused", after.ID)
 	}
 }
 
@@ -396,6 +417,33 @@ func TestSourceColumnMigration(t *testing.T) {
 	}
 	got, err := s.Get(ctx, added.ID)
 	if err != nil || got.Source != "interview.flac" {
+		t.Errorf("Get: %+v, %v", got, err)
+	}
+}
+
+// A history from before entries could be hidden (schema 2) opens with every
+// entry visible.
+func TestVisibleColumnMigration(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "history.sqlite3")
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := migrate(ctx, db, migrations[:2]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO entries (at, text, raw_text, model, duration_ms, source) VALUES (1, 'old dictation', 'old dictation', 'm', 1000, '')`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	s := reopen(t, path, filepath.Join(dir, "recordings"), keepAll)
+	entries, err := s.List(ctx, 0)
+	if err != nil || len(entries) != 1 || entries[0].Text != "old dictation" || !entries[0].Visible {
+		t.Fatalf("the old dictation after migrating: %+v, %v", entries, err)
+	}
+	if got, err := s.Get(ctx, entries[0].ID); err != nil || !got.Visible {
 		t.Errorf("Get: %+v, %v", got, err)
 	}
 }
