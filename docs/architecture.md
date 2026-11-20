@@ -93,11 +93,15 @@ internal/
     ├── shortcut_input.go  # records a key combination
     └── word_list.go       # edits custom and filler words
 packaging/
-├── macos/Info.plist       # bundle metadata (LSUIElement: menu bar app, no Dock icon)
+├── macos/
+│   ├── Info.plist         # bundle metadata (LSUIElement: menu bar app, no Dock icon)
+│   ├── Goscriber.entitlements  # the hardened runtime's one exception: the microphone
+│   └── AppIcon.svg, .icns # the app icon (scripts/make-macos-icon.sh)
 ├── linux/                 # the desktop entry of the Linux packages
 └── huggingface/           # model cards of the GGUF repositories Goscriber publishes
 scripts/
 ├── build-nemo-speech.sh   # builds and installs the pinned NeMo-Speech.cpp SDK into .deps/
+├── package-macos.sh       # Goscriber.app and the signed, notarised .dmg (make app, make dist-macos)
 ├── package-linux.sh       # the Linux tarball and .deb (make dist-linux)
 ├── convert-models.sh      # reproduces (and publishes) the Parakeet TDT v2 and Silero VAD GGUFs
 └── wer.py                 # scores model evaluations (docs/models/)
