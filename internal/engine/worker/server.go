@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/opragmatico/goscriber/internal/engine"
+	"github.com/opragmatico/goscriber/engine"
 )
 
 // Serve is the worker side of the protocol: it reads requests from r,

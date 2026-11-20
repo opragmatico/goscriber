@@ -20,7 +20,7 @@ GOLANGCI_LINT         := $(TOOLS_BIN)/golangci-lint-$(GOLANGCI_LINT_VERSION)-$(G
 # and the NeMo-Speech.cpp binding. Everything else must build and test with
 # CGO_ENABLED=0 (see test-nocgo); internal/audio does, with its malgo backend
 # left out.
-CGO_EDGE := /internal/(app|ui|platform|engine/nemo)(/|$$)
+CGO_EDGE := /(internal/(app|ui|platform)|engine/nemo)(/|$$)
 
 # The NeMo-Speech.cpp SDK that `make deps` builds (scripts/build-nemo-speech.sh).
 # Its pkg-config directory goes first on PKG_CONFIG_PATH, so the binding's
@@ -88,14 +88,14 @@ test-nocgo: ## Test the packages outside the CGo edge with CGO_ENABLED=0
 	CGO_ENABLED=0 $(GO) test $$($(GO) list ./... | grep -vE '$(CGO_EDGE)')
 
 test-engine: ## Vet and test the NeMo-Speech.cpp binding (needs make deps; GOSCRIBER_TEST_MODELS adds model tests)
-	$(GO) vet -tags $(NEMO_TAGS) ./internal/engine/nemo/...
-	$(GO) test -race -tags $(NEMO_TAGS) ./internal/engine/nemo/...
+	$(GO) vet -tags $(NEMO_TAGS) ./engine/nemo/...
+	$(GO) test -race -tags $(NEMO_TAGS) ./engine/nemo/...
 
 bench: build ## Benchmark both models on Metal and the CPU over testdata/audio (needs make deps and the models)
 	scripts/bench.sh
 
 engine-version: ## Print the NeMo-Speech.cpp version through CGo (needs make deps)
-	@$(GO) run -tags $(NEMO_TAGS) ./internal/engine/nemo/cmd/nemo-version
+	@$(GO) run -tags $(NEMO_TAGS) ./engine/nemo/cmd/nemo-version
 
 vet: ## go vet ./...
 	$(GO) vet ./...

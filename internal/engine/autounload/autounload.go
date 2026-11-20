@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/opragmatico/goscriber/internal/engine"
+	"github.com/opragmatico/goscriber/engine"
 )
 
 // Engine is an engine.Engine that unloads its inner engine's model after a

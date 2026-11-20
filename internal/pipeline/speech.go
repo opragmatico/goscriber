@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/opragmatico/goscriber/engine"
 	"github.com/opragmatico/goscriber/internal/audio"
 	"github.com/opragmatico/goscriber/internal/config"
-	"github.com/opragmatico/goscriber/internal/engine"
 )
 
 // ErrNoSpeech means a recording held no speech, so there is nothing to
