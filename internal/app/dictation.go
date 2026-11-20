@@ -119,7 +119,7 @@ func (sh *shell) startDictation() {
 		Settings:         sh.rt.Settings.Get,
 		Feedback:         sh.svc.feedback,
 		MicrophoneAccess: microphoneAccess,
-		Stages:           pipeline.Stages{Cleanup: pipeline.CleanupStage{}, History: sh.historySink()},
+		Stages:           pipeline.Stages{Cleanup: pipeline.CleanupStage{}, History: sh.transcriptSink()},
 		Log:              sh.rt.Log.Logger,
 	})
 	events, stop := sh.dictation.Subscribe()
@@ -278,6 +278,9 @@ func (sh *shell) stopDictation() {
 			sh.rt.Log.Warn("closing the history failed", "err", err)
 		}
 	}
+	// After the coordinator, so the last dictation is queued before the
+	// queue closes.
+	sh.webhooks.close()
 	sh.svc.feedback.Close()
 	if err := sh.svc.engine.Unload(); err != nil {
 		sh.rt.Log.Warn("unloading the model failed", "err", err)

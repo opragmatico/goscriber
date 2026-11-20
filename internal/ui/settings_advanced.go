@@ -128,8 +128,17 @@ func (w *SettingsWindow) advancedPage() fyne.CanvasObject {
 				sliderSetting(w, "word_correction_threshold", func(s *config.Settings) *float64 { return &s.WordCorrectionThreshold },
 					0, 1, 0.02, formatOff)),
 		),
+		group("Webhook",
+			w.row("Send transcriptions to", WebhookHint,
+				textEntrySetting(w, "webhook_url", func(s *config.Settings) *string { return &s.WebhookURL },
+					"https://example.com/transcriptions", config.CheckWebhookURL)),
+		),
 	)
 }
+
+// WebhookHint explains the webhook URL setting.
+const WebhookHint = "Each finished transcription is posted to this URL as JSON, and sent again for about a day until it arrives. " +
+	"Its transcription_id is the number the History page shows. Empty sends nothing: transcripts leave this computer only once you set it."
 
 // LaunchAtLoginHint explains the launch at login setting where Goscriber
 // can launch at login.

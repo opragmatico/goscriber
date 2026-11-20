@@ -51,6 +51,8 @@ func (w *SettingsWindow) bind(key string, field func(*config.Settings) any, obj 
 
 // show brings every widget in line with s, without saving anything.
 func (w *SettingsWindow) show(s config.Settings) {
+	// History entries show their number while there is a webhook.
+	numbered := (s.WebhookURL != "") != (w.cur.WebhookURL != "")
 	w.cur = s
 	if !w.created {
 		return
@@ -60,6 +62,9 @@ func (w *SettingsWindow) show(s config.Settings) {
 	}
 	w.syncDebugPage()
 	w.refreshOnboarding()
+	if numbered {
+		w.refreshHistoryRows()
+	}
 }
 
 func (w *SettingsWindow) loadBinding(b *binding) {
@@ -249,6 +254,26 @@ func intEntrySetting(w *SettingsWindow, key string, field func(*config.Settings)
 		// Leave what the user is typing alone when it already says the same.
 		if n, err := parse(e.Text); err != nil || n != *field(&s) {
 			e.SetText(strconv.Itoa(*field(&s)))
+		}
+	})
+	return e
+}
+
+// textEntrySetting is a text field for a string field. Text that validate
+// accepts, without its surrounding spaces, is saved as it is typed.
+func textEntrySetting(w *SettingsWindow, key string, field func(*config.Settings) *string, placeholder string, validate func(string) error) *widget.Entry {
+	e := widget.NewEntry()
+	e.SetPlaceHolder(placeholder)
+	e.Validator = func(text string) error { return validate(strings.TrimSpace(text)) }
+	e.OnChanged = func(text string) {
+		if v := strings.TrimSpace(text); validate(v) == nil {
+			setField(w, field, v)
+		}
+	}
+	w.bind(key, anyField(field), e, func(s config.Settings) {
+		// Leave what the user is typing alone when it already says the same.
+		if strings.TrimSpace(e.Text) != *field(&s) {
+			e.SetText(*field(&s))
 		}
 	})
 	return e
