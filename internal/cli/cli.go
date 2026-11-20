@@ -44,6 +44,9 @@ type Env struct {
 	// the user's models directory, which also looks in the Hugging Face
 	// cache; tests supply their own.
 	Models *models.Manager
+	// LLMKey returns the API key stored for an LLM provider's base URL, for
+	// transcribe --llm. Nil means the system keychain's.
+	LLMKey func(baseURL string) (string, error)
 }
 
 // OutputEnv is the system clipboard and keyboard, as `goscriber debug paste`

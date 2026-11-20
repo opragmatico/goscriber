@@ -2,8 +2,11 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +18,9 @@ import (
 
 	"github.com/opragmatico/goscriber/internal/audio"
 	"github.com/opragmatico/goscriber/internal/config"
+	"github.com/opragmatico/goscriber/internal/llm"
+	"github.com/opragmatico/goscriber/internal/notice"
+	"github.com/opragmatico/goscriber/internal/ui"
 )
 
 // writeTone writes d of a tone as a WAV file and returns its path.
@@ -43,10 +49,13 @@ func TestTranscribeFileLandsInHistory(t *testing.T) {
 
 	var mu sync.Mutex
 	var last, total time.Duration
-	e, err := sh.historyActions().TranscribeFile(context.Background(), path, func(done, all time.Duration) {
+	e, err := sh.historyActions().TranscribeFile(context.Background(), path, func(p ui.FileProgress) {
 		mu.Lock()
 		defer mu.Unlock()
-		last, total = done, all
+		last, total = p.Done, p.Total
+		if p.Parts != 0 {
+			t.Errorf("post-processing progress %+v with it off", p)
+		}
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -103,5 +112,111 @@ func TestTranscribeFileErrors(t *testing.T) {
 	}
 	if n, _ := sh.history.Count(context.Background()); n != 0 {
 		t.Errorf("%d entries saved from failures", n)
+	}
+}
+
+// fakeLLM is an OpenAI-compatible provider whose model answers every
+// transcript in capitals, or fails with status when it is set.
+func fakeLLM(t *testing.T, status int) (*httptest.Server, *[]string) {
+	t.Helper()
+	var mu sync.Mutex
+	var auth []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		auth = append(auth, r.Header.Get("Authorization"))
+		mu.Unlock()
+		var req struct {
+			Messages []struct{ Content string } `json:"messages"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if status != 0 {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(`{"error":{"message":"model not loaded"}}`))
+			return
+		}
+		prompt := req.Messages[0].Content
+		text := prompt[strings.Index(prompt, "[")+1 : strings.LastIndex(prompt, "]")]
+		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{
+			"message": map[string]any{"content": strings.ToUpper(text)}, "finish_reason": "stop",
+		}}})
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &auth
+}
+
+// With post-processing on, a file's transcript is cleaned by the model, with
+// its progress shown, and the history keeps the model's raw text too; the
+// key stored for the provider goes with each request.
+func TestTranscribeFilePostProcessed(t *testing.T) {
+	srv, auth := fakeLLM(t, 0)
+	home := isolate(t)
+	writeSettings(t, home, `{"schema_version": 2, "selected_model": "m", "llm_enabled": true, "llm_base_url": "`+srv.URL+`/v1", "llm_model": "test", "llm_prompt": "[${output}]"}`)
+	a := &trayApp{plainApp: plainApp{App: test.NewTempApp(t)}}
+	sh, _ := newTestShell(t, a, Options{})
+	if err := sh.llmActions().SetKey(srv.URL+"/v1/", "sk-test"); err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	var parts []ui.FileProgress
+	e, err := sh.transcribeFile(context.Background(), writeTone(t, "memo.wav", 3*time.Second), func(p ui.FileProgress) {
+		mu.Lock()
+		defer mu.Unlock()
+		if p.Parts > 0 {
+			parts = append(parts, p)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Text != "HELLO FROM THE TEST" || e.RawText != "hello from the test" {
+		t.Errorf("text %q, raw %q; want the model's cleaned text and the raw transcript", e.Text, e.RawText)
+	}
+	mu.Lock()
+	if len(parts) != 2 || parts[0].Part != 0 || parts[1].Part != 1 || parts[1].Parts != 1 || parts[1].Total != 3*time.Second {
+		t.Errorf("post-processing progress %+v", parts)
+	}
+	mu.Unlock()
+	if len(*auth) != 1 || (*auth)[0] != "Bearer sk-test" {
+		t.Errorf("Authorization %q, want the stored key", *auth)
+	}
+}
+
+// A provider that fails leaves a file's transcript as cleanup left it, and
+// the user hears about it.
+func TestTranscribeFilePostProcessingFails(t *testing.T) {
+	srv, _ := fakeLLM(t, 500)
+	home := isolate(t)
+	writeSettings(t, home, `{"schema_version": 2, "selected_model": "m", "llm_enabled": true, "llm_base_url": "`+srv.URL+`/v1", "llm_model": "test"}`)
+	a := &trayApp{plainApp: plainApp{App: test.NewTempApp(t)}}
+	sh, _ := newTestShell(t, a, Options{})
+	e, err := sh.transcribeFile(context.Background(), writeTone(t, "memo.wav", 3*time.Second), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Text != "Hello from the test" && e.Text != "hello from the test" {
+		t.Errorf("text %q, want the transcript as cleanup left it", e.Text)
+	}
+	if n := sh.notices.Count(notice.CodeLLMFailed); n != 1 {
+		t.Errorf("%d post-processing notices, want 1", n)
+	}
+}
+
+// The Try button cleans the sample transcript whether post-processing is
+// on or not.
+func TestTryLLM(t *testing.T) {
+	srv, _ := fakeLLM(t, 0)
+	isolate(t)
+	a := &trayApp{plainApp: plainApp{App: test.NewTempApp(t)}}
+	sh, _ := newTestShell(t, a, Options{})
+	s := config.Defaults()
+	s.LLMBaseURL, s.LLMModel, s.LLMPrompt = srv.URL+"/v1", "test", "[${output}]"
+	got, err := sh.llmActions().Try(context.Background(), s)
+	if err != nil || got != strings.ToUpper(llm.SampleTranscript) {
+		t.Errorf("Try = %q, %v", got, err)
+	}
+	models, err := sh.llmActions().Models(context.Background(), srv.URL+"/v1")
+	if err == nil || models != nil {
+		t.Errorf("Models from a server without /models = %v, %v; want an error", models, err)
 	}
 }

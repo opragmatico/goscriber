@@ -40,12 +40,22 @@ type HistoryActions struct {
 	// model, saves the new transcript and returns the entry as it is now.
 	Retranscribe func(ctx context.Context, e history.Entry) (history.Entry, error)
 	// TranscribeFile transcribes an audio file with the current model,
-	// telling progress how much of it is done as it goes, saves the
-	// transcript to the history and returns its entry. The entry has no ID
-	// when the history keeps no dictations; its Text is the transcript
-	// either way, also alongside an error in saving it. Nil leaves file
-	// transcription out of the page.
-	TranscribeFile func(ctx context.Context, path string, progress func(done, total time.Duration)) (history.Entry, error)
+	// telling progress how far it has got as it goes, saves the transcript
+	// to the history and returns its entry. The entry has no ID when the
+	// history keeps no dictations; its Text is the transcript either way,
+	// also alongside an error in saving it. Nil leaves file transcription
+	// out of the page.
+	TranscribeFile func(ctx context.Context, path string, progress func(FileProgress)) (history.Entry, error)
+}
+
+// FileProgress is how far the transcription of a file has got.
+type FileProgress struct {
+	// Done and Total are how much of the audio is decoded, of how much.
+	Done, Total time.Duration
+	// Parts is how many parts the language model cleans the transcript in
+	// once the audio is decoded, and Part how many of them it has cleaned;
+	// both are 0 until it starts, and without post-processing.
+	Part, Parts int
 }
 
 // Labels and texts of the History page that tests look for.
@@ -103,12 +113,12 @@ type fileJobs struct {
 	cancel *widget.Button
 	copy   *widget.Button
 
-	queue       []string // waiting their turn
-	now         string   // the file being transcribed, or ""
-	stop        context.CancelFunc
-	done, total time.Duration // how far it has got
-	result      string        // what became of the last file
-	text        string        // the last file's transcript, for Copy
+	queue    []string // waiting their turn
+	now      string   // the file being transcribed, or ""
+	stop     context.CancelFunc
+	progress FileProgress // how far it has got
+	result   string       // what became of the last file
+	text     string       // the last file's transcript, for Copy
 }
 
 func (w *SettingsWindow) historyPage() fyne.CanvasObject {
@@ -215,13 +225,13 @@ func (w *SettingsWindow) nextFile() {
 	path := f.queue[0]
 	f.queue = f.queue[1:]
 	ctx, cancel := context.WithCancel(context.Background())
-	f.now, f.stop, f.done, f.total = path, cancel, 0, 0
+	f.now, f.stop, f.progress = path, cancel, FileProgress{}
 	transcribe := w.opts.HistoryActions.TranscribeFile
 	go func() {
-		e, err := transcribe(ctx, path, func(done, total time.Duration) {
+		e, err := transcribe(ctx, path, func(p FileProgress) {
 			w.do(func() {
 				if f.now == path {
-					f.done, f.total = done, total
+					f.progress = p
 					w.refreshFiles()
 				}
 			})
@@ -272,9 +282,12 @@ func (w *SettingsWindow) refreshFiles() {
 		return
 	}
 	busy := f.now != ""
+	p := f.progress
 	switch {
-	case busy && f.total > 0:
-		f.status.SetText(fmt.Sprintf("Transcribing %s… %s of %s", filepath.Base(f.now), formatLength(f.done), formatLength(f.total)))
+	case busy && p.Parts > 0:
+		f.status.SetText(fmt.Sprintf("Cleaning up %s with the language model… part %d of %d", filepath.Base(f.now), min(p.Part+1, p.Parts), p.Parts))
+	case busy && p.Total > 0:
+		f.status.SetText(fmt.Sprintf("Transcribing %s… %s of %s", filepath.Base(f.now), formatLength(p.Done), formatLength(p.Total)))
 	case busy:
 		f.status.SetText("Transcribing " + filepath.Base(f.now) + "…")
 	default:
@@ -284,8 +297,11 @@ func (w *SettingsWindow) refreshFiles() {
 		f.status.SetText(fmt.Sprintf("%s (%d more waiting)", f.status.Text, n))
 	}
 	value := 0.0
-	if busy && f.total > 0 {
-		value = float64(f.done) / float64(f.total)
+	switch {
+	case busy && p.Parts > 0:
+		value = float64(p.Part) / float64(p.Parts)
+	case busy && p.Total > 0:
+		value = float64(p.Done) / float64(p.Total)
 	}
 	f.bar.SetValue(value)
 	showIf(f.status, f.status.Text != "")

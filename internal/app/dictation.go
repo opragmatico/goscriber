@@ -12,6 +12,8 @@ import (
 	"github.com/opragmatico/goscriber/internal/engine/autounload"
 	"github.com/opragmatico/goscriber/internal/engine/warmup"
 	"github.com/opragmatico/goscriber/internal/engine/worker"
+	"github.com/opragmatico/goscriber/internal/keychain"
+	"github.com/opragmatico/goscriber/internal/llm"
 	"github.com/opragmatico/goscriber/internal/models"
 	"github.com/opragmatico/goscriber/internal/notice"
 	"github.com/opragmatico/goscriber/internal/output"
@@ -33,6 +35,8 @@ type services struct {
 	feedback feedback
 	// player plays saved recordings, for the History page.
 	player recordingPlayer
+	// keys keeps the API keys of LLM providers.
+	keys secrets
 }
 
 // feedback plays the cues and mutes other audio around recordings.
@@ -80,6 +84,7 @@ func systemServices(rt *Runtime, opts Options, notices *notice.Hub) services {
 		files:    files,
 		feedback: audio.NewFeedback(audio.NewPlayer(), platform.MuteOutput, rt.Log.Logger),
 		player:   audio.NewPlayer(),
+		keys:     keychain.New(llm.KeychainService),
 	}
 }
 
@@ -119,7 +124,7 @@ func (sh *shell) startDictation() {
 		Settings:         sh.rt.Settings.Get,
 		Feedback:         sh.svc.feedback,
 		MicrophoneAccess: microphoneAccess,
-		Stages:           pipeline.Stages{Cleanup: pipeline.CleanupStage{}, History: sh.transcriptSink()},
+		Stages:           pipeline.Stages{Cleanup: pipeline.CleanupStage{}, LLM: sh.llmStage(), History: sh.transcriptSink()},
 		Log:              sh.rt.Log.Logger,
 	})
 	events, stop := sh.dictation.Subscribe()

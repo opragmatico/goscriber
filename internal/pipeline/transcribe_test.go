@@ -171,3 +171,41 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 		time.Sleep(5 * time.Millisecond)
 	}
 }
+
+// A file's transcript goes through the cleanup and LLM stages, as a
+// dictation's does; an LLM stage that fails passes the cleaned text on.
+func TestTranscribeRunsTheTextStages(t *testing.T) {
+	llmErr := errors.New("no answer")
+	for _, tc := range []struct {
+		name string
+		llm  TextStage
+		want string
+	}{
+		{"no LLM stage", nil, "cleaned"},
+		{"LLM", TextStageFunc(func(_ context.Context, text string, info SessionInfo) (string, error) {
+			if info.Settings.HistoryLimit != 7 {
+				t.Errorf("the LLM stage got settings %+v, want the current ones", info.Settings)
+			}
+			return text + " by the model", nil
+		}), "cleaned by the model"},
+		{"failing LLM", TextStageFunc(func(context.Context, string, SessionInfo) (string, error) { return "", llmErr }), "cleaned"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRig(t, rigOptions{
+				script:   fake.Script{Replies: []fake.Reply{fake.Transcript("raw words")}},
+				settings: func(s *config.Settings) { s.HistoryLimit = 7 },
+				stages: Stages{
+					Cleanup: TextStageFunc(func(context.Context, string, SessionInfo) (string, error) { return "cleaned", nil }),
+					LLM:     tc.llm,
+				},
+			})
+			got, err := r.c.Transcribe(context.Background(), speech(3*time.Second), rate, TranscribeOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Text != tc.want || got.RawText != "raw words" {
+				t.Errorf("got %+v, want text %q", got, tc.want)
+			}
+		})
+	}
+}

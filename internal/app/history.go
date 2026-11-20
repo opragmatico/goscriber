@@ -11,6 +11,7 @@ import (
 	"github.com/opragmatico/goscriber/internal/audio"
 	"github.com/opragmatico/goscriber/internal/config"
 	"github.com/opragmatico/goscriber/internal/history"
+	"github.com/opragmatico/goscriber/internal/llm"
 	"github.com/opragmatico/goscriber/internal/notice"
 	"github.com/opragmatico/goscriber/internal/output"
 	"github.com/opragmatico/goscriber/internal/pipeline"
@@ -165,11 +166,12 @@ func (sh *shell) retranscribe(ctx context.Context, e history.Entry) (history.Ent
 	return sh.history.Retranscribed(ctx, e.ID, history.Transcript{Text: t.Text, RawText: t.RawText, Model: t.Model, Language: t.Language})
 }
 
-// transcribeFile transcribes an audio file with the current model and saves
-// it to the history, with the file's audio as its recording, so it can be
-// played and transcribed again like a dictation, and queues it for the
-// webhook, as transcriptSink does a dictation.
-func (sh *shell) transcribeFile(ctx context.Context, path string, progress func(done, total time.Duration)) (history.Entry, error) {
+// transcribeFile transcribes an audio file with the current model, has the
+// text stages process it as they do a dictation, saves it to the history,
+// with the file's audio as its recording, so it can be played and
+// transcribed again like a dictation, and queues it for the webhook, as
+// transcriptSink does a dictation.
+func (sh *shell) transcribeFile(ctx context.Context, path string, progress func(ui.FileProgress)) (history.Entry, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return history.Entry{}, err
@@ -180,7 +182,20 @@ func (sh *shell) transcribeFile(ctx context.Context, path string, progress func(
 		return history.Entry{}, err
 	}
 	at := time.Now()
-	t, err := sh.dictation.Transcribe(ctx, samples, rate, pipeline.TranscribeOptions{Progress: progress})
+	var opts pipeline.TranscribeOptions
+	if progress != nil {
+		var decoded ui.FileProgress
+		opts.Progress = func(done, total time.Duration) {
+			decoded = ui.FileProgress{Done: done, Total: total}
+			progress(decoded)
+		}
+		ctx = llm.WithProgress(ctx, func(part, parts int) {
+			p := decoded
+			p.Part, p.Parts = part, parts
+			progress(p)
+		})
+	}
+	t, err := sh.dictation.Transcribe(ctx, samples, rate, opts)
 	if err != nil {
 		return history.Entry{}, transcriptionError(err, "the file")
 	}

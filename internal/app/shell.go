@@ -16,6 +16,7 @@ import (
 	"github.com/opragmatico/goscriber/internal/config"
 	"github.com/opragmatico/goscriber/internal/history"
 	"github.com/opragmatico/goscriber/internal/hotkey"
+	"github.com/opragmatico/goscriber/internal/llm"
 	"github.com/opragmatico/goscriber/internal/notice"
 	"github.com/opragmatico/goscriber/internal/pipeline"
 	"github.com/opragmatico/goscriber/internal/platform"
@@ -168,6 +169,11 @@ type shell struct {
 	stopOnce    sync.Once
 	// permissionRows updates the settings window's Permissions page.
 	permissionRows *latest
+
+	// llm talks to the LLM provider post-processing uses, and memory is the
+	// computer's, which picks the model it suggests.
+	llm    *llm.Client
+	memory uint64
 }
 
 func newShell(rt *Runtime, a fyne.App, opts Options) *shell {
@@ -186,6 +192,8 @@ func newShell(rt *Runtime, a fyne.App, opts Options) *shell {
 		notices:        notice.NewHub(notice.Options{Log: rt.Log.Logger}),
 		trusted:        accessibilityTrusted,
 		session:        currentSession(),
+		llm:            &llm.Client{},
+		memory:         llm.TotalMemory(),
 	}
 	sh.svc = newServices(rt, opts, sh.notices)
 	sh.history = openHistory(rt)
@@ -353,6 +361,7 @@ func (sh *shell) newSettingsWindow() *ui.SettingsWindow {
 		Models:             sh.modelFiles(),
 		History:            sh.historyStore(),
 		HistoryActions:     sh.historyActions(),
+		LLM:                sh.llmActions(),
 		Devices:            listDevices,
 		Logs:               sh.rt.Log.Ring().Entries,
 		ForceDebug:         sh.opts.Debug,

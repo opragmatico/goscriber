@@ -277,6 +277,18 @@ type Settings struct {
 	FillerWordRemoval bool     `json:"filler_word_removal"`
 	CustomFillerWords []string `json:"custom_filler_words"`
 
+	// LLM post-processing (docs/llm-post-processing.md). With LLMEnabled a
+	// language model cleans each transcript after the text cleanup: the
+	// model LLMModel of the OpenAI-compatible provider at LLMBaseURL, asked
+	// with LLMPrompt, where "${output}" stands for the transcript. An empty
+	// LLMModel is the model suggested for the computer's memory, for a
+	// provider on this computer, and an empty LLMPrompt the built-in one.
+	// API keys are not kept here but in the OS keychain, by base URL.
+	LLMEnabled bool   `json:"llm_enabled"`
+	LLMBaseURL string `json:"llm_base_url"`
+	LLMModel   string `json:"llm_model"`
+	LLMPrompt  string `json:"llm_prompt"`
+
 	// History
 	HistoryLimit       int                `json:"history_limit"`
 	RecordingRetention RecordingRetention `json:"recording_retention"`
@@ -345,7 +357,18 @@ func defaultsFor(goos string) Settings {
 		WordCorrectionThreshold: 0.18, // Handy's
 
 		FillerWordRemoval: true,
+
+		LLMBaseURL: DefaultLLMBaseURL,
 	}
+}
+
+// DefaultLLMBaseURL is Ollama's OpenAI-compatible API on this computer.
+const DefaultLLMBaseURL = "http://localhost:11434/v1"
+
+// validBaseURL reports whether s is an http or https URL with a host.
+func validBaseURL(s string) bool {
+	u, err := url.Parse(s)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
 }
 
 func defaultShortcut(goos string) string {
@@ -453,6 +476,7 @@ func (s *Settings) normalize(def Settings) []string {
 	check("recording_retention",
 		oneOf(s.RecordingRetention, RetentionNever, RetentionPreserveLimit, RetentionDays3, RetentionWeeks2, RetentionMonths3),
 		func() { s.RecordingRetention = def.RecordingRetention })
+	check("llm_base_url", validBaseURL(s.LLMBaseURL), func() { s.LLMBaseURL = def.LLMBaseURL })
 	check("webhook_url", CheckWebhookURL(s.WebhookURL) == nil, func() { s.WebhookURL = def.WebhookURL })
 	check("log_level", oneOf(s.LogLevel, LogDebug, LogInfo, LogWarn, LogError), func() { s.LogLevel = def.LogLevel })
 	return fixed

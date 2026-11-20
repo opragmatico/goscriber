@@ -27,6 +27,7 @@ const (
 	PageGeneral Page = iota
 	PageModels
 	PageAdvanced
+	PagePostProcessing
 	PagePermissions
 	PageHistory
 	PageDebug
@@ -34,7 +35,7 @@ const (
 	pageCount
 )
 
-var pageTitles = [pageCount]string{"General", "Models", "Advanced", "Permissions", "History", "Debug", "About"}
+var pageTitles = [pageCount]string{"General", "Models", "Advanced", "Post-processing", "Permissions", "History", "Debug", "About"}
 
 // String returns the page's title in the sidebar.
 func (p Page) String() string {
@@ -103,6 +104,9 @@ type SettingsOptions struct {
 	History HistoryStore
 	// HistoryActions carry out the History page's buttons.
 	HistoryActions HistoryActions
+	// LLM backs the Post-processing page: the provider's models, the
+	// keychain and the Try button.
+	LLM LLMActions
 	// Devices lists the microphones and outputs for the General page. Nil
 	// means the system's, from internal/audio.
 	Devices func() (inputs, outputs []audio.Device, err error)
@@ -185,6 +189,7 @@ type SettingsWindow struct {
 	models     modelsState
 	logs       logsState
 	history    historyState
+	llm        llmState
 	onboarding onboardingState
 
 	// confirm asks before something that cannot be undone, such as
@@ -254,6 +259,7 @@ func (w *SettingsWindow) Show(p Page) {
 	w.refreshModelFiles()
 	w.refreshDevices()
 	w.refreshHistory()
+	w.refreshLLMModels(false)
 }
 
 // Raise brings the window to the front as it is, on the page or onboarding
@@ -331,13 +337,14 @@ func (w *SettingsWindow) create() {
 		icon  fyne.Resource
 		build func() fyne.CanvasObject
 	}{
-		PageGeneral:     {theme.SettingsIcon(), w.generalPage},
-		PageModels:      {theme.DownloadIcon(), w.modelsPage},
-		PageAdvanced:    {theme.ListIcon(), w.advancedPage},
-		PagePermissions: {theme.VisibilityIcon(), w.permissionsPage},
-		PageHistory:     {theme.HistoryIcon(), w.historyPage},
-		PageDebug:       {theme.WarningIcon(), w.debugPage},
-		PageAbout:       {theme.InfoIcon(), w.aboutPage},
+		PageGeneral:        {theme.SettingsIcon(), w.generalPage},
+		PageModels:         {theme.DownloadIcon(), w.modelsPage},
+		PageAdvanced:       {theme.ListIcon(), w.advancedPage},
+		PagePostProcessing: {theme.DocumentCreateIcon(), w.postProcessingPage},
+		PagePermissions:    {theme.VisibilityIcon(), w.permissionsPage},
+		PageHistory:        {theme.HistoryIcon(), w.historyPage},
+		PageDebug:          {theme.WarningIcon(), w.debugPage},
+		PageAbout:          {theme.InfoIcon(), w.aboutPage},
 	} {
 		w.col = &labelColumn{} // each page lines up its own labels
 		w.items[p] = container.NewTabItemWithIcon(Page(p).String(), page.icon, page.build())

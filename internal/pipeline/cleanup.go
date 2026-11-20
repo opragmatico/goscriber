@@ -10,6 +10,10 @@ import (
 // internal/text, following the settings the session started with, in this
 // order:
 //
+//  0. Each <unk> the model wrote for a character it has no token for
+//     becomes the sign it stands for: "%" after a number, ":" elsewhere
+//     (text.ReplaceUnknown), so the LLM stage, or the user with it off,
+//     gets readable text.
 //  1. Custom words the model was not asked to favour (SessionInfo.Boosted)
 //     are corrected: near-misses of custom_words closer than
 //     word_correction_threshold take their spelling. A model that boosted
@@ -29,6 +33,7 @@ type CleanupStage struct{}
 // Process implements TextStage.
 func (CleanupStage) Process(_ context.Context, s string, info SessionInfo) (string, error) {
 	set := info.Settings
+	s = text.ReplaceUnknown(s, info.TextLanguage)
 	if !info.Boosted {
 		s = text.CorrectWords(s, set.CustomWords, set.WordCorrectionThreshold)
 	}

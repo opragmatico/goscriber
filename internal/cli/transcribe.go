@@ -45,11 +45,30 @@ Flags:
                       latency to stderr, after an untimed warm-up decode
       --word WORD     a custom word (a name, jargon) to spell this way, on top
                       of the settings' custom_words; repeat for more
+      --llm           clean each transcript with the language model set up
+                      in the settings' Post-processing page, on or off there
+      --llm-model M   the model to clean with; implies --llm (default: the
+                      settings' llm_model, else for a provider on this
+                      computer gemma4:26b with 32 GB of memory or more,
+                      gemma4:e4b with less)
+      --llm-url URL   the provider's OpenAI-compatible base URL; implies --llm
+                      (default: the settings' llm_base_url, Ollama's
+                      http://localhost:11434/v1)
 
 Custom words are boosted by models that can favour words (Nemotron), with
 the settings' custom_word_boost. Other models' transcripts are corrected:
 near-misses of the words, by word_correction_threshold, take their spelling.
 With --json, "text" is corrected and "words" are as the model wrote them.
+
+A <unk> the speech model writes for a character it has no token for
+becomes "%" after a number and ":" elsewhere.
+
+With --llm, the transcript goes to the model with the settings' prompt, in
+parts of up to 400 words cut at sentence ends. A part the model fails on is
+printed as transcribed, with a warning, and the command exits 1. The API key
+is the one the settings window stored in the system keychain for the base
+URL. With --json, "text" is the cleaned transcript and "raw_text" the
+speech model's.
 
 Nothing is downloaded: fetch the model first with 'goscriber models pull'.
 The voice activity detector is used when it is downloaded and enabled in
@@ -67,6 +86,8 @@ type transcribeFlags struct {
 	stream, cpu, json      bool
 	bench                  bool
 	words                  wordList
+	llm                    bool
+	llmModel, llmURL       string
 }
 
 // wordList collects repeated --word flags.
@@ -90,6 +111,9 @@ func runTranscribe(args []string, env Env) int {
 	c.fs.BoolVar(&fl.json, "json", false, "JSON output")
 	c.fs.BoolVar(&fl.bench, "bench", false, "benchmark")
 	c.fs.Var(&fl.words, "word", "custom word")
+	c.fs.BoolVar(&fl.llm, "llm", false, "post-process with a language model")
+	c.fs.StringVar(&fl.llmModel, "llm-model", "", "language model")
+	c.fs.StringVar(&fl.llmURL, "llm-url", "", "language model base URL")
 	files, code, ok := c.parse(args)
 	if !ok {
 		return code
@@ -110,6 +134,11 @@ func runTranscribe(args []string, env Env) int {
 	}
 	ctx, stop := interruptible()
 	defer stop()
+	if t.post != nil {
+		if err := t.post.check(ctx); err != nil {
+			return t.exit(ctx, err)
+		}
+	}
 	if err := t.load(ctx); err != nil {
 		return t.exit(ctx, err)
 	}
@@ -151,6 +180,8 @@ type transcriber struct {
 	// model does not boost them, by threshold.
 	correct   []string
 	threshold float64
+	// post cleans the transcripts with a language model, with --llm.
+	post *postProcessor
 
 	eng      engine.Engine
 	info     engine.ModelInfo
@@ -244,6 +275,11 @@ func newTranscriber(env Env, fl transcribeFlags) (*transcriber, error) {
 			t.vadOnset, t.vadOffset = float32(settings.VADOnset), float32(settings.VADOffset)
 		} else {
 			fmt.Fprintf(env.Stderr, "goscriber: transcribing without voice activity detection: %v\n", err)
+		}
+	}
+	if fl.llm || fl.llmModel != "" || fl.llmURL != "" {
+		if t.post, err = newPostProcessor(env, settings, fl); err != nil {
+			return nil, err
 		}
 	}
 	if env.NewEngine == nil {
@@ -369,6 +405,11 @@ func (t *transcriber) transcribe(ctx context.Context, file string, many bool) er
 		return err
 	}
 	res.Text = text.CorrectWords(res.Text, t.correct, t.threshold)
+	lang := t.opts.Language
+	if len(res.Languages) > 0 {
+		lang = res.Languages[0]
+	}
+	res.Text = text.ReplaceUnknown(res.Text, lang)
 	dur := time.Duration(float64(len(samples)) / float64(rate) * float64(time.Second))
 
 	if t.fl.bench {
@@ -376,15 +417,30 @@ func (t *transcriber) transcribe(ctx context.Context, file string, many bool) er
 		fmt.Fprintf(t.env.Stderr, "%s: %s of audio decoded in %s: real-time factor %.4f (%.0fx real time); final transcript %s after the end of the audio\n",
 			filepath.Base(file), seconds(dur), seconds(tm.decode), rtf, 1/rtf, millis(tm.finalize))
 	}
+	raw := res.Text
+	var postErr error
+	if t.post != nil && strings.TrimSpace(res.Text) != "" {
+		cleaned, took, err := t.post.clean(ctx, res.Text)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		res.Text, postErr = cleaned, err
+		if t.fl.bench {
+			fmt.Fprintf(t.env.Stderr, "%s: post-processed with %s in %s\n", filepath.Base(file), t.post.job.Model, seconds(took))
+		}
+	}
 	if t.fl.json {
-		return t.printJSON(file, res, dur, tm)
+		if err := t.printJSON(file, res, raw, dur, tm); err != nil {
+			return err
+		}
+		return postErr
 	}
 	if many {
 		fmt.Fprintf(t.env.Stdout, "%s: %s\n", file, res.Text)
 	} else {
 		fmt.Fprintln(t.env.Stdout, res.Text)
 	}
-	return nil
+	return postErr
 }
 
 // decode runs the samples through the engine, whole or, with --stream, as a
@@ -481,6 +537,8 @@ type jsonResult struct {
 	Backend    string     `json:"backend"`
 	Streamed   bool       `json:"streamed"`
 	Text       string     `json:"text"`
+	RawText    string     `json:"raw_text,omitempty"`  // with --llm
+	LLMModel   string     `json:"llm_model,omitempty"` // with --llm
 	Language   string     `json:"language,omitempty"`
 	Confidence float32    `json:"confidence"`
 	Words      []jsonWord `json:"words"`
@@ -492,7 +550,7 @@ type jsonResult struct {
 	RTF      float64 `json:"real_time_factor"`
 }
 
-func (t *transcriber) printJSON(file string, res engine.Result, dur time.Duration, tm timing) error {
+func (t *transcriber) printJSON(file string, res engine.Result, raw string, dur time.Duration, tm timing) error {
 	out := jsonResult{
 		File:       file,
 		Model:      t.model.ID,
@@ -507,6 +565,9 @@ func (t *transcriber) printJSON(file string, res engine.Result, dur time.Duratio
 		Decode:     round3(tm.decode.Seconds()),
 		Finalize:   round3(tm.finalize.Seconds()),
 		RTF:        math.Round(tm.decode.Seconds()/dur.Seconds()*1e5) / 1e5,
+	}
+	if t.post != nil {
+		out.RawText, out.LLMModel = raw, t.post.job.Model
 	}
 	if len(res.Languages) > 0 {
 		out.Language = res.Languages[0]

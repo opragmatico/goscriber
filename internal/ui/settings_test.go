@@ -288,7 +288,7 @@ func TestSettingsWindowIsCreatedOnFirstShow(t *testing.T) {
 func TestSettingsWindowPages(t *testing.T) {
 	tw := newTestWindow(t, nil)
 	tw.show(PageGeneral)
-	want := []Page{PageGeneral, PageModels, PageAdvanced, PagePermissions, PageHistory, PageAbout}
+	want := []Page{PageGeneral, PageModels, PageAdvanced, PagePostProcessing, PagePermissions, PageHistory, PageAbout}
 	if got := tw.Pages(); !slices.Equal(got, want) {
 		t.Errorf("pages %v, want %v: Debug only in debug mode", got, want)
 	}
