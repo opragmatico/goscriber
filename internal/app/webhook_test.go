@@ -24,7 +24,7 @@ import (
 // hookPost is a POST a hookReceiver got.
 type hookPost struct {
 	webhook.Transcription
-	userAgent, idempotencyKey string
+	userAgent, webhookID string
 }
 
 // hookReceiver is a webhook that accepts every POST and hands it on.
@@ -38,7 +38,7 @@ func newHookReceiver(t *testing.T) *hookReceiver {
 	r := &hookReceiver{posts: make(chan hookPost, 10)}
 	r.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		body, _ := io.ReadAll(req.Body)
-		p := hookPost{userAgent: req.UserAgent(), idempotencyKey: req.Header.Get("Idempotency-Key")}
+		p := hookPost{userAgent: req.UserAgent(), webhookID: req.Header.Get("webhook-id")}
 		if err := json.Unmarshal(body, &p.Transcription); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -92,7 +92,7 @@ func TestTranscriptionsAreSentToTheWebhook(t *testing.T) {
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("history %+v, %v", entries, err)
 	}
-	if got.ID != entries[0].ID || got.idempotencyKey != fmt.Sprint(entries[0].ID) || got.Source != webhook.SourceDictation ||
+	if got.ID != entries[0].ID || got.webhookID == "" || got.Source != webhook.SourceDictation ||
 		got.Text != "hello from the test" || got.Model != "m" || got.DurationMS <= 0 || got.userAgent != "Goscriber/1.2.3" {
 		t.Errorf("POST %+v for the entry %+v", got, entries[0])
 	}
@@ -102,8 +102,9 @@ func TestTranscriptionsAreSentToTheWebhook(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := hook.next(t); got.ID != e.ID || got.Source != "interview.wav" || got.DurationMS != 2000 || got.Text != e.Text {
-		t.Errorf("POST %+v for the file's entry %+v", got, e)
+	if file := hook.next(t); file.ID != e.ID || file.Source != "interview.wav" || file.DurationMS != 2000 || file.Text != e.Text ||
+		file.webhookID == "" || file.webhookID == got.webhookID {
+		t.Errorf("POST %+v for the file's entry %+v, after the dictation's webhook-id %q", file, e, got.webhookID)
 	}
 
 	if err := sh.rt.Settings.Update(func(s *config.Settings) { s.HistoryLimit = 0 }); err != nil {
@@ -179,7 +180,7 @@ func TestLeftoverTranscriptionsAreSentAtLaunch(t *testing.T) {
 		t.Fatal(err)
 	}
 	left := webhook.Transcription{ID: 7, Text: "Left over.", Model: "m", StartedAt: time.Now(), Source: webhook.SourceDictation}
-	if err := q.Enqueue(context.Background(), hook.URL, left); err != nil {
+	if _, err := q.Enqueue(context.Background(), hook.URL, left); err != nil {
 		t.Fatal(err)
 	}
 	if err := q.Close(context.Background()); err != nil {

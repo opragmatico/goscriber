@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -53,7 +52,7 @@ func (w *worker) Work(ctx context.Context, job *river.Job[args]) error {
 	host := hostOf(job.Args.URL)
 	err := w.post(ctx, job.Args)
 	if err == nil {
-		w.log.Debug("transcription sent to the webhook", "transcription", t.ID, "host", host, "attempt", job.Attempt)
+		w.log.Debug("transcription sent to the webhook", "transcription", t.ID, "webhook_id", job.Args.ID, "host", host, "attempt", job.Attempt)
 		return nil
 	}
 	if errors.Is(ctx.Err(), context.Canceled) {
@@ -66,7 +65,7 @@ func (w *worker) Work(ctx context.Context, job *river.Job[args]) error {
 	}
 	refused := errors.Is(err, errRefused)
 	last := refused || job.Attempt >= job.MaxAttempts
-	w.log.Warn("the transcription could not be sent to the webhook", "transcription", t.ID, "host", host,
+	w.log.Warn("the transcription could not be sent to the webhook", "transcription", t.ID, "webhook_id", job.Args.ID, "host", host,
 		"attempt", job.Attempt, "of", job.MaxAttempts, "retry", !last, "err", err)
 	if last && w.onFailure != nil {
 		w.onFailure(Failure{ID: t.ID, Host: host, Attempts: job.Attempt, Err: err})
@@ -109,7 +108,9 @@ func (w *worker) post(ctx context.Context, a args) error {
 		return fmt.Errorf("%w: %w", errRefused, withoutURL(err))
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Idempotency-Key", strconv.FormatInt(a.Transcription.ID, 10))
+	// Standard Webhooks' name for the ID to drop repeats by
+	// (standardwebhooks.com).
+	req.Header.Set("webhook-id", a.ID)
 	if w.userAgent != "" {
 		req.Header.Set("User-Agent", w.userAgent)
 	}

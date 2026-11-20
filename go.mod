@@ -7,6 +7,7 @@ require (
 	github.com/gen2brain/malgo v0.11.27
 	github.com/go-gl/glfw/v3.4/glfw v0.1.0-pre.2
 	github.com/godbus/dbus/v5 v5.2.2
+	github.com/google/uuid v1.6.0
 	github.com/mewkiz/flac v1.0.14
 	github.com/riverqueue/river v0.51.2
 	github.com/riverqueue/river/riverdriver/riversqlite v0.51.2
@@ -31,7 +32,6 @@ require (
 	github.com/go-gl/gl v0.0.0-20260331235117-4566fea9a276 // indirect
 	github.com/go-text/render v0.2.1 // indirect
 	github.com/go-text/typesetting v0.3.5 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/hack-pad/go-indexeddb v0.3.2 // indirect
 	github.com/hack-pad/safejs v0.1.0 // indirect
 	github.com/icza/bitio v1.1.0 // indirect

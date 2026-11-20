@@ -127,10 +127,13 @@ func (w *webhooks) send(webhookURL string, t webhook.Transcription) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := q.Enqueue(ctx, webhookURL, t); err != nil {
+	id, err := q.Enqueue(ctx, webhookURL, t)
+	if err != nil {
 		w.log.Warn("the transcription could not be queued for the webhook", "transcription", t.ID, "err", err)
 		w.notices.Publish(notice.WebhookUnavailable(hostOf(webhookURL), err))
+		return
 	}
+	w.log.Debug("transcription queued for the webhook", "transcription", t.ID, "webhook_id", id)
 }
 
 // queueLocked returns the queue, opening and starting it if need be. w.mu

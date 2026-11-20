@@ -16,6 +16,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 var ctx = context.Background()
@@ -36,8 +38,8 @@ type receiver struct {
 
 // request is what a receiver got.
 type request struct {
-	method, path, contentType, idempotencyKey, userAgent string
-	body                                                 []byte
+	method, path, contentType, webhookID, userAgent string
+	body                                            []byte
 }
 
 func newReceiver(t *testing.T, statuses ...int) *receiver {
@@ -53,7 +55,7 @@ func (r *receiver) serve(w http.ResponseWriter, req *http.Request) {
 	r.mu.Lock()
 	r.got = append(r.got, request{
 		method: req.Method, path: req.URL.Path, contentType: req.Header.Get("Content-Type"),
-		idempotencyKey: req.Header.Get("Idempotency-Key"), userAgent: req.Header.Get("User-Agent"), body: body,
+		webhookID: req.Header.Get("webhook-id"), userAgent: req.Header.Get("User-Agent"), body: body,
 	})
 	status := http.StatusOK
 	if len(r.statuses) > 0 {
@@ -169,13 +171,17 @@ func TestSendsTheTranscription(t *testing.T) {
 	r := newReceiver(t)
 	var f failures
 	q := startQueue(t, testOptions(&f))
-	if err := q.Enqueue(ctx, r.URL+"/transcriptions?token=x", transcription(1)); err != nil {
+	id, err := q.Enqueue(ctx, r.URL+"/transcriptions?token=x", transcription(1))
+	if err != nil {
 		t.Fatal(err)
+	}
+	if _, err := uuid.Parse(id); err != nil {
+		t.Errorf("the delivery's ID %q is no UUID: %v", id, err)
 	}
 	eventually(t, "the POST", func() bool { return len(r.requests()) == 1 })
 	got := r.requests()[0]
 	if got.method != http.MethodPost || got.path != "/transcriptions" || got.contentType != "application/json" ||
-		got.idempotencyKey != "1" || got.userAgent != "Goscriber/test" {
+		got.webhookID != id || got.userAgent != "Goscriber/test" {
 		t.Errorf("request %+v", got)
 	}
 	var body map[string]any
@@ -204,7 +210,7 @@ func TestSendsTheTranscription(t *testing.T) {
 }
 
 // A server that fails and then accepts gets every attempt with the same
-// transcription ID.
+// delivery ID and transcription ID.
 func TestRetriesWithTheSameID(t *testing.T) {
 	t.Parallel()
 	for _, status := range []int{http.StatusServiceUnavailable, http.StatusInternalServerError, http.StatusRequestTimeout, http.StatusTooManyRequests} {
@@ -213,7 +219,8 @@ func TestRetriesWithTheSameID(t *testing.T) {
 			r := newReceiver(t, status, status, http.StatusNoContent)
 			var f failures
 			q := startQueue(t, testOptions(&f))
-			if err := q.Enqueue(ctx, r.URL, transcription(2)); err != nil {
+			id, err := q.Enqueue(ctx, r.URL, transcription(2))
+			if err != nil {
 				t.Fatal(err)
 			}
 			eventually(t, "three attempts", func() bool { return len(r.requests()) == 3 })
@@ -222,8 +229,8 @@ func TestRetriesWithTheSameID(t *testing.T) {
 				if err := json.Unmarshal(got.body, &body); err != nil {
 					t.Fatal(err)
 				}
-				if got.idempotencyKey != "2" || body.ID != 2 || body.Text != "Hello, world." {
-					t.Errorf("attempt %d: key %q, body %+v", i+1, got.idempotencyKey, body)
+				if got.webhookID != id || body.ID != 2 || body.Text != "Hello, world." {
+					t.Errorf("attempt %d: key %q, body %+v", i+1, got.webhookID, body)
 				}
 			}
 			stillAfter(t, "no fourth attempt and no failure", func() bool { return len(r.requests()) == 3 && len(f.list()) == 0 })
@@ -241,7 +248,7 @@ func TestRefusalsAreNotRetried(t *testing.T) {
 			r := newReceiver(t, status)
 			var f failures
 			q := startQueue(t, testOptions(&f))
-			if err := q.Enqueue(ctx, r.URL, transcription(3)); err != nil {
+			if _, err := q.Enqueue(ctx, r.URL, transcription(3)); err != nil {
 				t.Fatal(err)
 			}
 			eventually(t, "the failure", func() bool { return len(f.list()) == 1 })
@@ -269,7 +276,7 @@ func TestFollowsRedirectsThatKeepThePOST(t *testing.T) {
 	t.Cleanup(redirect.Close)
 	var f failures
 	q := startQueue(t, testOptions(&f))
-	if err := q.Enqueue(ctx, redirect.URL, transcription(4)); err != nil {
+	if _, err := q.Enqueue(ctx, redirect.URL, transcription(4)); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "the POST at the target", func() bool { return len(target.requests()) == 1 })
@@ -286,7 +293,7 @@ func TestGivesUpAfterTheLastAttempt(t *testing.T) {
 	r := newReceiver(t, http.StatusBadGateway)
 	var f failures
 	q := startQueue(t, testOptions(&f))
-	if err := q.Enqueue(ctx, r.URL, transcription(5)); err != nil {
+	if _, err := q.Enqueue(ctx, r.URL, transcription(5)); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "the failure", func() bool { return len(f.list()) == 1 })
@@ -309,7 +316,7 @@ func TestNetworkErrorsAreRetriedWithoutShowingTheURL(t *testing.T) {
 
 	var f failures
 	q := startQueue(t, testOptions(&f))
-	if err := q.Enqueue(ctx, "http://"+addr+"/hook/s3cret?token=t0ken", transcription(6)); err != nil {
+	if _, err := q.Enqueue(ctx, "http://"+addr+"/hook/s3cret?token=t0ken", transcription(6)); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "the failure", func() bool { return len(f.list()) == 1 })
@@ -324,7 +331,7 @@ func TestNetworkErrorsAreRetriedWithoutShowingTheURL(t *testing.T) {
 	opts.attemptTimeout = 100 * time.Millisecond
 	opts.maxAttempts = 2
 	q = startQueue(t, opts)
-	if err := q.Enqueue(ctx, slow.URL, transcription(7)); err != nil {
+	if _, err := q.Enqueue(ctx, slow.URL, transcription(7)); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "the timeout failure", func() bool { return len(f.list()) == 2 })
@@ -345,7 +352,8 @@ func TestQueuedTranscriptionSurvivesAClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := q.Enqueue(ctx, r.URL, transcription(8)); err != nil {
+	id, err := q.Enqueue(ctx, r.URL, transcription(8))
+	if err != nil {
 		t.Fatal(err)
 	}
 	if pending, err := q.Pending(ctx); err != nil || !pending {
@@ -363,7 +371,7 @@ func TestQueuedTranscriptionSurvivesAClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "the POST from the new queue", func() bool { return len(r.requests()) == 1 })
-	if got := r.requests()[0]; got.idempotencyKey != "8" {
+	if got := r.requests()[0]; got.webhookID != id {
 		t.Errorf("request %+v", got)
 	}
 	eventually(t, "nothing pending", func() bool {
@@ -390,7 +398,8 @@ func TestInterruptedAttemptDoesNotCount(t *testing.T) {
 	if err := q.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := q.Enqueue(ctx, r.URL, transcription(9)); err != nil {
+	id, err := q.Enqueue(ctx, r.URL, transcription(9))
+	if err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -410,12 +419,45 @@ func TestInterruptedAttemptDoesNotCount(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "the second request", func() bool { return len(r.requests()) == 2 })
+	for i, got := range r.requests() {
+		if got.webhookID != id {
+			t.Errorf("request %d: webhook-id %q, want %q from before the close", i+1, got.webhookID, id)
+		}
+	}
 	eventually(t, "nothing pending", func() bool {
 		pending, err := again.Pending(ctx)
 		return err == nil && !pending
 	})
 	if got := f.list(); len(got) != 0 {
 		t.Errorf("failures %+v", got)
+	}
+}
+
+// Each delivery has its own ID, also of the same transcription: queueing it
+// again is a new delivery, which the receiver must not drop as a repeat.
+func TestEachDeliveryHasItsOwnID(t *testing.T) {
+	t.Parallel()
+	r := newReceiver(t)
+	var f failures
+	q := startQueue(t, testOptions(&f))
+	first, err := q.Enqueue(ctx, r.URL, transcription(10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := q.Enqueue(ctx, r.URL, transcription(10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatalf("two deliveries share the ID %q", first)
+	}
+	eventually(t, "both POSTs", func() bool { return len(r.requests()) == 2 })
+	ids := map[string]bool{}
+	for _, got := range r.requests() {
+		ids[got.webhookID] = true
+	}
+	if !ids[first] || !ids[second] {
+		t.Errorf("webhook-ids %v, want %q and %q", ids, first, second)
 	}
 }
 
@@ -432,7 +474,7 @@ func TestEnqueueRefusesWhatCannotBeSent(t *testing.T) {
 		{"example.com/hook", transcription(1)},
 		{"https://example.com/hook", transcription(0)},
 	} {
-		if err := q.Enqueue(ctx, tt.url, tt.t); err == nil {
+		if _, err := q.Enqueue(ctx, tt.url, tt.t); err == nil {
 			t.Errorf("Enqueue(%q, ID %d) succeeded", tt.url, tt.t.ID)
 		}
 	}

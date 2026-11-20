@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riversqlite"
 	"github.com/riverqueue/river/rivermigrate"
@@ -22,9 +23,9 @@ import (
 
 // Transcription is what the webhook receives: the JSON body of the POST.
 type Transcription struct {
-	// ID identifies the transcription: its history entry's ID. Every
-	// attempt to send it carries the same one, so the receiver can drop
-	// repeats.
+	// ID identifies the transcription: its history entry's ID, for the
+	// receiver to match a POST to it. It is no key to drop repeats by:
+	// each machine numbers its own entries. The webhook-id header is.
 	ID int64 `json:"transcription_id"`
 	// Text is what was delivered, after the text stages.
 	Text string `json:"text"`
@@ -68,9 +69,15 @@ const (
 	failedRetention = 7 * 24 * time.Hour
 )
 
-// args are a job's arguments, stored as JSON in the jobs database: the URL
-// the transcription was queued for, and the transcription.
+// args are a job's arguments, stored as JSON in the jobs database: the
+// delivery's ID, the URL the transcription was queued for, and the
+// transcription.
 type args struct {
+	// ID identifies the delivery, in the webhook-id header: a random UUID,
+	// made when the job is queued and stored with it, so every attempt
+	// carries the same one, and no other delivery, from this machine or
+	// another, ever does.
+	ID            string        `json:"id"`
 	URL           string        `json:"url"`
 	Transcription Transcription `json:"transcription"`
 }
@@ -205,23 +212,25 @@ func (q *Queue) Start(ctx context.Context) error {
 	return q.client.Start(ctx)
 }
 
-// Enqueue queues t to be sent to webhookURL. The job keeps the URL, so a
+// Enqueue queues t to be sent to webhookURL and returns the delivery's ID,
+// which every attempt sends as webhook-id. The job keeps the URL, so a
 // later change of the setting leaves it alone.
-func (q *Queue) Enqueue(ctx context.Context, webhookURL string, t Transcription) error {
+func (q *Queue) Enqueue(ctx context.Context, webhookURL string, t Transcription) (string, error) {
 	if webhookURL == "" {
-		return errors.New("webhook: no URL")
+		return "", errors.New("webhook: no URL")
 	}
 	if err := config.CheckWebhookURL(webhookURL); err != nil {
-		return fmt.Errorf("webhook: %w", err)
+		return "", fmt.Errorf("webhook: %w", err)
 	}
 	if t.ID <= 0 {
-		return errors.New("webhook: the transcription has no ID")
+		return "", errors.New("webhook: the transcription has no ID")
 	}
 	t.StartedAt = t.StartedAt.UTC().Truncate(time.Millisecond)
-	if _, err := q.client.Insert(ctx, args{URL: webhookURL, Transcription: t}, nil); err != nil {
-		return fmt.Errorf("webhook: queue the transcription: %w", err)
+	a := args{ID: uuid.NewString(), URL: webhookURL, Transcription: t}
+	if _, err := q.client.Insert(ctx, a, nil); err != nil {
+		return "", fmt.Errorf("webhook: queue the transcription: %w", err)
 	}
-	return nil
+	return a.ID, nil
 }
 
 // Pending reports whether any transcription is still waiting to be sent,

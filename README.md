@@ -56,7 +56,7 @@ Set a URL in Settings → Advanced → Webhook (the `webhook_url` setting), and 
 ```http
 POST /transcriptions HTTP/1.1
 Content-Type: application/json
-Idempotency-Key: 42
+webhook-id: 6f1c2b8e-3d4a-4f5b-9a7c-2e8d1f0b3c4a
 User-Agent: Goscriber/0.4.0
 
 {
@@ -71,8 +71,8 @@ User-Agent: Goscriber/0.4.0
 }
 ```
 
-- **Fields.** `transcription_id` is the transcription's entry in the history, the number the History page shows on each entry while a webhook is set; `Idempotency-Key` carries it too. `text` is what was pasted, after cleanup; `raw_text` is the model's transcript; `language` is `""` when unknown; `started_at` is when recording started (for a file, when its transcription did), in UTC; `source` is `dictation` or the audio file's name.
-- **At least once.** Each POST is a job in a local queue ([River](https://riverqueue.com) on SQLite, in `jobs.sqlite3` beside the settings), so a transcription waits while the server is down or Goscriber is closed, and goes after the next launch. An attempt cut short, by quitting mid-request for instance, is made again, so the same transcription can arrive twice: drop repeats by `transcription_id`.
+- **Fields.** `transcription_id` is the transcription's entry in the history, the number the History page shows on each entry while a webhook is set. `text` is what was pasted, after cleanup; `raw_text` is the model's transcript; `language` is `""` when unknown; `started_at` is when recording started (for a file, when its transcription did), in UTC; `source` is `dictation` or the audio file's name.
+- **At least once.** Each POST is a job in a local queue ([River](https://riverqueue.com) on SQLite, in `jobs.sqlite3` beside the settings), so a transcription waits while the server is down or Goscriber is closed, and goes after the next launch. An attempt cut short, by quitting mid-request for instance, is made again, so the same POST can arrive twice: drop repeats by the `webhook-id` header, as [Standard Webhooks](https://www.standardwebhooks.com) names it. It is a random UUID made when the transcription is queued, the same on every attempt and unique to that delivery. Do not drop repeats by `transcription_id`: every machine numbers its own entries, so two can send the same number.
 - **Retries.** A network error, no answer within 30 s, a 408, a 429 or a 5xx answer is tried again after attempt⁴ seconds (1 s, 16 s, 81 s, …), up to 14 attempts in about a day. Any other answer outside 2xx (401, 404, a redirect other than 307 or 308) is not retried. A transcription Goscriber gives up raises one notice, which names the URL's host, never the URL, as it may hold a token.
 - **IDs.** IDs only go up. With a webhook set, a transcription gets its number even when the history keeps no dictations (`history_limit` 0): it is saved hidden and removed at once. Without a webhook, nothing is saved then. IDs start again from 1 only if the history database, `history.sqlite3`, is deleted.
 - **Changes.** A new URL applies to the transcriptions that follow; those already queued keep the URL they were queued for. A delivered transcription is deleted from the jobs database a minute later, and one given up a week later.
