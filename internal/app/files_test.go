@@ -202,6 +202,47 @@ func TestTranscribeFilePostProcessingFails(t *testing.T) {
 	}
 }
 
+// Process again on the History page post-processes an entry's transcript
+// with the post-processing settings as they are now, even with
+// llm_enabled off, and saves the model's text apart from the transcript;
+// switching to a provider that fails keeps the saved text.
+func TestReprocessHistoryEntry(t *testing.T) {
+	srv, _ := fakeLLM(t, 0)
+	down, _ := fakeLLM(t, 500)
+	home := isolate(t)
+	writeSettings(t, home, `{"schema_version": 2, "selected_model": "m", "llm_base_url": "`+srv.URL+`/v1", "llm_model": "test", "llm_prompt": "[${output}]"}`)
+	a := &trayApp{plainApp: plainApp{App: test.NewTempApp(t)}}
+	sh, _ := newTestShell(t, a, Options{})
+	e, err := sh.transcribeFile(context.Background(), writeTone(t, "memo.wav", 3*time.Second), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.ID == 0 || e.ProcessedText != "" || e.RawText != "hello from the test" {
+		t.Fatalf("saved %+v, want an entry that was not post-processed", e)
+	}
+
+	got, err := sh.historyActions().Reprocess(context.Background(), e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Text != "HELLO FROM THE TEST" || got.ProcessedText != "HELLO FROM THE TEST" || got.RawText != e.RawText || got.Model != e.Model {
+		t.Errorf("after processing again: %+v", got)
+	}
+	if saved, err := sh.history.Get(context.Background(), e.ID); err != nil || saved.ProcessedText != "HELLO FROM THE TEST" {
+		t.Errorf("in the history: %+v, %v", saved, err)
+	}
+
+	if err := sh.rt.Settings.Update(func(s *config.Settings) { s.LLMBaseURL = down.URL + "/v1" }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sh.historyActions().Reprocess(context.Background(), got); err == nil {
+		t.Error("a failing provider reported success")
+	}
+	if saved, err := sh.history.Get(context.Background(), e.ID); err != nil || saved.Text != "HELLO FROM THE TEST" || saved.ProcessedText != "HELLO FROM THE TEST" {
+		t.Errorf("after a failure: %+v, %v; want the text kept", saved, err)
+	}
+}
+
 // The Try button cleans the sample transcript whether post-processing is
 // on or not.
 func TestTryLLM(t *testing.T) {

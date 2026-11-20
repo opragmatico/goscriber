@@ -184,15 +184,47 @@ func TestDeleteAndDeleteAll(t *testing.T) {
 func TestRetranscribed(t *testing.T) {
 	s := open(t, keepAll)
 	e := s.add(t, 0)
-	got, err := s.Retranscribed(ctx, e.ID, Transcript{Text: "Better.", RawText: "better", Model: "nemotron", Language: "en-US"})
+	got, err := s.Retranscribed(ctx, e.ID, Transcript{
+		Text: "Better.", RawText: "better", ProcessedText: "Better.", Model: "nemotron", Language: "en-US",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Text != "Better." || got.RawText != "better" || got.Model != "nemotron" || got.Language != "en-US" ||
-		!got.At.Equal(e.At) || got.Recording != e.Recording {
+	if got.Text != "Better." || got.RawText != "better" || got.ProcessedText != "Better." || got.Model != "nemotron" ||
+		got.Language != "en-US" || !got.At.Equal(e.At) || got.Recording != e.Recording {
 		t.Errorf("got %+v", got)
 	}
 	if _, err := s.Retranscribed(ctx, 999, Transcript{}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("a missing entry: %v", err)
+	}
+}
+
+// The LLM's output is kept beside the transcript it was made from, and
+// processing again replaces it and the text, keeping the transcript.
+func TestReprocessed(t *testing.T) {
+	s := open(t, keepAll)
+	rec := record(0)
+	rec.Text, rec.ProcessedText = "Dictation, A.", "Dictation, A."
+	e, err := s.Add(ctx, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.Get(ctx, e.ID); err != nil || got.ProcessedText != "Dictation, A." || got.RawText != rec.RawText {
+		t.Fatalf("Get: %+v, %v", got, err)
+	}
+	if plain := s.add(t, 1); plain.ProcessedText != "" {
+		t.Errorf("a dictation that was not post-processed: %+v", plain)
+	}
+
+	got, err := s.Reprocessed(ctx, e.ID, Processing{Text: "Dictation A!", ProcessedText: "Dictation A!"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Text != "Dictation A!" || got.ProcessedText != "Dictation A!" || got.RawText != rec.RawText ||
+		got.Model != rec.Model || got.Language != rec.Language || !got.At.Equal(e.At) || got.Recording != e.Recording {
+		t.Errorf("got %+v", got)
+	}
+	if _, err := s.Reprocessed(ctx, 999, Processing{}); !errors.Is(err, ErrNotFound) {
 		t.Errorf("a missing entry: %v", err)
 	}
 }
@@ -445,5 +477,30 @@ func TestVisibleColumnMigration(t *testing.T) {
 	}
 	if got, err := s.Get(ctx, entries[0].ID); err != nil || !got.Visible {
 		t.Errorf("Get: %+v, %v", got, err)
+	}
+}
+
+// A history from before the LLM's output was kept (schema 3) opens with
+// none: its entries can still be processed from their transcript.
+func TestProcessedTextColumnMigration(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "history.sqlite3")
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := migrate(ctx, db, migrations[:3]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO entries (at, text, raw_text, model, duration_ms, source, visible) VALUES (1, 'Old dictation.', 'old dictation', 'm', 1000, '', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	s := reopen(t, path, filepath.Join(dir, "recordings"), keepAll)
+	entries, err := s.List(ctx, 0)
+	if err != nil || len(entries) != 1 || entries[0].Text != "Old dictation." || entries[0].RawText != "old dictation" ||
+		entries[0].ProcessedText != "" {
+		t.Fatalf("the old dictation after migrating: %+v, %v", entries, err)
 	}
 }

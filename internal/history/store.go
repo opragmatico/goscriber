@@ -34,10 +34,14 @@ type Entry struct {
 	// At is when recording started.
 	At time.Time
 	// Text is what was delivered, after the text stages, or the latest
-	// re-transcription.
+	// re-transcription or re-processing.
 	Text string
-	// RawText is the model's transcript, before the text stages.
+	// RawText is the model's transcript, before the text stages: what
+	// re-processing starts from.
 	RawText string
+	// ProcessedText is what LLM post-processing made of the transcript, or
+	// "" when it was not post-processed.
+	ProcessedText string
 	// Model is the catalog ID of the model that transcribed it.
 	Model string
 	// Language is the transcript's language when known, such as "en-US".
@@ -58,12 +62,14 @@ type Entry struct {
 
 // Record is a finished dictation to add.
 type Record struct {
-	At       time.Time
-	Text     string
-	RawText  string
-	Model    string
-	Language string
-	Duration time.Duration
+	At      time.Time
+	Text    string
+	RawText string
+	// ProcessedText is what LLM post-processing made of RawText, or "".
+	ProcessedText string
+	Model         string
+	Language      string
+	Duration      time.Duration
 	// Samples are the recording, mono at SampleRate Hz. None keeps no
 	// recording.
 	Samples    []float32
@@ -175,8 +181,8 @@ func (s *Store) Add(ctx context.Context, rec Record) (Entry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e := Entry{
-		At: rec.At, Text: rec.Text, RawText: rec.RawText, Model: rec.Model,
-		Language: rec.Language, Duration: rec.Duration, Source: rec.Source,
+		At: rec.At, Text: rec.Text, RawText: rec.RawText, ProcessedText: rec.ProcessedText,
+		Model: rec.Model, Language: rec.Language, Duration: rec.Duration, Source: rec.Source,
 		Visible: s.retention.Limit > 0,
 	}
 	file := ""
@@ -187,8 +193,8 @@ func (s *Store) Add(ctx context.Context, rec Record) (Entry, error) {
 		}
 	}
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO entries (at, text, raw_text, model, language, duration_ms, recording, source, visible) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		e.At.UnixMilli(), e.Text, e.RawText, e.Model, e.Language, e.Duration.Milliseconds(), file, e.Source, e.Visible)
+		`INSERT INTO entries (at, text, raw_text, processed_text, model, language, duration_ms, recording, source, visible) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		e.At.UnixMilli(), e.Text, e.RawText, e.ProcessedText, e.Model, e.Language, e.Duration.Milliseconds(), file, e.Source, e.Visible)
 	if err != nil {
 		s.removeRecording(file)
 		return Entry{}, fmt.Errorf("history: add: %w", err)
@@ -283,15 +289,34 @@ func (s *Store) Get(ctx context.Context, id int64) (Entry, error) {
 
 // Transcript is a new transcript of an entry's recording.
 type Transcript struct {
-	Text, RawText, Model, Language string
+	Text, RawText, ProcessedText, Model, Language string
 }
 
 // Retranscribed replaces the transcript of entry id with t, keeping its
 // time and recording, and returns the entry as it is now.
 func (s *Store) Retranscribed(ctx context.Context, id int64, t Transcript) (Entry, error) {
+	return s.update(ctx, id, `text = ?, raw_text = ?, processed_text = ?, model = ?, language = ?`,
+		t.Text, t.RawText, t.ProcessedText, t.Model, t.Language)
+}
+
+// Processing is a new processing of an entry's transcript, its RawText,
+// by the text stages.
+type Processing struct {
+	// Text is the transcript after the text stages, and ProcessedText what
+	// LLM post-processing made of it, or "".
+	Text, ProcessedText string
+}
+
+// Reprocessed replaces the text of entry id with p, keeping its transcript,
+// and returns the entry as it is now.
+func (s *Store) Reprocessed(ctx context.Context, id int64, p Processing) (Entry, error) {
+	return s.update(ctx, id, `text = ?, processed_text = ?`, p.Text, p.ProcessedText)
+}
+
+// update sets columns of the visible entry id and returns it as it is now.
+func (s *Store) update(ctx context.Context, id int64, set string, args ...any) (Entry, error) {
 	s.mu.Lock()
-	res, err := s.db.ExecContext(ctx, `UPDATE entries SET text = ?, raw_text = ?, model = ?, language = ? WHERE id = ? AND visible`,
-		t.Text, t.RawText, t.Model, t.Language, id)
+	res, err := s.db.ExecContext(ctx, `UPDATE entries SET `+set+` WHERE id = ? AND visible`, append(args, id)...)
 	s.mu.Unlock()
 	if err != nil {
 		return Entry{}, fmt.Errorf("history: update %d: %w", id, err)
@@ -406,7 +431,7 @@ func (s *Store) recordingPath(name string) string {
 	return filepath.Join(s.dir, filepath.Base(name))
 }
 
-const columns = `id, at, text, raw_text, model, language, duration_ms, recording, source, visible`
+const columns = `id, at, text, raw_text, processed_text, model, language, duration_ms, recording, source, visible`
 
 func (s *Store) scan(row interface{ Scan(...any) error }) (Entry, error) {
 	var (
@@ -414,7 +439,7 @@ func (s *Store) scan(row interface{ Scan(...any) error }) (Entry, error) {
 		at, dur  int64
 		filename string
 	)
-	if err := row.Scan(&e.ID, &at, &e.Text, &e.RawText, &e.Model, &e.Language, &dur, &filename, &e.Source, &e.Visible); err != nil {
+	if err := row.Scan(&e.ID, &at, &e.Text, &e.RawText, &e.ProcessedText, &e.Model, &e.Language, &dur, &filename, &e.Source, &e.Visible); err != nil {
 		return Entry{}, err
 	}
 	e.At = time.UnixMilli(at)

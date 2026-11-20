@@ -58,6 +58,10 @@ func newHistoryWindow(t *testing.T) *historyWindow {
 			Retranscribe: func(ctx context.Context, e history.Entry) (history.Entry, error) {
 				return store.Retranscribed(ctx, e.ID, history.Transcript{Text: "Better: " + e.Text, RawText: e.RawText, Model: nemotron})
 			},
+			Reprocess: func(ctx context.Context, e history.Entry) (history.Entry, error) {
+				p := "Processed: " + e.RawText
+				return store.Reprocessed(ctx, e.ID, history.Processing{Text: p, ProcessedText: p})
+			},
 		}
 	})
 	return hw
@@ -115,7 +119,7 @@ func TestHistoryPage(t *testing.T) {
 	if strings.Index(text, "Send the report") > strings.Index(text, "Yesterday's note") {
 		t.Error("the latest dictation should come first")
 	}
-	for _, label := range []string{LabelCopy, LabelPasteAgain, LabelPlay, LabelRetranscribe, LabelDeleteEntry} {
+	for _, label := range []string{LabelCopy, LabelPasteAgain, LabelPlay, LabelRetranscribe, LabelReprocess, LabelDeleteEntry} {
 		if hw.rowButton(t, 0, label) == nil {
 			t.Errorf("no [%s] on a dictation with its recording", label)
 		}
@@ -193,6 +197,50 @@ func TestHistoryRetranscribeFailure(t *testing.T) {
 	}
 }
 
+// Process again post-processes an entry's transcript, recording or not,
+// and shows the new text, marked as post-processed; a failure says why and
+// keeps the text.
+func TestHistoryReprocess(t *testing.T) {
+	hw := newHistoryWindow(t)
+	hw.add(t, time.Now().Add(-time.Minute), "Hello there.", false)
+	hw.show(PageHistory)
+	if strings.Contains(hw.pageText(PageHistory), "post-processed") {
+		t.Error("an entry that was not post-processed says it was")
+	}
+
+	test.Tap(hw.rowButton(t, 0, LabelReprocess))
+	if !strings.Contains(hw.pageText(PageHistory), HistoryReprocessing) || !hw.rowButton(t, 0, LabelReprocess).Disabled() {
+		t.Error("the row should say it is being post-processed again")
+	}
+	hw.q.until(t, "the new text", func() bool { return strings.Contains(hw.pageText(PageHistory), "Processed: hello there.") })
+	if got := hw.pageText(PageHistory); !strings.Contains(got, "post-processed") || strings.Contains(got, HistoryReprocessing) {
+		t.Errorf("after post-processing again:\n%s", got)
+	}
+
+	hw.opts.HistoryActions.Reprocess = func(context.Context, history.Entry) (history.Entry, error) {
+		return history.Entry{}, errors.New("provider down")
+	}
+	hw.RefreshHistory()
+	hw.q.drain()
+	test.Tap(hw.rowButton(t, 0, LabelReprocess))
+	hw.q.until(t, "the failure", func() bool {
+		return strings.Contains(hw.pageText(PageHistory), "Could not post-process it again: provider down")
+	})
+	if !strings.Contains(hw.pageText(PageHistory), "Processed: hello there.") || hw.rowButton(t, 0, LabelReprocess).Disabled() {
+		t.Error("a failure keeps the text, and the user can try again")
+	}
+
+	// An entry with no transcript has nothing to process.
+	if _, err := hw.store.Add(context.Background(), history.Record{At: time.Now(), Model: parakeetV2, Duration: time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	hw.RefreshHistory()
+	hw.q.until(t, "the empty entry", func() bool { return strings.Contains(hw.pageText(PageHistory), historyNothingDelivered) })
+	if hw.rowButton(t, 0, LabelReprocess) != nil {
+		t.Error("Process again on an entry with no transcript")
+	}
+}
+
 func TestHistoryHeading(t *testing.T) {
 	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
 	for _, tt := range []struct {
@@ -208,6 +256,10 @@ func TestHistoryHeading(t *testing.T) {
 		if got := historyHeading(history.Entry{At: tt.at, Duration: tt.dur}, "M", now); got != tt.want {
 			t.Errorf("%v: %q, want %q", tt.at, got, tt.want)
 		}
+	}
+	processed := history.Entry{At: now.Add(-time.Minute), Duration: time.Second, ProcessedText: "Fixed."}
+	if got, want := historyHeading(processed, "M", now), "Today 08:59 · 1 s · M · post-processed"; got != want {
+		t.Errorf("post-processed: %q, want %q", got, want)
 	}
 }
 

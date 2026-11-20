@@ -38,7 +38,7 @@ var _ pipeline.TextStage = (*Stage)(nil)
 // in part comes back with the failed chunks as they were.
 func (s *Stage) Process(ctx context.Context, text string, info pipeline.SessionInfo) (string, error) {
 	set := info.Settings
-	if (!set.LLMEnabled && !info.PostProcess) || strings.TrimSpace(text) == "" {
+	if !info.PostProcesses() || strings.TrimSpace(text) == "" {
 		return text, nil
 	}
 	job, err := s.Job(set)

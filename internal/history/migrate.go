@@ -30,6 +30,9 @@ var migrations = []string{
 	// history keeps no dictations is hidden and pruned at once: it is there
 	// only so the transcription has an ID, which the webhook sends.
 	`ALTER TABLE entries ADD COLUMN visible INTEGER NOT NULL DEFAULT 1;`,
+	// 4: what LLM post-processing made of the transcript, or '' when it
+	// was not post-processed, so it can be processed again from raw_text.
+	`ALTER TABLE entries ADD COLUMN processed_text TEXT NOT NULL DEFAULT '';`,
 }
 
 // migrate brings db's schema, versioned by SQLite's user_version, up to

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -174,26 +175,34 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 
 // A file's transcript goes through the cleanup and LLM stages, as a
 // dictation's does; an LLM stage that fails passes the cleaned text on.
+// What the LLM stage made of it is kept apart when it post-processed it.
 func TestTranscribeRunsTheTextStages(t *testing.T) {
 	llmErr := errors.New("no answer")
+	byTheModel := TextStageFunc(func(_ context.Context, text string, info SessionInfo) (string, error) {
+		if info.Settings.HistoryLimit != 7 {
+			t.Errorf("the LLM stage got settings %+v, want the current ones", info.Settings)
+		}
+		return text + " by the model", nil
+	})
 	for _, tc := range []struct {
-		name string
-		llm  TextStage
-		want string
+		name          string
+		llm           TextStage
+		enabled       bool
+		want          string
+		wantProcessed string
 	}{
-		{"no LLM stage", nil, "cleaned"},
-		{"LLM", TextStageFunc(func(_ context.Context, text string, info SessionInfo) (string, error) {
-			if info.Settings.HistoryLimit != 7 {
-				t.Errorf("the LLM stage got settings %+v, want the current ones", info.Settings)
-			}
-			return text + " by the model", nil
-		}), "cleaned by the model"},
-		{"failing LLM", TextStageFunc(func(context.Context, string, SessionInfo) (string, error) { return "", llmErr }), "cleaned"},
+		{"no LLM stage", nil, true, "cleaned", ""},
+		{"LLM", byTheModel, false, "cleaned by the model", ""},
+		{"LLM with llm_enabled", byTheModel, true, "cleaned by the model", "cleaned by the model"},
+		{"failing LLM", TextStageFunc(func(context.Context, string, SessionInfo) (string, error) { return "", llmErr }), true, "cleaned", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newRig(t, rigOptions{
-				script:   fake.Script{Replies: []fake.Reply{fake.Transcript("raw words")}},
-				settings: func(s *config.Settings) { s.HistoryLimit = 7 },
+				script: fake.Script{Replies: []fake.Reply{fake.Transcript("raw words")}},
+				settings: func(s *config.Settings) {
+					s.HistoryLimit = 7
+					s.LLMEnabled = tc.enabled
+				},
 				stages: Stages{
 					Cleanup: TextStageFunc(func(context.Context, string, SessionInfo) (string, error) { return "cleaned", nil }),
 					LLM:     tc.llm,
@@ -203,9 +212,61 @@ func TestTranscribeRunsTheTextStages(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.Text != tc.want || got.RawText != "raw words" {
-				t.Errorf("got %+v, want text %q", got, tc.want)
+			if got.Text != tc.want || got.RawText != "raw words" || got.ProcessedText != tc.wantProcessed {
+				t.Errorf("got %+v, want text %q and processed text %q", got, tc.want, tc.wantProcessed)
 			}
 		})
+	}
+}
+
+// A saved transcript is cleaned up and post-processed again with the
+// current settings, whatever llm_enabled says, and nothing is decoded or
+// delivered. A post-processing failure is an error, so the saved text is
+// kept.
+func TestReprocess(t *testing.T) {
+	llmErr := errors.New("provider down")
+	var fail atomic.Bool
+	r := newRig(t, rigOptions{
+		settings: func(s *config.Settings) { s.HistoryLimit = 7 },
+		stages: Stages{
+			Cleanup: TextStageFunc(func(_ context.Context, text string, _ SessionInfo) (string, error) {
+				return strings.TrimPrefix(text, "um "), nil
+			}),
+			LLM: TextStageFunc(func(_ context.Context, text string, info SessionInfo) (string, error) {
+				if !info.PostProcesses() || info.Model != "nemotron" || info.TextLanguage != "pt-BR" || info.Settings.HistoryLimit != 7 {
+					t.Errorf("the LLM stage got info %+v", info)
+				}
+				if fail.Load() {
+					return "", llmErr
+				}
+				return strings.ToUpper(text), nil
+			}),
+		},
+	})
+
+	got, err := r.c.Reprocess(context.Background(), "um olá", "nemotron", "pt-BR")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (Processing{Text: "OLÁ", ProcessedText: "OLÁ"}); got != want {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+	if len(r.eng.Recognitions()) != 0 || len(r.out.delivered()) != 0 || len(r.events.states()) != 0 {
+		t.Error("processing again decodes and delivers nothing, and leaves dictation idle")
+	}
+
+	fail.Store(true)
+	if _, err := r.c.Reprocess(context.Background(), "um olá", "nemotron", "pt-BR"); !errors.Is(err, llmErr) {
+		t.Errorf("a failing LLM stage: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := r.c.Reprocess(ctx, "um olá", "nemotron", "pt-BR"); !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled: %v", err)
+	}
+
+	bare := newRig(t, rigOptions{})
+	if _, err := bare.c.Reprocess(context.Background(), "text", "asr", ""); !errors.Is(err, ErrNoPostProcessing) {
+		t.Errorf("without an LLM stage: %v", err)
 	}
 }

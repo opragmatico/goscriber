@@ -16,6 +16,9 @@ type Retranscription struct {
 	// Text is the transcript after the cleanup and LLM stages, and RawText
 	// the model's.
 	Text, RawText string
+	// ProcessedText is the LLM stage's output, or "" when the transcript
+	// was not post-processed or post-processing failed.
+	ProcessedText string
 	// Model is the catalog ID of the model that transcribed it.
 	Model string
 	// Language is the transcript's language as best known (see
@@ -115,7 +118,80 @@ func (c *Coordinator) Transcribe(ctx context.Context, samples []float32, rate in
 		Duration:     total,
 		Settings:     settings.Clone(),
 	}
-	text := res.Text
+	p, err := c.process(ctx, res.Text, info)
+	if err != nil {
+		return Retranscription{}, err
+	}
+	c.log.Info("audio transcribed", "model", model.Spec.ID, "audio", total.Round(time.Millisecond),
+		"took", time.Since(start).Round(time.Millisecond), "chars", len([]rune(p.text)))
+	return Retranscription{
+		Text: p.text, RawText: res.Text, ProcessedText: p.processed,
+		Model: model.Spec.ID, Language: info.TextLanguage,
+	}, nil
+}
+
+// Processing is a saved transcript processed again by the text stages.
+type Processing struct {
+	// Text is the transcript after the cleanup and LLM stages, and
+	// ProcessedText the LLM stage's output.
+	Text, ProcessedText string
+}
+
+// ErrNoPostProcessing is Reprocess's error when the coordinator has no LLM
+// stage to post-process with.
+var ErrNoPostProcessing = errors.New("post-processing is not available")
+
+// Reprocess has the cleanup and LLM stages process a saved transcript
+// again, for the History page: rawText, the transcript the model with
+// catalog ID model wrote, in language (as SessionInfo.TextLanguage, or ""
+// when unknown). It post-processes whatever llm_enabled says, with the
+// post-processing settings as they are now, so the user can try another
+// provider, model or prompt on the same transcript. Custom words are
+// corrected in it, as for a model that does not boost them.
+//
+// It fails when post-processing does, wholly, so a failure never replaces
+// a saved text; a transcript cleaned in part comes back with the failed
+// parts as cleanup left them. Nothing is decoded, delivered or saved.
+func (c *Coordinator) Reprocess(ctx context.Context, rawText, model, language string) (Processing, error) {
+	if c.stages.LLM == nil {
+		return Processing{}, ErrNoPostProcessing
+	}
+	info := SessionInfo{
+		Model:        model,
+		TextLanguage: language,
+		PostProcess:  true,
+		Settings:     c.settings().Clone(),
+	}
+	start := time.Now()
+	p, err := c.process(ctx, rawText, info)
+	if err == nil {
+		err = p.llmErr
+	}
+	if err != nil {
+		return Processing{}, err
+	}
+	c.log.Info("transcript processed again", "model", model,
+		"took", time.Since(start).Round(time.Millisecond), "chars", len([]rune(p.text)))
+	return Processing{Text: p.text, ProcessedText: p.processed}, nil
+}
+
+// processed is what the cleanup and LLM stages made of a transcript outside
+// a dictation.
+type processed struct {
+	// text is the transcript after both stages.
+	text string
+	// processed is the LLM stage's output when it post-processed the
+	// transcript (SessionInfo.PostProcesses) and did not fail, else "".
+	processed string
+	// llmErr is the LLM stage's error, when it failed.
+	llmErr error
+}
+
+// process has the cleanup and LLM stages process text as they do a
+// dictation's transcript; a stage that fails passes its input on. It fails
+// only when ctx is done.
+func (c *Coordinator) process(ctx context.Context, text string, info SessionInfo) (processed, error) {
+	p := processed{text: text}
 	for _, st := range []struct {
 		name  string
 		stage TextStage
@@ -126,19 +202,23 @@ func (c *Coordinator) Transcribe(ctx context.Context, samples []float32, rate in
 		if st.stage == nil {
 			continue
 		}
-		out, err := st.stage.Process(ctx, text, info)
+		out, err := st.stage.Process(ctx, p.text, info)
 		if err := ctx.Err(); err != nil {
-			return Retranscription{}, err
+			return processed{}, err
 		}
-		if err != nil {
+		switch {
+		case err != nil:
 			c.log.Warn("a text stage failed on a transcription; passing its input on", "stage", st.name, "err", err)
-		} else {
-			text = out
+			if st.name == "llm" {
+				p.llmErr = err
+			}
+		case st.name == "llm" && info.PostProcesses():
+			p.text, p.processed = out, out
+		default:
+			p.text = out
 		}
 	}
-	c.log.Info("audio transcribed", "model", model.Spec.ID, "audio", total.Round(time.Millisecond),
-		"took", time.Since(start).Round(time.Millisecond), "chars", len([]rune(text)))
-	return Retranscription{Text: text, RawText: res.Text, Model: model.Spec.ID, Language: info.TextLanguage}, nil
+	return p, nil
 }
 
 // onEngine runs f on the engine goroutine and returns its error, or ctx's
