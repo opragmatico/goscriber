@@ -293,6 +293,8 @@ func dictationAction(a hotkey.Action) pipeline.Action {
 	switch a {
 	case hotkey.ActionStart:
 		return pipeline.ActionStart
+	case hotkey.ActionStartPostProcess:
+		return pipeline.ActionStartPostProcess
 	case hotkey.ActionStop:
 		return pipeline.ActionStop
 	case hotkey.ActionCancel:

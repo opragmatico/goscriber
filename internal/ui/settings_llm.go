@@ -72,7 +72,8 @@ type llmState struct {
 func (w *SettingsWindow) postProcessingPage() fyne.CanvasObject {
 	rows := []fyne.CanvasObject{
 		w.row("Clean up transcripts", "A language model fixes misheard words, numbers and punctuation before the text is pasted, "+
-			"and in the files you transcribe. It adds a moment to each dictation; if it fails, the text is pasted as transcribed.",
+			"and in the files you transcribe. It adds a moment to each dictation; if it fails, the text is pasted as transcribed. "+
+			"Off, the post-processing shortcut on the General page still cleans the dictations it starts.",
 			boolSetting(w, "llm_enabled", func(s *config.Settings) *bool { return &s.LLMEnabled })),
 		w.row("Provider", "Any server with an OpenAI-compatible API: on this computer, or a service that takes an API key.", w.providerSetting()),
 		w.row("Base URL", "Its API's address, ending in /v1 for most.", w.baseURLSetting()),

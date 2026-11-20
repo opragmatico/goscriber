@@ -4,7 +4,9 @@ An optional stage after [text cleanup](architecture.md#text-cleanup) ([#39](http
 
 ## Setting it up
 
-The settings window's **Post-processing** page turns it on and picks the provider, its base URL, the model and the prompt; **Try it** has the model clean a sample dictation with them. The settings are `llm_enabled` (off by default), `llm_base_url` (Ollama's by default), `llm_model` (empty: the [suggested model](#models), for a provider on this computer) and `llm_prompt` (empty: the [built-in prompt](#prompt)). An API key is saved to the OS keychain (the macOS Keychain, the Secret Service on Linux, the Windows Credential Manager) as "Goscriber LLM API key", under its base URL, so each provider keeps its own and none is in `settings.json`.
+The settings window's **Post-processing** page turns it on for every dictation and picks the provider, its base URL, the model and the prompt; **Try it** has the model clean a sample dictation with them. The settings are `llm_enabled` (off by default), `llm_base_url` (Ollama's by default), `llm_model` (empty: the [suggested model](#models), for a provider on this computer) and `llm_prompt` (empty: the [built-in prompt](#prompt)). An API key is saved to the OS keychain (the macOS Keychain, the Secret Service on Linux, the Windows Credential Manager) as "Goscriber LLM API key", under its base URL, so each provider keeps its own and none is in `settings.json`.
+
+The **post-processing shortcut** (`post_process_shortcut`, on the General page) dictates as the dictation shortcut does and post-processes that one dictation even with `llm_enabled` off, as Handy's `transcribe_with_post_process` binding does; its defaults are Handy's, `option+shift+space` on macOS, `ctrl+shift+space` on Windows and `ctrl+alt+shift+space` on Linux. The coordinator marks the session (`SessionInfo.PostProcess`), and `llm.Stage` cleans a transcript when either that or `llm_enabled` says so. Handy registers the shortcut only while post-processing is on, and its first shortcut never post-processes; Goscriber keeps the second registered and lets `llm_enabled` decide for the first, so either way of working fits. Clearing the shortcut gives its keys back. [Shortcuts](architecture.md#shortcuts) has how the two share the activation mode.
 
 `goscriber transcribe --llm FILE` cleans a file's transcript from the command line with the same settings, whether `llm_enabled` is on or not; `--llm-model` and `--llm-url` override them. It asks the provider for its models before decoding any audio, so a server that is down or lacks the model fails at once, naming the models it has. With `--json`, `text` is the cleaned transcript and `raw_text` the speech model's.
 
@@ -88,7 +90,8 @@ On an M4 Max with 36 GB, through Ollama 0.40.16, with Handy's default prompt and
 
 ## Open points
 
-- **A shortcut for post-processing.** Handy has a second shortcut that transcribes with post-processing while the first one transcribes without; Goscriber post-processes every dictation or none.
+- **Post-processing from the command line.** Handy's `--toggle-post-process` toggles a post-processed dictation in the running app; Goscriber's `--toggle-transcription` and `SIGUSR2` start plain ones, so on Wayland without the global shortcuts portal the post-processing shortcut is heard in X11 apps only.
+- **Upgrading onto the new default.** A user whose dictation shortcut is already the post-processing shortcut's default (`ctrl+shift+space` on Windows, say) gets a `shortcut_failed` notice at the first launch after upgrading, until they pick other keys or clear it.
 - **Unpunctuated transcripts.** A transcript with no sentence punctuation stays one chunk however long it is; every transcript measured had punctuation.
 - **Other machines.** Only an M4 Max was measured. A base M-series chip has a third or less of its memory bandwidth, which bounds how fast a model generates; Linux was not measured.
 - **`gemma4:26b` on short dictations** was not measured.

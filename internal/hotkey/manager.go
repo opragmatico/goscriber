@@ -1,7 +1,6 @@
 package hotkey
 
 import (
-	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -40,7 +39,10 @@ type Registration interface {
 
 // Config is what the Manager registers and how it reads the keys.
 type Config struct {
-	Transcribe    string // the transcribe shortcut, as Parse reads it
+	Transcribe string // the transcribe shortcut, as Parse reads it
+	// PostProcess is the post-processing shortcut, which starts dictations
+	// that are post-processed whatever llm_enabled says; "" registers none.
+	PostProcess   string
 	Cancel        string // the cancel shortcut, registered only while recording
 	Mode          config.ActivationMode
 	HoldThreshold time.Duration
@@ -50,6 +52,7 @@ type Config struct {
 func ConfigFrom(s config.Settings) Config {
 	return Config{
 		Transcribe:    s.TranscribeShortcut,
+		PostProcess:   s.PostProcessShortcut,
 		Cancel:        s.CancelShortcut,
 		Mode:          s.ActivationMode,
 		HoldThreshold: time.Duration(s.HoldThresholdMS) * time.Millisecond,
@@ -65,7 +68,7 @@ type RegisterError struct {
 }
 
 func (e *RegisterError) Error() string {
-	return fmt.Sprintf("the %s shortcut %q is not available: %v", e.Purpose, e.Shortcut, e.Err)
+	return fmt.Sprintf("the %s shortcut %q is not available: %v", e.Purpose.Name(), e.Shortcut, e.Err)
 }
 
 func (e *RegisterError) Unwrap() error { return e.Err }
@@ -85,8 +88,8 @@ type Options struct {
 	Log *slog.Logger
 }
 
-// Manager registers the transcribe and cancel shortcuts and turns their key
-// events into actions through an Activator.
+// Manager registers the transcribe, post-processing and cancel shortcuts
+// and turns their key events into actions through an Activator.
 //
 // One goroutine owns the registrations and the Activator; the methods only
 // queue work for it and never block. That matters on macOS, where
@@ -104,14 +107,15 @@ type Manager struct {
 	done  chan struct{}
 
 	// Owned by the run goroutine.
-	cfg        Config
-	applied    bool
-	act        Activator
-	recording  bool // dictation confirmed a recording in progress
-	suspended  bool // the shortcuts are given back to the OS for now
-	transcribe slot
-	cancel     slot
-	closed     bool
+	cfg         Config
+	applied     bool
+	act         Activator
+	recording   bool // dictation confirmed a recording in progress
+	suspended   bool // the shortcuts are given back to the OS for now
+	transcribe  slot
+	postProcess slot
+	cancel      slot
+	closed      bool
 }
 
 // slot is one shortcut and its registration.
@@ -134,14 +138,15 @@ func newManager(be Backend, opts Options, now func() time.Time) *Manager {
 		log = slog.Default()
 	}
 	m := &Manager{
-		be:         be,
-		opts:       opts,
-		log:        log,
-		now:        now,
-		wake:       make(chan struct{}, 1),
-		done:       make(chan struct{}),
-		transcribe: slot{purpose: PurposeTranscribe},
-		cancel:     slot{purpose: PurposeCancel},
+		be:          be,
+		opts:        opts,
+		log:         log,
+		now:         now,
+		wake:        make(chan struct{}, 1),
+		done:        make(chan struct{}),
+		transcribe:  slot{purpose: PurposeTranscribe},
+		postProcess: slot{purpose: PurposePostProcess},
+		cancel:      slot{purpose: PurposeCancel},
 	}
 	go m.run()
 	return m
@@ -200,11 +205,13 @@ func (m *Manager) run() {
 				m.transcribe.events = nil
 				continue
 			}
-			if ev == KeyDown {
-				m.dispatch(m.act.Press(m.now()))
-			} else {
-				m.dispatch(m.act.Release(m.now()))
+			m.key(PurposeTranscribe, ev)
+		case ev, ok := <-m.postProcess.events:
+			if !ok {
+				m.postProcess.events = nil
+				continue
 			}
+			m.key(PurposePostProcess, ev)
 		case ev, ok := <-m.cancel.events:
 			if !ok {
 				m.cancel.events = nil
@@ -214,6 +221,16 @@ func (m *Manager) run() {
 				m.dispatch(m.act.Cancel())
 			}
 		}
+	}
+}
+
+// key hands a key event of the transcribe or post-processing shortcut to
+// the Activator.
+func (m *Manager) key(p Purpose, ev KeyEvent) {
+	if ev == KeyDown {
+		m.dispatch(m.act.Press(p, m.now()))
+	} else {
+		m.dispatch(m.act.Release(p, m.now()))
 	}
 }
 
@@ -238,18 +255,31 @@ func (m *Manager) apply(cfg Config) {
 	m.applied = true
 	m.act.Mode, m.act.HoldThreshold = cfg.Mode, cfg.HoldThreshold
 	transcribeChanged := first || cfg.Transcribe != m.cfg.Transcribe || m.transcribe.reg == nil
-	cancelChanged := first || cfg.Cancel != m.cfg.Cancel || cfg.Transcribe != m.cfg.Transcribe
+	// The post-processing shortcut gives way to a transcribe shortcut
+	// moved onto its keys, and the cancel shortcut to either.
+	postChanged := first || cfg.PostProcess != m.cfg.PostProcess || m.postProcess.reg == nil ||
+		(cfg.Transcribe != m.cfg.Transcribe && sameKeys(cfg.Transcribe, cfg.PostProcess))
+	cancelChanged := first || cfg.Cancel != m.cfg.Cancel || cfg.Transcribe != m.cfg.Transcribe || cfg.PostProcess != m.cfg.PostProcess
 	m.cfg = cfg
 
+	// Every changed shortcut lets go of its keys before any registers, so
+	// the two may swap keys.
+	var changed []*slot
 	if transcribeChanged {
-		m.unregister(&m.transcribe)
-		m.transcribe.shortcut = cfg.Transcribe
+		changed = append(changed, &m.transcribe)
+	}
+	if postChanged {
+		changed = append(changed, &m.postProcess)
+	}
+	for _, s := range changed {
+		m.unregister(s)
 		// A key held during the switch belongs to the old shortcut.
-		m.act.down, m.act.ownsPress = false, false
-		if !m.suspended {
-			if b, err := m.binding(PurposeTranscribe, cfg.Transcribe); err == nil {
-				m.register(&m.transcribe, b)
-			}
+		m.act.forget(s.purpose)
+	}
+	m.transcribe.shortcut, m.postProcess.shortcut = cfg.Transcribe, cfg.PostProcess
+	if !m.suspended {
+		for _, s := range changed {
+			m.registerKey(s)
 		}
 	}
 	if cancelChanged {
@@ -259,14 +289,23 @@ func (m *Manager) apply(cfg Config) {
 	}
 }
 
+// registerKey registers the transcribe or post-processing shortcut, unless
+// the post-processing one is unset.
+func (m *Manager) registerKey(s *slot) {
+	if s.purpose == PurposePostProcess && s.shortcut == "" {
+		return
+	}
+	if b, err := m.binding(s.purpose, s.shortcut); err == nil {
+		m.register(s, b)
+	}
+}
+
 // binding parses and validates a configured shortcut, reporting a problem
 // to OnError.
 func (m *Manager) binding(p Purpose, shortcut string) (Binding, error) {
 	b, err := ParseFor(shortcut, p)
-	if err == nil && p == PurposeCancel {
-		if t, terr := Parse(m.cfg.Transcribe); terr == nil && t == b {
-			err = errors.New("it is the transcribe shortcut too")
-		}
+	if err == nil {
+		err = m.clash(p, b)
 	}
 	if err != nil {
 		m.fail(p, shortcut, err)
@@ -275,17 +314,47 @@ func (m *Manager) binding(p Purpose, shortcut string) (Binding, error) {
 	return b, nil
 }
 
+// clash reports a shortcut whose keys b, the shortcut for p, would take:
+// the transcribe shortcut keeps its keys, and the cancel shortcut, only
+// registered while recording, gives way to both others.
+func (m *Manager) clash(p Purpose, b Binding) error {
+	var others []Purpose
+	switch p {
+	case PurposePostProcess:
+		others = []Purpose{PurposeTranscribe}
+	case PurposeCancel:
+		others = []Purpose{PurposeTranscribe, PurposePostProcess}
+	}
+	for _, o := range others {
+		shortcut := m.cfg.Transcribe
+		if o == PurposePostProcess {
+			shortcut = m.cfg.PostProcess
+		}
+		if ob, err := Parse(shortcut); err == nil && ob == b {
+			return fmt.Errorf("it is the %s shortcut too", o.Name())
+		}
+	}
+	return nil
+}
+
+// sameKeys reports whether two configured shortcuts are the same keys.
+func sameKeys(a, b string) bool {
+	ab, aerr := Parse(a)
+	bb, berr := Parse(b)
+	return aerr == nil && berr == nil && ab == bb
+}
+
 func (m *Manager) suspend(on bool) {
 	if on == m.suspended {
 		return
 	}
 	m.suspended = on
-	if on {
-		m.unregister(&m.transcribe)
-		m.act.down, m.act.ownsPress = false, false
-	} else if m.applied {
-		if b, err := m.binding(PurposeTranscribe, m.cfg.Transcribe); err == nil {
-			m.register(&m.transcribe, b)
+	for _, s := range []*slot{&m.transcribe, &m.postProcess} {
+		if on {
+			m.unregister(s)
+			m.act.forget(s.purpose)
+		} else if m.applied {
+			m.registerKey(s)
 		}
 	}
 	m.syncCancel()
@@ -344,6 +413,7 @@ func (m *Manager) fail(p Purpose, shortcut string, err error) {
 
 func (m *Manager) close() {
 	m.unregister(&m.transcribe)
+	m.unregister(&m.postProcess)
 	m.unregister(&m.cancel)
 	m.closed = true
 }

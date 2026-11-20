@@ -96,6 +96,11 @@ func TestValidate(t *testing.T) {
 		if err := b.Validate(PurposeCancel); (err == nil) != tc.cancel {
 			t.Errorf("%s as cancel: %v", tc.in, err)
 		}
+		// The post-processing shortcut is always registered, as the
+		// transcribe shortcut is.
+		if err := b.Validate(PurposePostProcess); (err == nil) != tc.transcribe {
+			t.Errorf("%s as post-processing: %v", tc.in, err)
+		}
 	}
 	if _, err := ParseFor("space", PurposeTranscribe); err == nil || !strings.Contains(err.Error(), "add a modifier") {
 		t.Errorf("ParseFor(space) = %v", err)
@@ -111,9 +116,35 @@ func TestDefaultShortcutsAreValid(t *testing.T) {
 	if _, err := ParseFor(d.CancelShortcut, PurposeCancel); err != nil {
 		t.Error(err)
 	}
-	for _, s := range []string{"option+space", "ctrl+space", "ctrl+alt+space", "alt+space"} {
-		if _, err := ParseFor(s, PurposeTranscribe); err != nil {
+	if _, err := ParseFor(d.PostProcessShortcut, PurposePostProcess); err != nil {
+		t.Error(err)
+	}
+	// Each OS's transcribe default, and Handy's transcribe_with_post_process
+	// default, which must differ from it.
+	for _, tc := range []struct{ transcribe, postProcess string }{
+		{"option+space", "option+shift+space"},
+		{"ctrl+space", "ctrl+shift+space"},
+		{"ctrl+alt+space", "ctrl+alt+shift+space"},
+		{"alt+space", "alt+shift+space"},
+	} {
+		tb, err := ParseFor(tc.transcribe, PurposeTranscribe)
+		if err != nil {
 			t.Error(err)
+		}
+		pb, err := ParseFor(tc.postProcess, PurposePostProcess)
+		if err != nil {
+			t.Error(err)
+		}
+		if tb == pb {
+			t.Errorf("%s is the transcribe shortcut too", tc.postProcess)
+		}
+	}
+}
+
+func TestPurposeName(t *testing.T) {
+	for p, want := range map[Purpose]string{PurposeTranscribe: "transcribe", PurposeCancel: "cancel", PurposePostProcess: "post-processing"} {
+		if got := p.Name(); got != want {
+			t.Errorf("%s: %q, want %q", p, got, want)
 		}
 	}
 }

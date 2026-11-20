@@ -102,7 +102,7 @@ func TestFirstLaunchOnboarding(t *testing.T) {
 		})
 	}
 
-	testShortcuts.waitLog(t, "+"+defaultTalk(t))
+	testShortcuts.waitLog(t, "+"+defaultTalk(t), "+"+defaultPolish(t))
 	testShortcuts.press(t, defaultTalk(t))
 	q.waitUI(t, "the no-model notice", func() bool { return sh.notices.Count(notice.CodeNoModel) == 1 })
 	q.drain()

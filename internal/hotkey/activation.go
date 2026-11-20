@@ -15,6 +15,10 @@ const (
 	ActionStart         // start recording
 	ActionStop          // stop recording and transcribe
 	ActionCancel        // stop recording and discard it
+	// ActionStartPostProcess starts recording a dictation whose transcript
+	// is post-processed whatever llm_enabled says: the post-processing
+	// shortcut's start.
+	ActionStartPostProcess
 )
 
 func (a Action) String() string {
@@ -25,14 +29,16 @@ func (a Action) String() string {
 		return "stop"
 	case ActionCancel:
 		return "cancel"
+	case ActionStartPostProcess:
+		return "start_post_process"
 	default:
 		return "none"
 	}
 }
 
-// Activator turns the transcribe shortcut's key-down and key-up events, and
-// the cancel shortcut's key-downs, into actions, following an activation
-// mode:
+// Activator turns the key-down and key-up events of the shortcuts that
+// start dictation (the transcribe and post-processing shortcuts), and the
+// cancel shortcut's key-downs, into actions, following an activation mode:
 //
 //   - toggle: each press starts or stops a recording; releases do nothing.
 //   - push-to-talk: a press starts a recording and its release stops it.
@@ -41,17 +47,24 @@ func (a Action) String() string {
 //     recording; released sooner it was a tap, and the recording goes on
 //     until the next press.
 //
+// A recording belongs to the shortcut that started it, as in Handy: the
+// other shortcut does nothing until it ends. A recording started without a
+// shortcut (the tray menu, the command line) belongs to neither, so either
+// stops it.
+//
 // Key repeat is ignored: a press while the key is already down does
-// nothing. The Activator tracks whether a recording is in progress, but
-// dictation may also start or end one on its own (the tray menu, an error,
-// another cancel): report that with SetRecording. An Activator is not safe
-// for concurrent use; the Manager drives it from one goroutine.
+// nothing, and so does a press of one shortcut while the other is held.
+// The Activator tracks whether a recording is in progress, but dictation
+// may also start or end one on its own (the tray menu, an error, another
+// cancel): report that with SetRecording. An Activator is not safe for
+// concurrent use; the Manager drives it from one goroutine.
 type Activator struct {
 	Mode          config.ActivationMode
 	HoldThreshold time.Duration
 
 	recording bool      // a recording is in progress
-	down      bool      // the transcribe key is held
+	owner     Purpose   // the shortcut that started the recording, or "" when none did
+	held      Purpose   // the shortcut whose key is down, or ""
 	downAt    time.Time // when it was pressed
 	ownsPress bool      // the current press started the recording, so its release may stop it
 }
@@ -60,43 +73,60 @@ type Activator struct {
 // progress.
 func (a *Activator) Recording() bool { return a.recording }
 
-// Press handles a key-down of the transcribe shortcut at now.
-func (a *Activator) Press(now time.Time) Action {
-	if a.down {
-		return ActionNone // key repeat
+// Press handles a key-down at now of the shortcut for p, PurposeTranscribe
+// or PurposePostProcess.
+func (a *Activator) Press(p Purpose, now time.Time) Action {
+	if a.held != "" {
+		return ActionNone // key repeat, or the other shortcut while this one is held
 	}
-	a.down, a.downAt = true, now
+	if a.recording && a.owner != "" && a.owner != p {
+		return ActionNone // the other shortcut's recording
+	}
+	a.held, a.downAt = p, now
 	switch a.Mode {
 	case config.ActivationPushToTalk:
 		a.ownsPress = true // its release stops even a recording started elsewhere
 		if a.recording {
 			return ActionNone
 		}
-		a.recording = true
-		return ActionStart
+		return a.start(p)
 	case config.ActivationHoldOrToggle:
 		if a.recording { // a latched tap, or a recording started elsewhere
-			a.recording, a.ownsPress = false, false
+			a.stop()
 			return ActionStop
 		}
-		a.recording, a.ownsPress = true, true
-		return ActionStart
+		a.ownsPress = true
+		return a.start(p)
 	default: // toggle
 		a.ownsPress = false
-		a.recording = !a.recording
 		if a.recording {
-			return ActionStart
+			a.stop()
+			return ActionStop
 		}
-		return ActionStop
+		return a.start(p)
 	}
 }
 
-// Release handles a key-up of the transcribe shortcut at now.
-func (a *Activator) Release(now time.Time) Action {
-	if !a.down {
+// start begins a recording that belongs to the shortcut for p.
+func (a *Activator) start(p Purpose) Action {
+	a.recording, a.owner = true, p
+	if p == PurposePostProcess {
+		return ActionStartPostProcess
+	}
+	return ActionStart
+}
+
+// stop ends the recording, which no press controls any more.
+func (a *Activator) stop() {
+	a.recording, a.owner, a.ownsPress = false, "", false
+}
+
+// Release handles a key-up at now of the shortcut for p.
+func (a *Activator) Release(p Purpose, now time.Time) Action {
+	if a.held == "" || a.held != p {
 		return ActionNone
 	}
-	a.down = false
+	a.held = ""
 	owns := a.ownsPress
 	a.ownsPress = false
 	if !owns || !a.recording {
@@ -104,11 +134,11 @@ func (a *Activator) Release(now time.Time) Action {
 	}
 	switch a.Mode {
 	case config.ActivationPushToTalk:
-		a.recording = false
+		a.stop()
 		return ActionStop
 	case config.ActivationHoldOrToggle:
 		if now.Sub(a.downAt) >= a.HoldThreshold {
-			a.recording = false
+			a.stop()
 			return ActionStop
 		}
 		return ActionNone // a tap: the recording is latched until the next press
@@ -118,22 +148,31 @@ func (a *Activator) Release(now time.Time) Action {
 }
 
 // Cancel handles a key-down of the cancel shortcut: it cancels a recording
-// in progress and does nothing otherwise. The transcribe key's release, if
-// it is still held, then does nothing.
+// in progress and does nothing otherwise. The held key's release, if it is
+// still held, then does nothing.
 func (a *Activator) Cancel() Action {
 	if !a.recording {
 		return ActionNone
 	}
-	a.recording, a.ownsPress = false, false
+	a.stop()
 	return ActionCancel
 }
 
 // SetRecording tells the Activator whether a recording is in progress, when
 // dictation started or ended one without the shortcut, or refused to start
-// one. The press being held, if any, no longer controls the recording.
+// one. The press being held, if any, no longer controls the recording, and
+// a recording started this way belongs to no shortcut.
 func (a *Activator) SetRecording(on bool) {
 	if a.recording != on {
-		a.ownsPress = false
+		a.ownsPress, a.owner = false, ""
 	}
 	a.recording = on
+}
+
+// forget drops the press of p's key, if it is held: its shortcut changed
+// or was given back to the OS, so its release will never come.
+func (a *Activator) forget(p Purpose) {
+	if a.held == p {
+		a.held, a.ownsPress = "", false
+	}
 }

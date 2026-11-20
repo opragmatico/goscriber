@@ -173,7 +173,7 @@ func TestDesktopShortcutsFromThePortal(t *testing.T) {
 
 	tw.SetDesktopShortcuts(DesktopShortcuts{State: PortalAsking})
 	got := general()
-	for _, want := range []string{"Desktop keys", "Waiting for you to confirm", DictationHintPortal, CancelHintPortal} {
+	for _, want := range []string{"Desktop keys", "Waiting for you to confirm", DictationHintPortal, PostProcessHintPortal, CancelHintPortal} {
 		if !strings.Contains(got, want) {
 			t.Errorf("while asking, the General page lacks %q:\n%s", want, got)
 		}
@@ -182,8 +182,11 @@ func TestDesktopShortcutsFromThePortal(t *testing.T) {
 		t.Errorf("while asking, the General page offers the command or Change…:\n%s", got)
 	}
 
-	tw.SetDesktopShortcuts(DesktopShortcuts{State: PortalBound, Transcribe: "Ctrl+Alt+Space", Cancel: "Ctrl+Escape", CanChange: true})
-	if got := general(); !strings.Contains(got, "Dictation: Ctrl+Alt+Space. Cancel: Ctrl+Escape.") || !strings.Contains(got, "[Change…]") {
+	tw.SetDesktopShortcuts(DesktopShortcuts{
+		State: PortalBound, Transcribe: "Ctrl+Alt+Space", PostProcess: "Ctrl+Alt+Shift+Space", Cancel: "Ctrl+Escape", CanChange: true,
+	})
+	if got := general(); !strings.Contains(got, "Dictation: Ctrl+Alt+Space. Post-processing: Ctrl+Alt+Shift+Space. Cancel: Ctrl+Escape.") ||
+		!strings.Contains(got, "[Change…]") {
 		t.Errorf("once bound:\n%s", got)
 	}
 	test.Tap(tw.buttons(PageGeneral)["Change…"])

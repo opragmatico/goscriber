@@ -77,6 +77,10 @@ type SessionInfo struct {
 	// Boosted reports whether the model was asked to favour the custom
 	// words, so the transcript already spells them as the user does.
 	Boosted bool
+	// PostProcess asks the LLM stage to post-process the transcript even
+	// with llm_enabled off: the user dictated with the post-processing
+	// shortcut (ActionStartPostProcess).
+	PostProcess bool
 	// Settings are the settings the session started with, which the text
 	// stages follow.
 	Settings config.Settings

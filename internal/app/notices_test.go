@@ -26,11 +26,14 @@ func newNoticeShell(t *testing.T, settings string) (*shell, *trayApp, uiQueue) {
 // on Linux, "ctrl+space" on Windows.
 func defaultTalk(t *testing.T) string {
 	t.Helper()
-	b, err := hotkey.Parse(config.Defaults().TranscribeShortcut)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return b.String()
+	return shown(t, config.Defaults().TranscribeShortcut)
+}
+
+// defaultPolish is how the backend names the default post-processing
+// shortcut, which registers alongside the transcribe shortcut.
+func defaultPolish(t *testing.T) string {
+	t.Helper()
+	return shown(t, config.Defaults().PostProcessShortcut)
 }
 
 func newNoticeShellKeepingShortcuts(t *testing.T, settings string) (*shell, *trayApp, uiQueue) {
@@ -117,8 +120,8 @@ func TestAccessibilityNotice(t *testing.T) {
 	testShortcuts.reset()
 	testShortcuts.setFail(errors.New("grant Accessibility"))
 	sh, a, q := newNoticeShellKeepingShortcuts(t, `{"schema_version": 1, "selected_model": "m"}`)
-	talk := defaultTalk(t)
-	testShortcuts.waitLog(t, "!"+talk)
+	talk, polish := defaultTalk(t), defaultPolish(t)
+	testShortcuts.waitLog(t, "!"+talk, "!"+polish)
 	q.runNext(t)
 	alert := sh.tray.Alert()
 	if alert == nil || alert.Label != "⚠ Permission needed…" {
@@ -137,7 +140,7 @@ func TestAccessibilityNotice(t *testing.T) {
 	mu.Lock()
 	trusted = true
 	mu.Unlock()
-	testShortcuts.waitLog(t, "!"+talk, "+"+talk)
+	testShortcuts.waitLog(t, "!"+talk, "!"+polish, "+"+talk, "+"+polish)
 	q.runNext(t)
 	if sh.tray.Alert() != nil || sh.notices.Count(notice.CodePermissionMissing) != 0 {
 		t.Error("granting the permission should end the notice")
@@ -149,7 +152,7 @@ func TestAccessibilityNotice(t *testing.T) {
 func TestShortcutNotice(t *testing.T) {
 	sh, a, q := newNoticeShell(t, `{"schema_version": 1, "selected_model": "m"}`)
 	sh.trusted = func() bool { return true }
-	testShortcuts.waitLog(t, "+"+defaultTalk(t))
+	testShortcuts.waitLog(t, "+"+defaultTalk(t), "+"+defaultPolish(t))
 
 	sh.shortcutFailed(&hotkey.RegisterError{Purpose: hotkey.PurposeTranscribe, Shortcut: "f5", Err: errors.New("taken")})
 	q.runNext(t)

@@ -758,6 +758,55 @@ func TestStages(t *testing.T) {
 	}
 }
 
+// A session started with ActionStartPostProcess asks the text stages to
+// post-process it whatever the settings say; one started otherwise does
+// not, and neither does a refused post-processed start.
+func TestPostProcessedSession(t *testing.T) {
+	var mu sync.Mutex
+	var asked []bool
+	r := newRig(t, rigOptions{
+		script: fake.Script{Replies: []fake.Reply{fake.Transcript("one"), fake.Transcript("two"), fake.Transcript("three")}},
+		stages: Stages{LLM: TextStageFunc(func(_ context.Context, text string, info SessionInfo) (string, error) {
+			mu.Lock()
+			asked = append(asked, info.PostProcess)
+			mu.Unlock()
+			return text, nil
+		})},
+	})
+	for i, a := range []Action{ActionStartPostProcess, ActionStart, ActionToggle} {
+		id := i + 1
+		r.c.Do(a)
+		r.events.waitState(t, StateRecording, id)
+		if a == ActionStartPostProcess {
+			r.c.Do(ActionStartPostProcess) // already recording
+			if ev := r.events.waitRefused(t, ActionStartPostProcess); ev.Session != uint64(id) {
+				t.Errorf("refusal %+v", ev)
+			}
+		}
+		r.c.Stop()
+		r.events.waitState(t, StateIdle, id)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(asked, []bool{true, false, false}) {
+		t.Errorf("SessionInfo.PostProcess %v, want only the first session's set", asked)
+	}
+	if got := r.out.delivered(); !slices.Equal(got, []string{"one", "two", "three"}) {
+		t.Errorf("delivered %q", got)
+	}
+}
+
+func TestActionString(t *testing.T) {
+	for a, want := range map[Action]string{
+		ActionStart: "start", ActionStop: "stop", ActionToggle: "toggle", ActionCancel: "cancel",
+		ActionStartPostProcess: "start_post_process", 0: "none",
+	} {
+		if got := a.String(); got != want {
+			t.Errorf("%d: %q, want %q", a, got, want)
+		}
+	}
+}
+
 func TestEmptyStageOutputPastesNothing(t *testing.T) {
 	r := newRig(t, rigOptions{
 		script: fake.Script{Replies: []fake.Reply{fake.Transcript("text")}},

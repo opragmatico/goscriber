@@ -112,7 +112,8 @@ func TestWaylandShortcutsThroughTheDesktopPortal(t *testing.T) {
 	useWayland(t)
 	p := &fakePortal{opts: make(chan desktopShortcutsOptions, 1)}
 	usePortal(t, p, nil)
-	writeSettings(t, home, `{"schema_version": 1, "selected_model": "m", "transcribe_shortcut": "ctrl+alt+space", "cancel_shortcut": "escape"}`)
+	writeSettings(t, home, `{"schema_version": 1, "selected_model": "m", "transcribe_shortcut": "ctrl+alt+space",
+		"post_process_shortcut": "ctrl+alt+shift+space", "cancel_shortcut": "escape"}`)
 	a := &trayApp{plainApp: plainApp{App: test.NewTempApp(t)}}
 	sh, q := newTestShell(t, a, Options{})
 
@@ -122,11 +123,12 @@ func TestWaylandShortcutsThroughTheDesktopPortal(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("the shell never asked the desktop's portal")
 	}
-	if tr, c := o.Suggest(); tr != "ctrl+alt+space" || c != "escape" {
-		t.Errorf("suggested %q and %q", tr, c)
+	tr, pp, c := o.Suggest(hotkey.PurposeTranscribe), o.Suggest(hotkey.PurposePostProcess), o.Suggest(hotkey.PurposeCancel)
+	if tr != "ctrl+alt+space" || pp != "ctrl+alt+shift+space" || c != "escape" {
+		t.Errorf("suggested %q, %q and %q", tr, pp, c)
 	}
-	// The portal registers the shortcut; the system's backend is not asked.
-	p.waitLog(t, "+"+shown(t, "ctrl+alt+space"))
+	// The portal registers the shortcuts; the system's backend is not asked.
+	p.waitLog(t, "+"+shown(t, "ctrl+alt+space"), "+"+shown(t, "ctrl+alt+shift+space"))
 	testShortcuts.waitLog(t)
 
 	sh.settings.Show(ui.PageGeneral)
@@ -136,10 +138,11 @@ func TestWaylandShortcutsThroughTheDesktopPortal(t *testing.T) {
 		t.Errorf("General page while the desktop asks:\n%s", got)
 	}
 
-	o.OnStatus(ui.DesktopShortcuts{State: ui.PortalBound, Transcribe: "Ctrl+Alt+Space", CanChange: true})
+	o.OnStatus(ui.DesktopShortcuts{State: ui.PortalBound, Transcribe: "Ctrl+Alt+Space", PostProcess: "Ctrl+Alt+Shift+Space", CanChange: true})
 	q.runNext(t)
 	got := windowText(sh.settings.Window())
-	if !strings.Contains(got, "Dictation: Ctrl+Alt+Space. Cancel: no keys.") || strings.Contains(got, ui.ToggleCommand) {
+	if !strings.Contains(got, "Dictation: Ctrl+Alt+Space. Post-processing: Ctrl+Alt+Shift+Space. Cancel: no keys.") ||
+		!strings.Contains(got, ui.PostProcessHintPortal) || strings.Contains(got, ui.ToggleCommand) {
 		t.Errorf("General page once bound:\n%s", got)
 	}
 	change := button(sh.settings.Window(), "Change…")
@@ -177,7 +180,7 @@ func TestWaylandWithoutThePortal(t *testing.T) {
 
 	// The system's backend takes the shortcut, for X11 windows, and the
 	// desktop's own shortcut runs the toggle command.
-	testShortcuts.waitLog(t, "+"+shown(t, "ctrl+alt+space"))
+	testShortcuts.waitLog(t, "+"+shown(t, "ctrl+alt+space"), "+"+defaultPolish(t))
 	sh.settings.Show(ui.PageGeneral)
 	got := windowText(sh.settings.Window())
 	if !strings.Contains(got, ui.ToggleCommand) || strings.Contains(got, "Desktop keys") {
