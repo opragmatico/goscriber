@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"net/url"
 	"runtime"
 	"slices"
 	"strconv"
@@ -280,6 +281,11 @@ type Settings struct {
 	HistoryLimit       int                `json:"history_limit"`
 	RecordingRetention RecordingRetention `json:"recording_retention"`
 
+	// WebhookURL receives every finished transcription with an HTTP POST
+	// (internal/webhook); "" sends nothing. CheckWebhookURL says which URLs
+	// it takes.
+	WebhookURL string `json:"webhook_url"`
+
 	// App. DebugMode reveals debug-only UI such as the Debug settings page;
 	// --debug turns it on for one session without saving it. Autostart is
 	// the OS's login item, which opens Goscriber hidden when the user logs
@@ -447,8 +453,22 @@ func (s *Settings) normalize(def Settings) []string {
 	check("recording_retention",
 		oneOf(s.RecordingRetention, RetentionNever, RetentionPreserveLimit, RetentionDays3, RetentionWeeks2, RetentionMonths3),
 		func() { s.RecordingRetention = def.RecordingRetention })
+	check("webhook_url", CheckWebhookURL(s.WebhookURL) == nil, func() { s.WebhookURL = def.WebhookURL })
 	check("log_level", oneOf(s.LogLevel, LogDebug, LogInfo, LogWarn, LogError), func() { s.LogLevel = def.LogLevel })
 	return fixed
+}
+
+// CheckWebhookURL reports whether u can be the webhook_url setting: empty,
+// for no webhook, or an absolute http or https URL with a host.
+func CheckWebhookURL(u string) error {
+	if u == "" {
+		return nil
+	}
+	p, err := url.Parse(u)
+	if err != nil || (p.Scheme != "https" && p.Scheme != "http") || p.Host == "" || p.Hostname() == "" {
+		return errors.New("enter a URL that starts with https:// or http://")
+	}
+	return nil
 }
 
 func oneOf[T comparable](v T, allowed ...T) bool { return slices.Contains(allowed, v) }

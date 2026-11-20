@@ -50,6 +50,10 @@ func (p Paths) SettingsFile() string { return filepath.Join(p.ConfigDir, "settin
 // HistoryDB is the SQLite transcription history.
 func (p Paths) HistoryDB() string { return filepath.Join(p.ConfigDir, "history.sqlite3") }
 
+// JobsDB is the SQLite database of the transcriptions waiting to be sent to
+// the webhook.
+func (p Paths) JobsDB() string { return filepath.Join(p.ConfigDir, "jobs.sqlite3") }
+
 // RecordingsDir holds the WAV recordings referenced by the history.
 func (p Paths) RecordingsDir() string { return filepath.Join(p.ConfigDir, "recordings") }
 
