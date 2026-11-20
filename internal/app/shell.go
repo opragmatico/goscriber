@@ -118,16 +118,20 @@ type shell struct {
 	// overlayActive is whether a session is in progress, for the overlay's
 	// clock; it is read off the main thread.
 	overlayActive atomic.Bool
-	// recording is what the shortcuts were last told about dictation, and
+	// recording is what the shortcuts were last told about dictation,
 	// liveSession the session the overlay last showed recording, whose
-	// interim text it shows; both main thread only.
+	// interim text it shows, and lastTranscript the last one delivered, for
+	// the tray's Copy Last Transcript without a history; main thread only.
 	recording           bool
 	liveSession         uint64
+	lastTranscript      string
 	stopDictationEvents func()
 	hotkeys             *hotkey.Manager
 	tray                *ui.Tray // nil without a tray
-	settings            *ui.SettingsWindow
-	desk                desktop.App
+	// modelsChanged asks for the tray's model submenu to be listed again.
+	modelsChanged chan struct{}
+	settings      *ui.SettingsWindow
+	desk          desktop.App
 
 	// secureInput reports macOS Secure Event Input; nil skips the check.
 	secureInput func() bool
@@ -176,6 +180,7 @@ func newShell(rt *Runtime, a fyne.App, opts Options) *shell {
 		do:             fyne.Do,
 		desk:           desk,
 		quit:           make(chan struct{}),
+		modelsChanged:  make(chan struct{}, 1),
 		notices:        notice.NewHub(notice.Options{Log: rt.Log.Logger}),
 		trusted:        accessibilityTrusted,
 		session:        currentSession(),
@@ -201,18 +206,7 @@ func (sh *shell) start() {
 	sh.refreshPermissions()
 
 	if sh.plan.Tray {
-		sh.tray = ui.NewTray(sh.desk, ui.TrayOptions{
-			Actions: ui.TrayActions{
-				StartDictation: func() { sh.dictate(pipeline.ActionStart) },
-				StopDictation:  func() { sh.dictate(pipeline.ActionStop) },
-				Cancel:         func() { sh.dictate(pipeline.ActionCancel) },
-				OpenModels:     sh.openModels,
-				OpenSettings:   func() { sh.settings.Show(ui.PageGeneral) },
-				Quit:           sh.app.Quit,
-			},
-			Model: model,
-			Debug: sh.debugMode(s),
-		})
+		sh.tray = sh.newTray(s)
 	} else if sh.desk == nil && s.ShowTrayIcon && !sh.opts.NoTray {
 		sh.rt.Log.Warn("no system tray on this desktop; opening the settings window instead")
 	}
@@ -230,6 +224,8 @@ func (sh *shell) start() {
 		Log:          sh.rt.Log.Logger,
 	})
 	sh.hotkeys.Apply(hotkey.ConfigFrom(s))
+	// The tray follows the engine from before the first load.
+	sh.followTray()
 	sh.startDictation()
 	// Later launches and SIGUSR2 reach dictation from here on.
 	sh.serveControl()
@@ -347,7 +343,7 @@ func (sh *shell) newSettingsWindow() *ui.SettingsWindow {
 		// The language-independent fillers and English's: the list most
 		// transcripts get.
 		DefaultFillerWords: text.Fillers("en"),
-		Models:             sh.svc.files,
+		Models:             sh.modelFiles(),
 		History:            sh.historyStore(),
 		HistoryActions:     sh.historyActions(),
 		Devices:            listDevices,
@@ -421,10 +417,9 @@ func (sh *shell) stopFollowing() {
 // show_tray_icon takes effect at the next launch: Fyne cannot remove a tray
 // icon once it is installed.
 func (sh *shell) applySettings(s config.Settings) {
-	model := modelName(s)
 	sh.settings.SetSettings(s)
 	if sh.tray != nil {
-		sh.tray.SetModel(model)
+		sh.tray.SetModel(sh.trayModel(s))
 		sh.tray.SetDebug(sh.debugMode(s))
 	}
 	sh.hotkeys.Apply(hotkey.ConfigFrom(s))

@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"log/slog"
+	"slices"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/driver/desktop"
@@ -57,44 +58,68 @@ var _ TrayHost = desktop.App(nil)
 
 // Menu labels, shared with tests.
 const (
-	LabelStartDictation = "Start Dictation"
-	LabelStopDictation  = "Stop Dictation"
-	LabelTranscribing   = "Transcribing…"
-	LabelCancel         = "Cancel"
-	LabelNoModel        = "No model: Download…"
-	LabelModelPrefix    = "Model: "
-	LabelLoadingPrefix  = "Loading " // then the model's name and "…"
-	LabelSettings       = "Settings…"
-	LabelDebug          = "Debug"
-	LabelTrayIconPrefix = "Tray Icon: "
-	LabelQuit           = "Quit Goscriber"
+	LabelVersionPrefix      = "Goscriber " // then the version
+	LabelStartDictation     = "Start Dictation"
+	LabelStopDictation      = "Stop Dictation"
+	LabelTranscribing       = "Transcribing…"
+	LabelCancel             = "Cancel"
+	LabelCopyLastTranscript = "Copy Last Transcript"
+	LabelNoModel            = "No model: Download…"
+	LabelChooseModel        = "Choose a Model"
+	LabelManageModels       = "Manage Models…"
+	LabelLoadingPrefix      = "Loading " // then the model's name and "…"
+	LabelUnloadModel        = "Unload Model"
+	LabelSettings           = "Settings…"
+	LabelCheckForUpdates    = "Check for Updates…"
+	LabelDebug              = "Debug"
+	LabelTrayIconPrefix     = "Tray Icon: "
+	LabelQuit               = "Quit Goscriber"
 )
+
+// TrayModel is a speech model the tray names: the one selected, or one of the
+// downloaded ones its model submenu offers.
+type TrayModel struct {
+	ID   string // the catalog ID
+	Name string // the display name
+	// Quant is the quantisation to use when the model is chosen from the
+	// submenu: a downloaded one.
+	Quant string
+}
 
 // TrayActions run on the Fyne main thread when their menu item is chosen. A
 // nil action makes its item do nothing, except Quit, which then falls back to
 // Fyne's own quit.
 type TrayActions struct {
-	StartDictation func()
-	StopDictation  func()
-	Cancel         func()
-	OpenModels     func() // "Model: …" and "No model: Download…"
-	OpenSettings   func()
-	Quit           func()
+	StartDictation     func()
+	StopDictation      func()
+	Cancel             func()
+	CopyLastTranscript func()
+	// UseModel selects a downloaded model from the model submenu.
+	UseModel        func(m TrayModel)
+	OpenModels      func() // "Manage Models…" and "No model: Download…"
+	UnloadModel     func()
+	OpenSettings    func()
+	CheckForUpdates func()
+	Quit            func()
 }
 
 // TrayOptions is how the tray starts.
 type TrayOptions struct {
 	Actions TrayActions
-	// Model is the display name of the model dictation will use, or "" when no
-	// model is ready. Without one the dictation items are disabled and the menu
+	// Version heads the menu, after the app's name; "" leaves the heading
+	// out.
+	Version string
+	// Model is the model dictation will use; the zero TrayModel means none
+	// is ready. Without one the dictation items are disabled and the menu
 	// offers the download instead.
-	Model string
+	Model TrayModel
 	// Debug adds a Debug submenu that forces the icon state.
 	Debug bool
 }
 
 // TrayAlert is a problem the tray shows until it is fixed: the idle icon
-// turns amber and the menu starts with Label, which runs Action.
+// turns amber and the menu starts with Label, under the version, which runs
+// Action.
 type TrayAlert struct {
 	Label  string
 	Action func()
@@ -103,19 +128,22 @@ type TrayAlert struct {
 // Tray owns the menu bar / system tray icon and its menu. Its methods must be
 // called on the Fyne main thread; other goroutines go through fyne.Do.
 type Tray struct {
-	host    TrayHost
-	actions TrayActions
-	state   TrayState
-	model   string
-	loading string // the model loading, or ""
-	debug   bool
-	alert   *TrayAlert
-	menu    *fyne.Menu
+	host     TrayHost
+	actions  TrayActions
+	version  string
+	state    TrayState
+	model    TrayModel   // the selected model; zero when none is ready
+	models   []TrayModel // the downloaded models
+	loading  string      // the model loading, or ""
+	resident bool        // a model is in memory
+	debug    bool
+	alert    *TrayAlert
+	menu     *fyne.Menu
 }
 
 // NewTray installs the menu and the idle icon on host.
 func NewTray(host TrayHost, opts TrayOptions) *Tray {
-	t := &Tray{host: host, actions: opts.Actions, model: opts.Model, debug: opts.Debug}
+	t := &Tray{host: host, actions: opts.Actions, version: opts.Version, model: opts.Model, debug: opts.Debug}
 	// Fyne starts the tray with the first menu, so the menu goes first.
 	t.refreshMenu()
 	t.host.SetSystemTrayIcon(t.icon())
@@ -159,12 +187,32 @@ func (t *Tray) SetState(s TrayState) {
 	t.refreshMenu()
 }
 
-// SetModel sets the display name of the ready model; "" means none is ready.
-func (t *Tray) SetModel(name string) {
-	if name == t.model {
+// SetModel sets the model dictation will use; the zero TrayModel means none
+// is ready.
+func (t *Tray) SetModel(m TrayModel) {
+	if m == t.model {
 		return
 	}
-	t.model = name
+	t.model = m
+	t.refreshMenu()
+}
+
+// SetModels sets the downloaded models the model submenu offers, in the
+// order it lists them.
+func (t *Tray) SetModels(ms []TrayModel) {
+	if slices.Equal(ms, t.models) {
+		return
+	}
+	t.models = slices.Clone(ms)
+	t.refreshMenu()
+}
+
+// SetResident says whether a model is in memory, which Unload Model frees.
+func (t *Tray) SetResident(on bool) {
+	if on == t.resident {
+		return
+	}
+	t.resident = on
 	t.refreshMenu()
 }
 
@@ -200,7 +248,7 @@ func (t *Tray) refreshMenu() {
 
 func (t *Tray) buildMenu() *fyne.Menu {
 	a := t.actions
-	ready := t.model != ""
+	ready := t.model.ID != ""
 
 	var dictate *fyne.MenuItem
 	switch t.state {
@@ -217,10 +265,10 @@ func (t *Tray) buildMenu() *fyne.Menu {
 	cancel := fyne.NewMenuItem(LabelCancel, a.Cancel)
 	cancel.Disabled = !ready || t.state == TrayIdle
 
-	model := fyne.NewMenuItem(LabelNoModel, a.OpenModels)
-	if ready {
-		model.Label = LabelModelPrefix + t.model
-	}
+	// A model in use, being loaded or transcribing stays: the engine
+	// would refuse.
+	unload := fyne.NewMenuItem(LabelUnloadModel, a.UnloadModel)
+	unload.Disabled = !t.resident || t.loading != "" || t.state != TrayIdle
 
 	settings := fyne.NewMenuItem(LabelSettings, a.OpenSettings)
 	settings.Shortcut = &desktop.CustomShortcut{KeyName: fyne.KeyComma, Modifier: fyne.KeyModifierShortcutDefault}
@@ -230,14 +278,20 @@ func (t *Tray) buildMenu() *fyne.Menu {
 	quit.Shortcut = &desktop.CustomShortcut{KeyName: fyne.KeyQ, Modifier: fyne.KeyModifierShortcutDefault}
 
 	var items []*fyne.MenuItem
+	if t.version != "" {
+		version := fyne.NewMenuItem(LabelVersionPrefix+t.version, nil)
+		version.Disabled = true
+		items = append(items, version, fyne.NewMenuItemSeparator())
+	}
 	if t.alert != nil {
 		items = append(items, fyne.NewMenuItem(t.alert.Label, t.alert.Action), fyne.NewMenuItemSeparator())
 	}
 	items = append(items,
 		dictate,
 		cancel,
+		fyne.NewMenuItem(LabelCopyLastTranscript, a.CopyLastTranscript),
 		fyne.NewMenuItemSeparator(),
-		model,
+		t.modelItem(),
 	)
 	if t.loading != "" {
 		loading := fyne.NewMenuItem(LabelLoadingPrefix+t.loading+"…", nil)
@@ -245,14 +299,47 @@ func (t *Tray) buildMenu() *fyne.Menu {
 		items = append(items, loading)
 	}
 	items = append(items,
+		unload,
 		fyne.NewMenuItemSeparator(),
 		settings,
+		fyne.NewMenuItem(LabelCheckForUpdates, a.CheckForUpdates),
 	)
 	if t.debug {
 		items = append(items, t.debugMenu())
 	}
 	items = append(items, fyne.NewMenuItemSeparator(), quit)
 	return fyne.NewMenu("Goscriber", items...)
+}
+
+// modelItem names the selected model, with a submenu that switches to
+// another downloaded one or opens the Models page. With no model selected or
+// downloaded it offers the download instead.
+func (t *Tray) modelItem() *fyne.MenuItem {
+	if t.model.ID == "" && len(t.models) == 0 {
+		return fyne.NewMenuItem(LabelNoModel, t.actions.OpenModels)
+	}
+	children := make([]*fyne.MenuItem, 0, len(t.models)+2)
+	for _, m := range t.models {
+		item := fyne.NewMenuItem(m.Name, func() {
+			if m.ID != t.model.ID && t.actions.UseModel != nil {
+				t.actions.UseModel(m)
+			}
+		})
+		item.Checked = m.ID == t.model.ID
+		children = append(children, item)
+	}
+	if len(children) > 0 {
+		children = append(children, fyne.NewMenuItemSeparator())
+	}
+	children = append(children, fyne.NewMenuItem(LabelManageModels, t.actions.OpenModels))
+
+	label := t.model.Name
+	if t.model.ID == "" {
+		label = LabelChooseModel
+	}
+	item := fyne.NewMenuItem(label, nil)
+	item.ChildMenu = fyne.NewMenu(label, children...)
+	return item
 }
 
 // debugMenu forces the icon state, so every icon can be checked before the
