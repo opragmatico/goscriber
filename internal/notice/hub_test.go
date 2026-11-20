@@ -291,7 +291,7 @@ func TestNoticeKinds(t *testing.T) {
 	for _, code := range []Code{
 		CodeNoModel, CodeMicrophoneUnavailable, CodePermissionMissing, CodeModelCorrupt,
 		CodeEngineCrashed, CodeEngineCPUFallback, CodePasteFailed, CodeShortcutFailed,
-		CodeTranscriptionFailed, CodeMicrophoneDenied, CodeLoginItemFailed,
+		CodeTranscriptionFailed, CodeMicrophoneDenied, CodeLoginItemFailed, CodeLLMFailed,
 	} {
 		n := New(code, "m")
 		if n.Title() == string(code) || n.Source == "" {
@@ -367,5 +367,13 @@ func TestTranscriptionFailed(t *testing.T) {
 	}
 	if n := TranscriptionFailed(errors.New("boom")); n.Message != "Nothing was pasted: boom. Try again." {
 		t.Errorf("other error: %+v", n)
+	}
+}
+
+func TestLLMFailed(t *testing.T) {
+	n := LLMFailed(errors.New("the server answered 404 Not Found: model 'gemma4:26b' not found"))
+	if n.Code != CodeLLMFailed || n.Level != LevelWarning || n.Persistent() || n.Action.ID != ActionOpenPostProcessing ||
+		n.Message != "The language model could not clean the transcript, so it is as transcribed: the server answered 404 Not Found: model 'gemma4:26b' not found." {
+		t.Errorf("LLMFailed: %+v", n)
 	}
 }

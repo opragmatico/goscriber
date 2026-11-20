@@ -27,6 +27,7 @@ const (
 	CodePasteFailed           Code = "paste_failed"
 	CodeShortcutFailed        Code = "shortcut_failed"
 	CodeLoginItemFailed       Code = "login_item_failed"
+	CodeLLMFailed             Code = "llm_failed"
 )
 
 // Level is how bad a problem is.
@@ -60,6 +61,7 @@ const (
 	SourceOutput      Source = "output"
 	SourceShortcut    Source = "shortcut"
 	SourceApp         Source = "app"
+	SourceLLM         Source = "llm"
 )
 
 // ActionID is what a notice's button does; the UI carries it out.
@@ -79,6 +81,9 @@ const (
 	ActionOpenSettings ActionID = "open_settings"
 	// ActionOpenLoginItems opens the Login Items pane of System Settings.
 	ActionOpenLoginItems ActionID = "open_login_items"
+	// ActionOpenPostProcessing opens the Post-processing page of the
+	// settings window.
+	ActionOpenPostProcessing ActionID = "open_post_processing"
 )
 
 // Action is a notice's button.
@@ -119,6 +124,7 @@ var kinds = map[Code]struct {
 	CodePasteFailed:           {"Could not paste", LevelError, SourceOutput, false},
 	CodeShortcutFailed:        {"Shortcut unavailable", LevelError, SourceShortcut, false},
 	CodeLoginItemFailed:       {"Launch at login failed", LevelWarning, SourceApp, false},
+	CodeLLMFailed:             {"Post-processing failed", LevelWarning, SourceLLM, false},
 }
 
 // Title is a short heading for the notice, for an OS notification or the
@@ -251,6 +257,14 @@ func LoginItemFailed(on bool, err error) Notice {
 func LoginItemNeedsApproval() Notice {
 	n := New(CodeLoginItemFailed, "macOS opens Goscriber at login once you allow it in System Settings → General → Login Items.")
 	n.Action = Action{Label: "Open System Settings", ID: ActionOpenLoginItems}
+	return n
+}
+
+// LLMFailed is the notice for a transcript the language model could not
+// clean, wholly or in part, which went out as the text cleanup left it.
+func LLMFailed(err error) Notice {
+	n := New(CodeLLMFailed, sentence(fmt.Sprintf("The language model could not clean the transcript, so it is as transcribed: %v.", err)))
+	n.Action = Action{Label: "Open Settings", ID: ActionOpenPostProcessing}
 	return n
 }
 

@@ -36,6 +36,7 @@ func init() {
 			files:    models.NewManager(rt.Paths.ModelsDir(), models.Options{}),
 			feedback: &testFeedback{},
 			player:   &testPlayer{},
+			keys:     &testSecrets{},
 		}
 	}
 	listDevices = func() ([]audio.Device, []audio.Device, error) { return nil, nil, nil }
@@ -598,4 +599,30 @@ func TestModelLoadsLazilyWithoutPreload(t *testing.T) {
 	if n := len(eng.Loads()); n != 1 {
 		t.Errorf("%d loads, want the first dictation's", n)
 	}
+}
+
+// testSecrets is a keychain in memory.
+type testSecrets struct {
+	mu sync.Mutex
+	m  map[string]string
+}
+
+func (s *testSecrets) Get(account string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.m[account], nil
+}
+
+func (s *testSecrets) Set(account, secret string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.m == nil {
+		s.m = map[string]string{}
+	}
+	if secret == "" {
+		delete(s.m, account)
+	} else {
+		s.m[account] = secret
+	}
+	return nil
 }

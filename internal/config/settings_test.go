@@ -225,3 +225,34 @@ func TestNormalizeUnloadTimeout(t *testing.T) {
 		}
 	}
 }
+
+// Post-processing starts off, pointed at Ollama on this computer, with the
+// suggested model and the built-in prompt; a base URL that is no http(s)
+// URL goes back to Ollama's.
+func TestLLMSettings(t *testing.T) {
+	def := Defaults()
+	if def.LLMEnabled || def.LLMBaseURL != "http://localhost:11434/v1" || def.LLMModel != "" || def.LLMPrompt != "" {
+		t.Errorf("LLM defaults: enabled %v, base URL %q, model %q, prompt %q", def.LLMEnabled, def.LLMBaseURL, def.LLMModel, def.LLMPrompt)
+	}
+	for _, tc := range []struct {
+		url string
+		ok  bool
+	}{
+		{"https://api.openai.com/v1", true},
+		{"http://192.168.1.5:1234/v1", true},
+		{"", false},
+		{"localhost:11434/v1", false},
+		{"ftp://example.com/v1", false},
+		{"https://", false},
+	} {
+		s := def.Clone()
+		s.LLMBaseURL = tc.url
+		fixed := s.normalize(def)
+		if ok := len(fixed) == 0; ok != tc.ok {
+			t.Errorf("llm_base_url %q: fixed %v, want valid %v", tc.url, fixed, tc.ok)
+		}
+		if !tc.ok && s.LLMBaseURL != def.LLMBaseURL {
+			t.Errorf("llm_base_url %q was reset to %q, want %q", tc.url, s.LLMBaseURL, def.LLMBaseURL)
+		}
+	}
+}

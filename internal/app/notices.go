@@ -92,6 +92,8 @@ func (sh *shell) noticeAction(id notice.ActionID) {
 		sh.openURL(platform.PermMicrophone.SettingsURL())
 	case notice.ActionOpenLoginItems:
 		sh.openURL(platform.LoginItemsSettingsURL)
+	case notice.ActionOpenPostProcessing:
+		sh.settings.Show(ui.PagePostProcessing)
 	default:
 		sh.settings.Show(ui.PageGeneral)
 	}

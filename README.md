@@ -32,6 +32,7 @@ Then transcribe audio files (WAV, any sample rate; run `goscriber transcribe --h
 goscriber transcribe recording.wav                                    # the transcript, on stdout
 goscriber transcribe --model parakeet-tdt-0.6b-v2 --cpu a.wav b.wav   # another model, on the CPU
 goscriber transcribe --stream --json recording.wav                    # interim text on stderr; words, timings and language as JSON
+goscriber transcribe --llm talk.wav                                   # cleaned by the language model set up in Post-processing
 ```
 
 No other models or engines are planned. Whisper, Canary, Moonshine and the rest of Handy's catalog are out of scope.
@@ -47,7 +48,7 @@ Names and jargon listed in the `custom_words` setting come out spelled your way:
 
 Filler words ("um", "uh") are removed, with the punctuation around them, and the `filler_word_removal` and `custom_filler_words` settings turn that off or change the list ([details](docs/architecture.md#text-cleanup)).
 
-Following Handy, Goscriber keeps a history of past dictations with their recordings (copy, paste again, play, transcribe again), transcribes WAV and FLAC files dropped on its History page, however long, and plans an external transcription hook and optional LLM post-processing.
+Following Handy, Goscriber keeps a history of past dictations with their recordings (copy, paste again, play, transcribe again), transcribes WAV and FLAC files dropped on its History page, however long, can have a language model clean each transcript before it is pasted (Ollama, LM Studio or llama.cpp on your computer, or OpenAI, OpenRouter, Groq or any OpenAI-compatible provider; see [docs/llm-post-processing.md](docs/llm-post-processing.md)), and plans an external transcription hook.
 
 ## Stack
 

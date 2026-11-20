@@ -8,6 +8,7 @@ require (
 	github.com/go-gl/glfw/v3.4/glfw v0.1.0-pre.2
 	github.com/godbus/dbus/v5 v5.2.2
 	github.com/mewkiz/flac v1.0.14
+	github.com/zalando/go-keyring v0.2.8
 	golang.design/x/hotkey v0.6.4
 	golang.org/x/sys v0.49.0
 	modernc.org/sqlite v1.62.0
@@ -19,6 +20,7 @@ require (
 	github.com/FyshOS/fancyfs v0.0.1 // indirect
 	github.com/anthonynsimon/bild v0.14.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.2.0 // indirect
+	github.com/danieljoos/wincred v1.2.3 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect

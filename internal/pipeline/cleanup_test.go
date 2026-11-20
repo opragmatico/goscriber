@@ -53,6 +53,7 @@ func TestCleanupStageRemovesFillers(t *testing.T) {
 		{"only fillers", "Uh, um.", "en-US", nil, ""},
 		{"a lone full stop", ".", "en-US", nil, ""},
 		{"corrected, then fillers removed", "Um, ask Kowalczik.", "en-US", func(s *config.Settings) { s.CustomWords = []string{"Kowalczyk"} }, "Ask Kowalczyk."},
+		{"unknown characters", "Resultado<unk> cresceu noventa<unk> em 2025.", "", nil, "Resultado: cresceu noventa% em 2025."},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			s := config.Defaults()

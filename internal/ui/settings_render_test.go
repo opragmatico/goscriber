@@ -33,10 +33,11 @@ func TestRenderSettingsPages(t *testing.T) {
 	}{{"light", theme.LightTheme()}, {"dark", theme.DarkTheme()}} { //nolint:staticcheck // fixed variants, whatever the OS uses
 		tw := newTestWindow(t, func(o *SettingsOptions) {
 			o.ForceDebug = true
-			o.HistoryActions.TranscribeFile = func(ctx context.Context, _ string, _ func(done, total time.Duration)) (history.Entry, error) {
+			o.HistoryActions.TranscribeFile = func(ctx context.Context, _ string, _ func(FileProgress)) (history.Entry, error) {
 				<-ctx.Done()
 				return history.Entry{}, ctx.Err()
 			}
+			o.LLM = (&fakeLLM{keys: map[string]string{}}).actions()
 		})
 		tw.app.Settings().SetTheme(variant.theme)
 		tw.files.setReady(nemotron, "Q8_0")
@@ -63,7 +64,7 @@ func TestRenderSettingsPages(t *testing.T) {
 		// A file being transcribed, with another waiting, on the History page.
 		tw.selectPage(PageHistory)
 		f := &tw.history.files
-		f.now, f.done, f.total, f.queue = "/audio/interview.flac", 200*time.Second, 600*time.Second, []string{"/audio/next.wav"}
+		f.now, f.progress, f.queue = "/audio/interview.flac", FileProgress{Done: 200 * time.Second, Total: 600 * time.Second}, []string{"/audio/next.wav"}
 		tw.refreshFiles()
 		capture(t, tw, filepath.Join(dir, variant.name+"-history-file.png"))
 		f.now, f.queue = "", nil
@@ -103,7 +104,7 @@ func TestRenderSettingsPages(t *testing.T) {
 	tw.app.Settings().SetTheme(theme.LightTheme()) //nolint:staticcheck // a fixed variant, whatever the OS uses
 	tw.show(PageGeneral)
 	tw.Window().Resize(fyne.NewSize(760, 2700))
-	for _, p := range []Page{PageGeneral, PageAdvanced, PagePermissions, PageAbout} {
+	for _, p := range []Page{PageGeneral, PageAdvanced, PagePostProcessing, PagePermissions, PageAbout} {
 		tw.selectPage(p)
 		capture(t, tw, filepath.Join(dir, "linux-wayland-"+p.String()+".png"))
 	}

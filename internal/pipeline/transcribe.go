@@ -13,8 +13,8 @@ import (
 // Retranscription is audio transcribed outside a dictation: a saved
 // recording again, or an audio file.
 type Retranscription struct {
-	// Text is the transcript after the cleanup stage, and RawText the
-	// model's.
+	// Text is the transcript after the cleanup and LLM stages, and RawText
+	// the model's.
 	Text, RawText string
 	// Model is the catalog ID of the model that transcribed it.
 	Model string
@@ -49,8 +49,9 @@ func (c *Coordinator) Retranscribe(ctx context.Context, samples []float32, rate 
 }
 
 // Transcribe transcribes audio, mono samples at rate Hz, with the model the
-// current settings select, and tidies it with the cleanup stage as a
-// dictation's transcript is. It delivers and saves nothing.
+// current settings select, and has the cleanup and LLM stages process it
+// as they do a dictation's transcript; a stage that fails passes its input
+// on. It delivers and saves nothing.
 //
 // Audio of any length is decoded the way a dictation is decoded live: a
 // streaming model through a stream, and an offline model in chunks cut at
@@ -115,10 +116,22 @@ func (c *Coordinator) Transcribe(ctx context.Context, samples []float32, rate in
 		Settings:     settings.Clone(),
 	}
 	text := res.Text
-	if c.stages.Cleanup != nil {
-		out, err := c.stages.Cleanup.Process(ctx, text, info)
+	for _, st := range []struct {
+		name  string
+		stage TextStage
+	}{
+		{"cleanup", c.stages.Cleanup},
+		{"llm", c.stages.LLM},
+	} {
+		if st.stage == nil {
+			continue
+		}
+		out, err := st.stage.Process(ctx, text, info)
+		if err := ctx.Err(); err != nil {
+			return Retranscription{}, err
+		}
 		if err != nil {
-			c.log.Warn("the cleanup stage failed on a transcription; keeping the model's text", "err", err)
+			c.log.Warn("a text stage failed on a transcription; passing its input on", "stage", st.name, "err", err)
 		} else {
 			text = out
 		}

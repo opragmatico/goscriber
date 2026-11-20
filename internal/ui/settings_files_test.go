@@ -18,7 +18,7 @@ import (
 // answers it.
 type fileCall struct {
 	path     string
-	progress func(done, total time.Duration)
+	progress func(FileProgress)
 	ctx      context.Context
 	reply    chan fileReply
 }
@@ -32,7 +32,7 @@ type fileReply struct {
 // test. Call it before the window is first shown.
 func withFiles(hw *historyWindow) chan *fileCall {
 	calls := make(chan *fileCall, 8)
-	hw.opts.HistoryActions.TranscribeFile = func(ctx context.Context, path string, progress func(done, total time.Duration)) (history.Entry, error) {
+	hw.opts.HistoryActions.TranscribeFile = func(ctx context.Context, path string, progress func(FileProgress)) (history.Entry, error) {
 		c := &fileCall{path: path, progress: progress, ctx: ctx, reply: make(chan fileReply, 1)}
 		calls <- c
 		select {
@@ -81,12 +81,20 @@ func TestTranscribeFilesOneAfterAnother(t *testing.T) {
 	if first.path != "/audio/interview.flac" {
 		t.Fatalf("first file %q", first.path)
 	}
-	first.progress(2*time.Minute, 10*time.Minute)
+	first.progress(FileProgress{Done: 2 * time.Minute, Total: 10 * time.Minute})
 	hw.q.until(t, "the progress", func() bool {
 		return hw.fileStatus() == "Transcribing interview.flac… 2 min 0 s of 10 min 0 s (1 more waiting)"
 	})
 	if f.bar.Hidden || f.bar.Value != 0.2 || f.cancel.Hidden {
 		t.Errorf("bar hidden %v at %v, Cancel hidden %v", f.bar.Hidden, f.bar.Value, f.cancel.Hidden)
+	}
+	// Once decoded, the language model cleans the transcript in parts.
+	first.progress(FileProgress{Done: 10 * time.Minute, Total: 10 * time.Minute, Part: 1, Parts: 4})
+	hw.q.until(t, "the post-processing progress", func() bool {
+		return hw.fileStatus() == "Cleaning up interview.flac with the language model… part 2 of 4 (1 more waiting)"
+	})
+	if f.bar.Value != 0.25 {
+		t.Errorf("bar at %v while the model cleans part 2 of 4", f.bar.Value)
 	}
 
 	saved, err := hw.store.Add(context.Background(), history.Record{
