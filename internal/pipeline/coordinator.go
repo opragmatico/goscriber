@@ -881,7 +881,7 @@ func (c *Coordinator) finish(s *session, res engine.Result, samples []float32, r
 		PostProcess:  s.postProcess,
 		Settings:     s.settings.Clone(),
 	}
-	text := res.Text
+	text, processed := res.Text, ""
 	for _, st := range []struct {
 		name  string
 		stage TextStage
@@ -907,6 +907,9 @@ func (c *Coordinator) finish(s *session, res engine.Result, samples []float32, r
 			c.log.Warn("a text stage failed; passing its input on", "session", s.id, "stage", st.name, "err", err)
 		} else {
 			text = out
+			if st.name == "llm" && info.PostProcesses() {
+				processed = out
+			}
 		}
 		c.stageDone(s, st.name, *st.took)
 	}
@@ -947,13 +950,14 @@ func (c *Coordinator) finish(s *session, res engine.Result, samples []float32, r
 
 	if c.stages.History != nil {
 		entry := HistoryEntry{
-			SessionInfo: info,
-			At:          s.started,
-			RawText:     res.Text,
-			Text:        text,
-			Samples:     samples,
-			SampleRate:  rate,
-			Delivered:   delivered,
+			SessionInfo:   info,
+			At:            s.started,
+			RawText:       res.Text,
+			ProcessedText: processed,
+			Text:          text,
+			Samples:       samples,
+			SampleRate:    rate,
+			Delivered:     delivered,
 		}
 		if err := c.stages.History.Save(context.Background(), entry); err != nil {
 			c.log.Warn("the dictation could not be saved to history", "session", s.id, "err", err)

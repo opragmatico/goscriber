@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"slices"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	"fyne.io/fyne/v2/test"
 
 	"github.com/opragmatico/goscriber/internal/config"
+	"github.com/opragmatico/goscriber/internal/history"
 	"github.com/opragmatico/goscriber/internal/hotkey"
 	"github.com/opragmatico/goscriber/internal/ui"
 )
@@ -177,6 +179,14 @@ func TestPostProcessShortcutDictates(t *testing.T) {
 	dictate("ctrl+shift+d", 2)
 	if got := out.delivered(); len(got) != 2 || got[0] != "HELLO FROM THE TEST" || strings.ToUpper(got[1]) == got[1] {
 		t.Errorf("delivered %q, want the first dictation post-processed and the second not", got)
+	}
+	// The history keeps the model's text for the first only.
+	var entries []history.Entry
+	for deadline := time.Now().Add(2 * time.Second); len(entries) < 2 && time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		entries, _ = sh.history.List(context.Background(), 0)
+	}
+	if len(entries) != 2 || entries[1].ProcessedText != "HELLO FROM THE TEST" || entries[0].ProcessedText != "" {
+		t.Errorf("history %+v, want the first dictation's processed text kept", entries)
 	}
 }
 

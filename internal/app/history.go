@@ -54,14 +54,15 @@ func (sh *shell) transcriptSink() pipeline.HistorySink {
 			return nil
 		}
 		saved, err := sh.history.Add(ctx, history.Record{
-			At:         e.At,
-			Text:       e.Text,
-			RawText:    e.RawText,
-			Model:      e.Model,
-			Language:   e.TextLanguage,
-			Duration:   e.Duration,
-			Samples:    e.Samples,
-			SampleRate: e.SampleRate,
+			At:            e.At,
+			Text:          e.Text,
+			RawText:       e.RawText,
+			ProcessedText: e.ProcessedText,
+			Model:         e.Model,
+			Language:      e.TextLanguage,
+			Duration:      e.Duration,
+			Samples:       e.Samples,
+			SampleRate:    e.SampleRate,
 		})
 		sh.post(sh.settings.RefreshHistory)
 		if err != nil {
@@ -100,6 +101,7 @@ func (sh *shell) historyActions() ui.HistoryActions {
 		Paste:          sh.pasteAgain,
 		Play:           sh.playRecording,
 		Retranscribe:   sh.retranscribe,
+		Reprocess:      sh.reprocess,
 		TranscribeFile: sh.transcribeFile,
 	}
 }
@@ -163,7 +165,20 @@ func (sh *shell) retranscribe(ctx context.Context, e history.Entry) (history.Ent
 	if err != nil {
 		return history.Entry{}, transcriptionError(err, "the recording")
 	}
-	return sh.history.Retranscribed(ctx, e.ID, history.Transcript{Text: t.Text, RawText: t.RawText, Model: t.Model, Language: t.Language})
+	return sh.history.Retranscribed(ctx, e.ID, history.Transcript{
+		Text: t.Text, RawText: t.RawText, ProcessedText: t.ProcessedText, Model: t.Model, Language: t.Language,
+	})
+}
+
+// reprocess post-processes an entry's transcript again, from the model's
+// transcript, with the post-processing settings as they are now, and saves
+// the new text. A failure leaves the entry as it was.
+func (sh *shell) reprocess(ctx context.Context, e history.Entry) (history.Entry, error) {
+	p, err := sh.dictation.Reprocess(ctx, e.RawText, e.Model, e.Language)
+	if err != nil {
+		return history.Entry{}, err
+	}
+	return sh.history.Reprocessed(ctx, e.ID, history.Processing{Text: p.Text, ProcessedText: p.ProcessedText})
 }
 
 // transcribeFile transcribes an audio file with the current model, has the
@@ -200,7 +215,7 @@ func (sh *shell) transcribeFile(ctx context.Context, path string, progress func(
 		return history.Entry{}, transcriptionError(err, "the file")
 	}
 	e := history.Entry{
-		At: at, Text: t.Text, RawText: t.RawText, Model: t.Model, Language: t.Language,
+		At: at, Text: t.Text, RawText: t.RawText, ProcessedText: t.ProcessedText, Model: t.Model, Language: t.Language,
 		Duration: time.Duration(len(samples)) * time.Second / time.Duration(rate),
 		Source:   filepath.Base(path),
 	}
@@ -209,7 +224,7 @@ func (sh *shell) transcribeFile(ctx context.Context, path string, progress func(
 		return e, nil
 	}
 	saved, err := sh.history.Add(ctx, history.Record{
-		At: e.At, Text: e.Text, RawText: e.RawText, Model: e.Model, Language: e.Language,
+		At: e.At, Text: e.Text, RawText: e.RawText, ProcessedText: e.ProcessedText, Model: e.Model, Language: e.Language,
 		Duration: e.Duration, Samples: samples, SampleRate: rate, Source: e.Source,
 	})
 	if err != nil {

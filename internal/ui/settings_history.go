@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -39,6 +40,10 @@ type HistoryActions struct {
 	// Retranscribe transcribes an entry's recording again with the current
 	// model, saves the new transcript and returns the entry as it is now.
 	Retranscribe func(ctx context.Context, e history.Entry) (history.Entry, error)
+	// Reprocess post-processes an entry's transcript, its RawText, again
+	// with the current post-processing settings, saves the new text and
+	// returns the entry as it is now. A failure leaves the entry as it was.
+	Reprocess func(ctx context.Context, e history.Entry) (history.Entry, error)
 	// TranscribeFile transcribes an audio file with the current model,
 	// telling progress how far it has got as it goes, saves the transcript
 	// to the history and returns its entry. The entry has no ID when the
@@ -67,9 +72,11 @@ const (
 	LabelPlay               = "Play"
 	LabelStopPlaying        = "Stop"
 	LabelRetranscribe       = "Transcribe again"
+	LabelReprocess          = "Process again"
 	LabelDeleteEntry        = "Delete"
 	LabelDeleteAll          = "Delete all"
 	HistoryRetranscribing   = "Transcribing again with the current model…"
+	HistoryReprocessing     = "Post-processing again with the current settings…"
 	historyNothingDelivered = "Nothing was pasted."
 	LabelChooseFile         = "Choose a file…"
 	LabelCancelFile         = "Cancel"
@@ -430,9 +437,18 @@ func (w *SettingsWindow) historyRow(e history.Entry) fyne.CanvasObject {
 			buttons.Add(widget.NewButtonWithIcon(LabelPlay, theme.MediaPlayIcon(), func() { w.play(e) }))
 		}
 	}
+	// Both replace the entry's text, so neither starts while either runs.
+	working := h.busy[e.ID] == HistoryRetranscribing || h.busy[e.ID] == HistoryReprocessing
 	if e.Recording != "" && a.Retranscribe != nil {
 		again := widget.NewButtonWithIcon(LabelRetranscribe, theme.ViewRefreshIcon(), func() { w.retranscribe(e) })
-		if h.busy[e.ID] == HistoryRetranscribing {
+		if working {
+			again.Disable()
+		}
+		buttons.Add(again)
+	}
+	if strings.TrimSpace(e.RawText) != "" && a.Reprocess != nil {
+		again := widget.NewButtonWithIcon(LabelReprocess, theme.ViewRefreshIcon(), func() { w.reprocess(e) })
+		if working {
 			again.Disable()
 		}
 		buttons.Add(again)
@@ -490,6 +506,9 @@ func historyHeading(e history.Entry, model string, now time.Time) string {
 	if model != "" {
 		parts += " · " + model
 	}
+	if e.ProcessedText != "" {
+		parts += " · post-processed"
+	}
 	return parts
 }
 
@@ -540,16 +559,29 @@ func (w *SettingsWindow) stopPlaying() {
 // retranscribe transcribes an entry's recording again in the background
 // and shows the new text.
 func (w *SettingsWindow) retranscribe(e history.Entry) {
+	w.redo(e, w.opts.HistoryActions.Retranscribe, HistoryRetranscribing,
+		"a recording could not be transcribed again", "Could not transcribe it again: ")
+}
+
+// reprocess post-processes an entry's transcript again in the background
+// and shows the new text.
+func (w *SettingsWindow) reprocess(e history.Entry) {
+	w.redo(e, w.opts.HistoryActions.Reprocess, HistoryReprocessing,
+		"a transcript could not be post-processed again", "Could not post-process it again: ")
+}
+
+// redo runs action on entry e in the background, showing status meanwhile,
+// and then the entry as action left it, or why it failed.
+func (w *SettingsWindow) redo(e history.Entry, action func(context.Context, history.Entry) (history.Entry, error), status, logMsg, failure string) {
 	h := &w.history
-	h.busy[e.ID] = HistoryRetranscribing
+	h.busy[e.ID] = status
 	w.refreshHistoryRows()
-	again := w.opts.HistoryActions.Retranscribe
 	go func() {
-		updated, err := again(context.Background(), e)
+		updated, err := action(context.Background(), e)
 		w.do(func() {
 			if err != nil {
-				w.log().Warn("a recording could not be transcribed again", "entry", e.ID, "err", err)
-				h.busy[e.ID] = "Could not transcribe it again: " + err.Error()
+				w.log().Warn(logMsg, "entry", e.ID, "err", err)
+				h.busy[e.ID] = failure + err.Error()
 			} else {
 				delete(h.busy, e.ID)
 				for i := range h.entries {

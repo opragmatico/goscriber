@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"log/slog"
@@ -744,7 +745,7 @@ func TestStages(t *testing.T) {
 		t.Fatalf("%d history entries", len(saved))
 	}
 	e := saved[0]
-	if e.RawText != "um hello" || e.Text != "hello!" || !e.Delivered || len(e.Samples) != rate ||
+	if e.RawText != "um hello" || e.Text != "hello!" || e.ProcessedText != "" || !e.Delivered || len(e.Samples) != rate ||
 		e.SampleRate != rate || !slices.Equal(e.Languages, []string{"en-US"}) || e.Language != "en-US" || e.At.IsZero() {
 		t.Errorf("history entry %+v", e)
 	}
@@ -755,6 +756,59 @@ func TestStages(t *testing.T) {
 	}
 	if res := r.events.kinds(EventResult); len(res) != 1 || !slices.Equal(res[0].Languages, []string{"en-US"}) {
 		t.Errorf("result events %+v, want the detected language", res)
+	}
+}
+
+// The history keeps what the LLM stage made of the transcript when it
+// post-processed it, with llm_enabled or for a session started with
+// ActionStartPostProcess, and nothing when it did not.
+func TestHistoryKeepsTheLLMOutput(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		enabled       bool
+		action        Action
+		wantProcessed string
+	}{
+		{"llm_enabled", true, ActionStart, "Hello."},
+		{"post-processing shortcut", false, ActionStartPostProcess, "Hello."},
+		{"not post-processed", false, ActionStart, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			saved := make(chan HistoryEntry, 1)
+			r := newRig(t, rigOptions{
+				script:   fake.Script{Replies: []fake.Reply{fake.Transcript("hello")}},
+				settings: func(s *config.Settings) { s.LLMEnabled = tc.enabled },
+				stages: Stages{
+					// As the llm package's stage does, it passes on what it is
+					// not asked to post-process.
+					LLM: TextStageFunc(func(_ context.Context, text string, info SessionInfo) (string, error) {
+						if !info.PostProcesses() {
+							return text, nil
+						}
+						return "Hello.", nil
+					}),
+					Hook: TextStageFunc(func(_ context.Context, text string, _ SessionInfo) (string, error) { return text + " #hook", nil }),
+					History: HistorySinkFunc(func(_ context.Context, e HistoryEntry) error {
+						saved <- e
+						return nil
+					}),
+				},
+			})
+			r.c.Do(tc.action)
+			r.events.waitState(t, StateRecording, 1)
+			r.c.Stop()
+			select {
+			case e := <-saved:
+				if e.RawText != "hello" || e.ProcessedText != tc.wantProcessed {
+					t.Errorf("history entry %+v, want ProcessedText %q", e, tc.wantProcessed)
+				}
+				if want := cmp.Or(tc.wantProcessed, "hello") + " #hook"; e.Text != want {
+					t.Errorf("Text %q, want %q", e.Text, want)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("nothing saved to history")
+			}
+		})
 	}
 }
 

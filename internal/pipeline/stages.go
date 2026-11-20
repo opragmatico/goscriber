@@ -79,12 +79,19 @@ type SessionInfo struct {
 	Boosted bool
 	// PostProcess asks the LLM stage to post-process the transcript even
 	// with llm_enabled off: the user dictated with the post-processing
-	// shortcut (ActionStartPostProcess).
+	// shortcut (ActionStartPostProcess), or asked for a saved transcript to
+	// be processed again (Reprocess).
 	PostProcess bool
 	// Settings are the settings the session started with, which the text
 	// stages follow.
 	Settings config.Settings
 }
+
+// PostProcesses reports whether the LLM stage is to post-process the
+// transcript: with llm_enabled, or when the session asks for it
+// (PostProcess). The coordinator keeps the LLM stage's output as the
+// transcript's ProcessedText only then.
+func (i SessionInfo) PostProcesses() bool { return i.Settings.LLMEnabled || i.PostProcess }
 
 // HistoryEntry is a finished dictation.
 type HistoryEntry struct {
@@ -93,6 +100,9 @@ type HistoryEntry struct {
 	At time.Time
 	// RawText is the model's transcript, before the text stages.
 	RawText string
+	// ProcessedText is the LLM stage's output, or "" when the transcript
+	// was not post-processed or post-processing failed.
+	ProcessedText string
 	// Text is what was delivered.
 	Text string
 	// Samples are the recording, mono at SampleRate Hz. The entry owns them.
