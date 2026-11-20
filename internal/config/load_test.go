@@ -150,8 +150,48 @@ func TestLoadMigratesV1FillerWordRemoval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.Migrated || got.FillerWordRemoval {
+	if rep.FromVersion != 2 || got.FillerWordRemoval {
 		t.Errorf("v2: got %+v / %+v, want the user's false kept", got, rep)
+	}
+}
+
+// v2 files have no llm_provider: v3 reads it from the base URL, and an
+// address of no known provider is a custom server.
+func TestLoadMigratesV2LLMProvider(t *testing.T) {
+	for _, tc := range []struct {
+		file string
+		want LLMProvider
+		url  string
+	}{
+		{`{"schema_version": 2}`, LLMOllama, DefaultLLMBaseURL},
+		{`{"schema_version": 2, "llm_base_url": "http://localhost:11434/v1"}`, LLMOllama, DefaultLLMBaseURL},
+		{`{"schema_version": 2, "llm_base_url": "https://api.groq.com/openai/v1/"}`, LLMGroq, "https://api.groq.com/openai/v1/"},
+		{`{"schema_version": 2, "llm_base_url": "https://api.openai.com/v1"}`, LLMOpenAI, "https://api.openai.com/v1"},
+		{`{"schema_version": 2, "llm_base_url": "http://localhost:1234/v1"}`, LLMCustom, "http://localhost:1234/v1"},
+		{`{"schema_version": 2, "llm_base_url": 7}`, LLMOllama, DefaultLLMBaseURL},
+	} {
+		path := settingsPath(t)
+		writeFile(t, path, tc.file)
+		got, rep, err := Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !rep.Migrated || got.LLMProvider != tc.want || got.LLMBaseURL != tc.url {
+			t.Errorf("%s: provider %q at %q (migrated %v), want %q at %q", tc.file, got.LLMProvider, got.LLMBaseURL, rep.Migrated, tc.want, tc.url)
+		}
+	}
+}
+
+// A provider the build does not know is the one at the base URL.
+func TestLoadFixesUnknownLLMProvider(t *testing.T) {
+	path := settingsPath(t)
+	writeFile(t, path, `{"schema_version": 3, "llm_provider": "mistral", "llm_base_url": "https://openrouter.ai/api/v1"}`)
+	got, rep, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LLMProvider != LLMOpenRouter || !slices.Contains(rep.Fixed, "llm_provider") {
+		t.Errorf("provider %q, fixed %v; want openrouter, fixed", got.LLMProvider, rep.Fixed)
 	}
 }
 

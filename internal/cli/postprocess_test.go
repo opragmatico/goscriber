@@ -59,13 +59,13 @@ func newLLMServer(t *testing.T, status int) *llmServer {
 	return s
 }
 
-// withLLMSettings saves settings whose post-processing points at srv, with
-// a prompt that brackets the transcript, off.
+// withLLMSettings saves settings whose post-processing points at srv, a
+// custom server, with a prompt that brackets the transcript, off.
 func withLLMSettings(t *testing.T, srv *llmServer) {
 	t.Helper()
 	paths, _ := config.ResolvePaths()
 	s := config.Defaults()
-	s.LLMBaseURL, s.LLMModel, s.LLMPrompt = srv.URL+"/v1", "test", "[${output}]"
+	s.LLMProvider, s.LLMBaseURL, s.LLMModel, s.LLMPrompt = config.LLMCustom, srv.URL+"/v1", "test", "[${output}]"
 	if err := config.Save(paths.SettingsFile(), s); err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestTranscribeLLMRefusals(t *testing.T) {
 			"does not serve gemma4:e4b (with Ollama: ollama pull gemma4:e4b); it serves other, test, which --llm-model can pick",
 		},
 		{"server down", []string{"--llm-url", down.URL + "/v1", "--llm-model", "test"}, "cannot be reached"},
-		{"no model for a hosted provider", []string{"--llm-url", "https://api.groq.com/openai/v1"}, "no model is chosen for https://api.groq.com/openai/v1; choose one with --llm-model"},
+		{"no model for a hosted provider", []string{"--llm-url", "https://api.groq.com/openai/v1"}, "no model is chosen for Groq; choose one with --llm-model"},
 		{"bad URL", []string{"--llm-url", "localhost:11434"}, "--llm-url:"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -48,12 +48,13 @@ Flags:
       --llm           clean each transcript with the language model set up
                       in the settings' Post-processing page, on or off there
       --llm-model M   the model to clean with; implies --llm (default: the
-                      settings' llm_model, else for a provider on this
-                      computer gemma4:26b with 32 GB of memory or more,
+                      settings' llm_model, else the provider's default:
+                      claude-opus-5-5 for Claude, and for a provider on
+                      this computer gemma4:26b with 32 GB of memory or more,
                       gemma4:e4b with less)
-      --llm-url URL   the provider's OpenAI-compatible base URL; implies --llm
-                      (default: the settings' llm_base_url, Ollama's
-                      http://localhost:11434/v1)
+      --llm-url URL   the provider's base URL, which picks the provider at
+                      that address, else a custom OpenAI-compatible server;
+                      implies --llm (default: the settings' provider)
 
 Custom words are boosted by models that can favour words (Nemotron), with
 the settings' custom_word_boost. Other models' transcripts are corrected:
@@ -64,10 +65,11 @@ A <unk> the speech model writes for a character it has no token for
 becomes "%" after a number and ":" elsewhere.
 
 With --llm, the transcript goes to the model with the settings' prompt, in
-parts of up to 400 words cut at sentence ends. A part the model fails on is
+parts of up to 400 words cut at sentence ends; the prompt's ${custom_words}
+are the settings' custom words and --word's. A part the model fails on is
 printed as transcribed, with a warning, and the command exits 1. The API key
-is the one the settings window stored in the system keychain for the base
-URL. With --json, "text" is the cleaned transcript and "raw_text" the
+is the one the settings window stored in the system keychain for the
+provider. With --json, "text" is the cleaned transcript and "raw_text" the
 speech model's.
 
 Nothing is downloaded: fetch the model first with 'goscriber models pull'.
@@ -420,7 +422,7 @@ func (t *transcriber) transcribe(ctx context.Context, file string, many bool) er
 	raw := res.Text
 	var postErr error
 	if t.post != nil && strings.TrimSpace(res.Text) != "" {
-		cleaned, took, err := t.post.clean(ctx, res.Text)
+		cleaned, took, err := t.post.clean(ctx, res.Text, lang)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}

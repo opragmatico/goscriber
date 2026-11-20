@@ -71,15 +71,51 @@ func TestSplitLongTranscript(t *testing.T) {
 }
 
 func TestRender(t *testing.T) {
-	if got := Render("Fix: ${output}. Again: ${output}", "hi"); got != "Fix: hi. Again: hi" {
+	if got := Render("Fix: ${output}. Again: ${output}", "hi", Vars{}); got != "Fix: hi. Again: hi" {
 		t.Errorf("Render = %q", got)
 	}
-	if got := Render("Fix the transcript below.\n", "hi there"); got != "Fix the transcript below.\n\nhi there" {
+	if got := Render("Fix the transcript below.\n", "hi there", Vars{}); got != "Fix the transcript below.\n\nhi there" {
 		t.Errorf("Render without the placeholder = %q", got)
 	}
-	got := Render("", "olá")
-	if !strings.HasPrefix(got, "<transcript>\nolá\n</transcript>") || strings.Contains(got, Placeholder) {
+	got := Render("", "olá", Vars{})
+	if !strings.HasPrefix(got, "<transcript>\nolá\n</transcript>") || strings.Contains(got, "${") {
 		t.Errorf("Render with the default prompt = %q", got)
+	}
+}
+
+// The language and custom words fill their placeholders, and a line that
+// holds one is left out while it has nothing to say.
+func TestRenderVars(t *testing.T) {
+	prompt := "Clean this.\nIt is in ${language}.\nSpell: ${custom_words}\n${output}"
+	for _, tc := range []struct {
+		name string
+		vars Vars
+		want string
+	}{
+		{
+			"both",
+			Vars{Language: "Portuguese (Brazil)", Words: []string{"Reportei", "Bain"}},
+			"Clean this.\nIt is in Portuguese (Brazil).\nSpell: Reportei, Bain\nolá",
+		},
+		{"no words", Vars{Language: "French"}, "Clean this.\nIt is in French.\nolá"},
+		{"no language", Vars{Words: []string{"Fin"}}, "Clean this.\nSpell: Fin\nolá"},
+		{"neither", Vars{}, "Clean this.\nolá"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Render(prompt, "olá", tc.vars); got != tc.want {
+				t.Errorf("Render = %q, want %q", got, tc.want)
+			}
+		})
+	}
+	// A placeholder in the transcript is the speaker's, not the prompt's.
+	if got := Render("Fix: ${output}", "say ${language}", Vars{Language: "English"}); got != "Fix: say ${language}" {
+		t.Errorf("Render = %q", got)
+	}
+	got := Render("", "olá", Vars{Language: "Portuguese", Words: []string{"Reportei"}})
+	for _, want := range []string{"The transcript is in Portuguese.", "sounds like them: Reportei"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the default prompt lacks %q:\n%s", want, got)
+		}
 	}
 }
 
@@ -208,7 +244,7 @@ func TestStage(t *testing.T) {
 		Log:    slog.New(slog.DiscardHandler),
 	}
 	set := config.Defaults()
-	set.LLMBaseURL = f.endpoint().BaseURL
+	set.LLMProvider, set.LLMBaseURL = config.LLMCustom, f.endpoint().BaseURL
 	set.LLMPrompt = "[${output}]"
 	info := pipeline.SessionInfo{Settings: set}
 
@@ -257,9 +293,20 @@ func TestStage(t *testing.T) {
 		t.Errorf("failures = %v", failures)
 	}
 
+	// Ollama takes no key: the keychain is not asked, and none is sent.
+	info.Settings.LLMProvider = config.LLMOllama
+	n, asked := len(f.sent()), len(keys)
+	if _, err := stage.Process(context.Background(), "hello there.", info); err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != asked || f.auth[n] != "" {
+		t.Errorf("Ollama: keys asked for %v, sent %q", keys, f.auth[n])
+	}
+
 	// A hosted provider with no model chosen fails before sending anything.
-	info.Settings.LLMBaseURL = "https://api.groq.com/openai/v1"
-	if _, err := stage.Process(context.Background(), "hello.", info); err == nil {
+	info.Settings.LLMProvider = config.LLMGroq
+	n = len(f.sent())
+	if _, err := stage.Process(context.Background(), "hello.", info); err == nil || len(f.sent()) != n {
 		t.Error("no error without a model for a hosted provider")
 	}
 }
