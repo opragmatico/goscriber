@@ -14,8 +14,8 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/opragmatico/goscriber/engine"
 	"github.com/opragmatico/goscriber/internal/config"
-	"github.com/opragmatico/goscriber/internal/engine"
 	"github.com/opragmatico/goscriber/internal/engine/worker"
 	"github.com/opragmatico/goscriber/internal/instance"
 	"github.com/opragmatico/goscriber/internal/models"

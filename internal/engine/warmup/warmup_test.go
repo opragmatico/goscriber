@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/opragmatico/goscriber/internal/engine"
-	"github.com/opragmatico/goscriber/internal/engine/fake"
+	"github.com/opragmatico/goscriber/engine"
+	"github.com/opragmatico/goscriber/engine/fake"
 )
 
 var spec = engine.LoadSpec{ID: "asr", Path: "/models/asr.gguf"}

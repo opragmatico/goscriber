@@ -3,8 +3,8 @@
 package main
 
 import (
-	"github.com/opragmatico/goscriber/internal/engine"
-	"github.com/opragmatico/goscriber/internal/engine/nemo"
+	"github.com/opragmatico/goscriber/engine"
+	"github.com/opragmatico/goscriber/engine/nemo"
 )
 
 // The NeMo-Speech.cpp engine needs the SDK from `make deps` and the nemo

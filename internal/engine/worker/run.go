@@ -4,7 +4,7 @@ import (
 	"os"
 	"os/signal"
 
-	"github.com/opragmatico/goscriber/internal/engine"
+	"github.com/opragmatico/goscriber/engine"
 )
 
 // Command is the hidden subcommand that turns the goscriber executable into

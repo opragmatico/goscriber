@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/opragmatico/goscriber/engine"
 	"github.com/opragmatico/goscriber/internal/audio"
-	"github.com/opragmatico/goscriber/internal/engine"
 )
 
 // liveDecoder decodes a recording while it goes on, so the overlay can show
