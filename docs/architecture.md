@@ -73,7 +73,7 @@ internal/
 │   └── manager.go         # list, download, delete; status per model and quantisation
 ├── pipeline/
 │   └── coordinator.go     # recording → transcription → output state machine
-├── text/                  # cleanup, filler words, custom-word correction, hook
+├── text/                  # cleanup, filler words, custom-word correction
 ├── llm/                   # optional post-processing: Chat Completions client, chunking, the LLM stage
 ├── keychain/              # API keys in the macOS Keychain, the Secret Service, the Windows Credential Manager
 ├── output/                # clipboard paste with restore, direct typing
@@ -82,6 +82,7 @@ internal/
 ├── hotkey/                # global shortcuts, push-to-talk and toggle
 │   └── portal/            # the XDG GlobalShortcuts portal, for Wayland (D-Bus)
 ├── history/               # SQLite history + saved recordings
+├── webhook/               # POSTs each transcription to the webhook URL: River jobs on SQLite, retries
 ├── platform/              # permissions, clipboard and key events, the overlay's native window tweaks, login items (per-OS, CGo)
 │   └── x11test/           # another X11 app, for the Linux clipboard and key-event tests
 └── ui/
@@ -248,6 +249,7 @@ The app shell routes each new notice once: an OS notification (`fyne.App.SendNot
 | `transcription_failed` | error | no | | the coordinator, when a decode fails or a model will not load for a reason other than a damaged file |
 | `login_item_failed` | warning | no | Open System Settings, when macOS waits for the user to allow the login item | the shell, when the [login item](#launch-at-login) cannot be added or removed |
 | `llm_failed` | warning | no | Open Settings → Post-processing page | the LLM stage, when the model could not clean a transcript, or part of one, which went out as cleanup left it |
+| `webhook_failed` | warning | no | | the [webhook](#webhook) queue, once per transcription it gives up (refused, or out of attempts), and the shell when the jobs database will not open |
 
 ## Output
 
@@ -346,7 +348,7 @@ shortcut up   ─► Capture.Stop() ─► speech gate (too short / too quiet �
                     [whole]     Recognize(whole clip)
                     (a live decode that failed falls back to Recognize of what it missed)
                     └► empty transcript ─► no speech
-                    └► text cleanup ─► [LLM post-processing] ─► [hook] ─► paste / type ─► history
+                    └► text cleanup ─► [LLM post-processing] ─► paste / type ─► history ─► [webhook]
 ```
 
 **No speech** is an outcome, not an error: nothing is pasted and the user sees no notice, only a debug log line. Three checks lead to it (`internal/pipeline/speech.go`): a recording shorter than `min_recording_ms` (250 ms), one whose loudest 33 ms window is under `silence_threshold_db` (−60 dBFS) — both skip the model — and an empty or whitespace-only final transcript. The Silero VAD masks silence on the streaming path only; NeMo-Speech.cpp v0.3.0 does not apply it to whole-clip decodes ([details](engine-sdk.md#voice-activity-detection)).
@@ -358,7 +360,7 @@ The `Coordinator` (`internal/pipeline/coordinator.go`) owns a single state machi
 - **Model**: every `Start` resolves the selected model through a `ModelSource` (`CatalogModels` over the models manager: `selected_model`, in `model_quant` when the model has it, on the CPU when `accelerator` says so, with the Silero VAD when enabled and downloaded). With no model ready, `Start` records nothing and raises `no_model` afresh, so every press is answered; a damaged file raises `model_corrupt`. The engine goroutine loads the model when recording starts, if the engine does not hold it already (with `preload_model` it usually does: see [model lifecycle](#model-lifecycle)), and `Acquire`s it until the transcript is out.
 - **Decode**: the recording is decoded while it goes on ([live transcription](#live-transcription)). On `Stop`, the speech gate runs first (too short or too quiet ends the session quietly), then the engine goroutine finishes the decode: the stream's final, or the chunk still open, or the whole clip when neither applies.
 - **Session IDs**: each session has an ID and a context. A cancel ends the context (the decode, a text stage or the paste may stop early) and anything that finishes afterwards for that session is dropped, even while the next session is recording.
-- **Stages**: `Stages{Cleanup, LLM, Hook, History}` run after recognition, each optional; the app sets `Cleanup` to `CleanupStage` ([text cleanup](#text-cleanup)), `LLM` to `llm.Stage` ([LLM post-processing](llm-post-processing.md)), which passes the text on untouched while `llm_enabled` is off, and `History` to the [history](#history); `Hook` is nil until #38 lands. Each text stage gets the session's `SessionInfo`, with the settings the session started with. A failing text stage passes its input on; empty output pastes nothing. History saves after delivery, off the critical path.
+- **Stages**: `Stages{Cleanup, LLM, Hook, History}` run after recognition, each optional; the app sets `Cleanup` to `CleanupStage` ([text cleanup](#text-cleanup)), `LLM` to `llm.Stage` ([LLM post-processing](llm-post-processing.md)), which passes the text on untouched while `llm_enabled` is off, and `History` to the [history](#history); `Hook` stays nil: the executable hook of #38 was dropped for the [webhook](#webhook), which runs after delivery and never changes what is pasted. Each text stage gets the session's `SessionInfo`, with the settings the session started with. A failing text stage passes its input on; empty output pastes nothing. History saves after delivery, off the critical path, then queues the transcription for the webhook.
 - **Failures**: an engine error ends in `idle` with `transcription_failed`, `model_corrupt` or `no_model`; a failed delivery with `paste_failed` or `permission_missing`. Each is raised before the state returns to idle. No speech is not a failure.
 - **Timings**: each stage's duration is logged at debug level, and a summary line per session (`dictation timings`); the info-level line says only whether something was delivered and how many characters, never the text.
 
@@ -426,11 +428,11 @@ Settings files from before schema version 2 hold `filler_word_removal: false`, s
 
 ### History
 
-Every finished dictation is saved (`internal/history`, SQLite through the pure-Go `modernc.org/sqlite`), also when its delivery failed, so the text is never lost: when recording started, the delivered text, the model's raw transcript, the model, the transcript's language and the recording's length, with the recording as a 16-bit mono WAV beside the database. An entry [transcribed from a file](#transcribing-files) also keeps the file's name (schema version 2). The schema is versioned with SQLite's `user_version` and migrated forward, one transaction per step, when the app opens it; a database from a newer Goscriber is left alone, and the app runs on without saving.
+Every finished dictation is saved (`internal/history`, SQLite through the pure-Go `modernc.org/sqlite`), also when its delivery failed, so the text is never lost: when recording started, the delivered text, the model's raw transcript, the model, the transcript's language and the recording's length, with the recording as a 16-bit mono WAV beside the database. An entry [transcribed from a file](#transcribing-files) also keeps the file's name (schema version 2). An entry's ID is the transcription's ID for the [webhook](#webhook); `AUTOINCREMENT` keeps IDs rising, never reusing one, even after deletes. With `history_limit` 0 an entry is still added, hidden (`visible` 0, schema version 3), without its recording, and pruned at once, so the transcription gets its ID; the page, `List`, `Count` and `Get` see visible entries only, and every prune removes hidden ones. Without a webhook nothing is added then, as before. The schema is versioned with SQLite's `user_version` and migrated forward, one transaction per step, when the app opens it; a database from a newer Goscriber is left alone, and the app runs on without saving.
 
 **Retention.** `history_limit` is how many of the latest dictations are kept (5 by default; 0 saves none). `recording_retention` is how long their recordings are: as long as the dictation (`preserve_limit`, the default), 3 days, 2 weeks, 3 months, or none (`never`, which saves no WAV). A recording past its age is deleted and its dictation kept. The history is pruned after every dictation, when it opens, and as soon as either setting changes.
 
-**History page.** The latest 100 dictations, newest first, each dated ("Today 14:22 · 6 s · Parakeet TDT 0.6B v2"). Copy puts the text on the clipboard. Paste again hides the settings window, so the app the user was in gets the keyboard back, and delivers the text as a dictation would. Play plays the recording on the output device in the settings, and Stop ends it. Transcribe again decodes the recording with the model the settings select now, as a file is decoded (below), runs the cleanup and LLM stages, and replaces the dictation's text and model. Delete removes a dictation and its recording; Delete all asks first.
+**History page.** The latest 100 dictations, newest first, each dated ("Today 14:22 · 6 s · Parakeet TDT 0.6B v2"), and while a webhook is set numbered ("· #42"), with the `transcription_id` the webhook got. Copy puts the text on the clipboard. Paste again hides the settings window, so the app the user was in gets the keyboard back, and delivers the text as a dictation would. Play plays the recording on the output device in the settings, and Stop ends it. Transcribe again decodes the recording with the model the settings select now, as a file is decoded (below), runs the cleanup and LLM stages, and replaces the dictation's text and model. Delete removes a dictation and its recording; Delete all asks first.
 
 ### Transcribing files
 
@@ -441,6 +443,17 @@ The History page transcribes existing recordings without the command line: Choos
 - **Sharing the engine.** The decode runs on the coordinator's engine goroutine one 10 s slice at a time, each handed to the decoder a second at a time, and progress is reported after each slice. A dictation started meanwhile queues its own work behind at most one slice, so it is not held up by a long file, and the file resumes once the dictation's decode is done (reloading its model if the dictation used another; a stream that breaks then falls back to decoding the file whole). The model is held loaded from the first slice to the end. Cancelling stops between pushes, closes the stream and leaves nothing in the history.
 
 **Measured** (`TestTranscribeTenMinuteFile` in `internal/engine/nemo`, M4 Max, Metal, in process): a 10 min 4 s WAV, the JFK fixture 53 times over, read back from disk and transcribed word for word by both models, with 61 progress reports. Parakeet TDT 0.6B v2 took 5.4 s in chunks; Nemotron Streaming 3.5 took 22.3 s through its stream, which decodes 320 ms at a time.
+
+### Webhook
+
+`internal/webhook` sends every finished transcription to `webhook_url` with a POST (the README has the [payload and the rules](../README.md#webhook)). Each POST is a job of [River](https://riverqueue.com) on its SQLite driver, in `jobs.sqlite3`, a database of River's own, migrated by River's migrator and kept apart from the history and its `user_version`. The job's arguments hold the delivery's ID, the URL and the payload, so a later change of the setting leaves it alone, and it outlives the app: a job waiting for its retry, or queued just before quitting, runs after the next launch.
+
+- **Two IDs.** The body's `transcription_id` is the history entry's ID, which says which transcription a POST carries. The `webhook-id` header, Standard Webhooks' name, is the key to drop repeats by: a random UUID that `Enqueue` makes and stores in the job's arguments, so every attempt sends the same one, across relaunches, and queueing the transcription again would be a new delivery with a new one. Neither entry IDs nor River's job IDs would do as that key: each is a per-machine counter, so two machines send the same numbers, and it starts again if its database is deleted.
+- **When it runs.** The shell opens the queue on first need: at launch when a URL is set, or when `jobs.sqlite3` exists and still holds jobs (a URL set before and cleared since); when the user sets a URL; or at the first transcription to send. Without a URL there is no jobs database and nothing polls one.
+- **Polling.** River runs poll-only (`PollOnly`), fetching jobs every second: its SQLite driver otherwise emulates `LISTEN` with a table it polls every 50 ms. One connection, as the driver advises, and two workers.
+- **Attempts.** 30 s each, the answer included (`JobTimeout`). The worker sorts the outcome: 2xx is done; a network error, a timeout, 408, 429 and 5xx return an error, which River retries after attempt⁴ seconds, up to 14 attempts; any other answer is a `JobCancel`. The client follows 307 and 308 only, since Go turns a POST into a GET on other redirects, which would look like success. On the last attempt, or a refusal, the worker calls `OnFailure` once, and the shell raises `webhook_failed`. Messages name the URL's host: `net/http` errors carry the whole URL, so the worker unwraps them.
+- **Quitting.** The shell closes the queue after the coordinator, so the last dictation is queued first. `StopAndCancel` cuts requests in flight short; River puts such a job back without counting the attempt, since the error wraps the cancellation, and the next launch sends it again. A crash leaves the job running until River's rescuer moves it on, a minute after its timeout.
+- **Retention.** River deletes a completed job a minute after it finishes and a cancelled or discarded one after a week. River's own info logs (client start, leadership, each failed attempt) are dropped; the worker logs each failed attempt as a warning.
 
 ### Live transcription
 
@@ -486,6 +499,7 @@ The output then waits `paste_delay_ms` (60 ms) before pressing the paste key.
 - **Engine worker process**: runs NeMo-Speech.cpp. In the app, the supervisor has a goroutine per worker reading its responses, one re-logging its stderr and one sending heartbeats; calls wait for their response on the caller's goroutine.
 - **Session goroutine**: per session, runs the text stages, the delivery and the history save, so a slow paste, LLM or hook never holds up a cancel.
 - **Background goroutines**: model downloads, history I/O, LLM requests.
+- **Webhook queue**: River's client, once the queue is open: its producer polls for jobs, its workers send the POSTs (two at a time), and its leader runs the maintenance (retries coming due, cleaning out old jobs).
 
 Goroutines talk through channels and the coordinator; nothing outside the main thread touches a widget directly.
 
@@ -494,6 +508,7 @@ Goroutines talk through channels and the coordinator; nothing outside the main t
 - **Settings**: `os.UserConfigDir()/goscriber/settings.json`
 - **Models**: `os.UserCacheDir()/goscriber/models/` (GGUF files under their Hugging Face names, `*.part` while downloading, and `verified.json`, which remembers the files already hashed). Files already in the Hugging Face cache (`HF_HUB_CACHE`, `HF_HOME`, default `~/.cache/huggingface/hub`) are used from there.
 - **History**: `os.UserConfigDir()/goscriber/history.sqlite3` and `…/recordings/*.wav`
+- **Webhook jobs**: `os.UserConfigDir()/goscriber/jobs.sqlite3`, created when a webhook URL is first set
 - **Logs**: `os.UserCacheDir()/goscriber/logs/goscriber.log`
 - **API keys** of LLM providers: the OS keychain, as "Goscriber LLM API key" under each base URL; never in `settings.json`
 - **Single instance**: `os.UserConfigDir()/goscriber/goscriber.lock` and `…/goscriber.sock` (the [control socket](#single-instance-and-remote-control))

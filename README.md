@@ -48,7 +48,35 @@ Names and jargon listed in the `custom_words` setting come out spelled your way:
 
 Filler words ("um", "uh") are removed, with the punctuation around them, and the `filler_word_removal` and `custom_filler_words` settings turn that off or change the list ([details](docs/architecture.md#text-cleanup)).
 
-Following Handy, Goscriber keeps a history of past dictations with their recordings (copy, paste again, play, transcribe again), transcribes WAV and FLAC files dropped on its History page, however long, can have a language model clean each transcript before it is pasted (Ollama, LM Studio or llama.cpp on your computer, or OpenAI, OpenRouter, Groq or any OpenAI-compatible provider; see [docs/llm-post-processing.md](docs/llm-post-processing.md)), and plans an external transcription hook.
+Following Handy, Goscriber keeps a history of past dictations with their recordings (copy, paste again, play, transcribe again), transcribes WAV and FLAC files dropped on its History page, however long, can have a language model clean each transcript before it is pasted (Ollama, LM Studio or llama.cpp on your computer, or OpenAI, OpenRouter, Groq or any OpenAI-compatible provider; see [docs/llm-post-processing.md](docs/llm-post-processing.md)), and can send every transcription to a [webhook](#webhook) of yours.
+
+## Webhook
+
+Set a URL in Settings → Advanced → Webhook (the `webhook_url` setting), and Goscriber posts every finished transcription to it as JSON: each dictation, after it is pasted, and each file transcribed on the History page. It is off by default: with no URL, nothing leaves the computer.
+
+```http
+POST /transcriptions HTTP/1.1
+Content-Type: application/json
+webhook-id: 6f1c2b8e-3d4a-4f5b-9a7c-2e8d1f0b3c4a
+User-Agent: Goscriber/0.4.0
+
+{
+  "transcription_id": 42,
+  "text": "Send the report by Friday.",
+  "raw_text": "send the report by friday",
+  "model": "parakeet-tdt-0.6b-v2",
+  "language": "en-US",
+  "duration_ms": 2480,
+  "started_at": "2026-11-20T08:30:15.123Z",
+  "source": "dictation"
+}
+```
+
+- **Fields.** `transcription_id` is the transcription's entry in the history, the number the History page shows on each entry while a webhook is set. `text` is what was pasted, after cleanup and any [LLM post-processing](docs/llm-post-processing.md); `raw_text` is the model's transcript; `language` is `""` when unknown; `started_at` is when recording started (for a file, when its transcription did), in UTC; `source` is `dictation` or the audio file's name.
+- **At least once.** Each POST is a job in a local queue ([River](https://riverqueue.com) on SQLite, in `jobs.sqlite3` beside the settings), so a transcription waits while the server is down or Goscriber is closed, and goes after the next launch. An attempt cut short, by quitting mid-request for instance, is made again, so the same POST can arrive twice: drop repeats by the `webhook-id` header, as [Standard Webhooks](https://www.standardwebhooks.com) names it. It is a random UUID made when the transcription is queued, the same on every attempt and unique to that delivery. Do not drop repeats by `transcription_id`: every machine numbers its own entries, so two can send the same number.
+- **Retries.** A network error, no answer within 30 s, a 408, a 429 or a 5xx answer is tried again after attempt⁴ seconds (1 s, 16 s, 81 s, …), up to 14 attempts in about a day. Any other answer outside 2xx (401, 404, a redirect other than 307 or 308) is not retried. A transcription Goscriber gives up raises one notice, which names the URL's host, never the URL, as it may hold a token.
+- **IDs.** IDs only go up. With a webhook set, a transcription gets its number even when the history keeps no dictations (`history_limit` 0): it is saved hidden and removed at once. Without a webhook, nothing is saved then. IDs start again from 1 only if the history database, `history.sqlite3`, is deleted.
+- **Changes.** A new URL applies to the transcriptions that follow; those already queued keep the URL they were queued for. A delivered transcription is deleted from the jobs database a minute later, and one given up a week later.
 
 ## Stack
 
@@ -62,6 +90,7 @@ Following Handy, Goscriber keeps a history of past dictations with their recordi
 | Clipboard and paste | `NSPasteboard` and Core Graphics key events through CGo on macOS (needs the Accessibility permission); X11 selections and XTEST key events through CGo on Linux, or wtype, dotool or ydotool on Wayland |
 | Settings | JSON under `os.UserConfigDir()` |
 | History | SQLite via [`modernc.org/sqlite`](https://pkg.go.dev/modernc.org/sqlite) (pure Go) |
+| Webhook delivery | [River](https://riverqueue.com) job queue on its SQLite driver (`riversqlite`), over `modernc.org/sqlite` |
 | Audio files | WAV by our own reader, FLAC via [`mewkiz/flac`](https://github.com/mewkiz/flac) (pure Go) |
 | Logging | `log/slog` |
 
@@ -75,7 +104,7 @@ Work is split into five milestones, tracked as GitHub issues:
 2. **M1 · Speech engine**: NeMo-Speech.cpp SDK build, the CGo binding (offline and streaming), Parakeet TDT 0.6B v2 conversion, the two-model catalog and downloader. At the end of M1, `goscriber transcribe file.wav` works with both models.
 3. **M2 · MVP dictation**: microphone, VAD, global shortcut, paste, coordinator, overlay and macOS permissions. At the end of M2 you can dictate into any app.
 4. **M3 · Live streaming & usable app**: live transcription in the overlay, language selection, custom vocabulary, engine process isolation, settings window, onboarding, history and the CLI.
-5. **M4 · Distribution & platforms**: a signed macOS app bundle and releases, Linux and Windows, launch at login, transcription hook, LLM post-processing.
+5. **M4 · Distribution & platforms**: a signed macOS app bundle and releases, Linux and Windows, launch at login, transcription webhook, LLM post-processing.
 
 macOS on Apple Silicon is the first target. Linux works on X11 and Wayland desktops, with a little setup on Wayland: see [docs/linux.md](docs/linux.md). Windows is postponed.
 

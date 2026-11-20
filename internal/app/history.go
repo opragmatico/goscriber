@@ -16,6 +16,7 @@ import (
 	"github.com/opragmatico/goscriber/internal/output"
 	"github.com/opragmatico/goscriber/internal/pipeline"
 	"github.com/opragmatico/goscriber/internal/ui"
+	"github.com/opragmatico/goscriber/internal/webhook"
 )
 
 // recordingPlayer plays a saved recording. *audio.Player implements it.
@@ -38,14 +39,21 @@ func openHistory(rt *Runtime) *history.Store {
 	return s
 }
 
-// historySink saves each finished dictation to the history and shows it on
-// the History page if the window is open.
-func (sh *shell) historySink() pipeline.HistorySink {
+// transcriptSink saves each finished dictation to the history, showing it
+// on the History page if the window is open, and queues it for the webhook
+// the session's settings name, with its entry's ID as the transcription's.
+// While the history keeps no dictations, the entry is added hidden for its
+// ID, and only when there is a webhook to send it to.
+func (sh *shell) transcriptSink() pipeline.HistorySink {
 	if sh.history == nil {
 		return nil
 	}
 	return pipeline.HistorySinkFunc(func(ctx context.Context, e pipeline.HistoryEntry) error {
-		_, err := sh.history.Add(ctx, history.Record{
+		hook := e.Settings.WebhookURL
+		if sh.history.Retention().Limit <= 0 && hook == "" {
+			return nil
+		}
+		saved, err := sh.history.Add(ctx, history.Record{
 			At:         e.At,
 			Text:       e.Text,
 			RawText:    e.RawText,
@@ -56,7 +64,20 @@ func (sh *shell) historySink() pipeline.HistorySink {
 			SampleRate: e.SampleRate,
 		})
 		sh.post(sh.settings.RefreshHistory)
-		return err
+		if err != nil {
+			return err
+		}
+		sh.webhooks.send(hook, webhook.Transcription{
+			ID:         saved.ID,
+			Text:       e.Text,
+			RawText:    e.RawText,
+			Model:      e.Model,
+			Language:   e.TextLanguage,
+			DurationMS: e.Duration.Milliseconds(),
+			StartedAt:  e.At,
+			Source:     webhook.SourceDictation,
+		})
+		return nil
 	})
 }
 
@@ -146,9 +167,10 @@ func (sh *shell) retranscribe(ctx context.Context, e history.Entry) (history.Ent
 }
 
 // transcribeFile transcribes an audio file with the current model, has the
-// text stages process it as they do a dictation, and saves it to the
-// history, with the file's audio as its recording, so it can be played and
-// transcribed again like a dictation.
+// text stages process it as they do a dictation, saves it to the history,
+// with the file's audio as its recording, so it can be played and
+// transcribed again like a dictation, and queues it for the webhook, as
+// transcriptSink does a dictation.
 func (sh *shell) transcribeFile(ctx context.Context, path string, progress func(ui.FileProgress)) (history.Entry, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -182,7 +204,8 @@ func (sh *shell) transcribeFile(ctx context.Context, path string, progress func(
 		Duration: time.Duration(len(samples)) * time.Second / time.Duration(rate),
 		Source:   filepath.Base(path),
 	}
-	if sh.history == nil {
+	hook := sh.rt.Settings.Get().WebhookURL
+	if sh.history == nil || (sh.history.Retention().Limit <= 0 && hook == "") {
 		return e, nil
 	}
 	saved, err := sh.history.Add(ctx, history.Record{
@@ -192,7 +215,11 @@ func (sh *shell) transcribeFile(ctx context.Context, path string, progress func(
 	if err != nil {
 		return e, fmt.Errorf("the transcript could not be saved: %w", err)
 	}
-	if saved.ID == 0 {
+	sh.webhooks.send(hook, webhook.Transcription{
+		ID: saved.ID, Text: e.Text, RawText: e.RawText, Model: e.Model, Language: e.Language,
+		DurationMS: e.Duration.Milliseconds(), StartedAt: e.At, Source: e.Source,
+	})
+	if !saved.Visible {
 		return e, nil // the history keeps no dictations
 	}
 	return saved, nil

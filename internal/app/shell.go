@@ -112,8 +112,10 @@ type shell struct {
 	// do runs UI updates from other goroutines on the Fyne main thread.
 	do func(func())
 
-	svc       services
-	history   *history.Store // nil when it could not be opened
+	svc     services
+	history *history.Store // nil when it could not be opened
+	// webhooks sends finished transcriptions to the webhook_url setting.
+	webhooks  *webhooks
 	dictation *pipeline.Coordinator
 	overlay   *ui.Overlay
 	// overlayActive is whether a session is in progress, for the overlay's
@@ -195,6 +197,7 @@ func newShell(rt *Runtime, a fyne.App, opts Options) *shell {
 	}
 	sh.svc = newServices(rt, opts, sh.notices)
 	sh.history = openHistory(rt)
+	sh.webhooks = newWebhooks(rt, sh.notices, opts.Version)
 	sh.permissionRows = &latest{do: func(f func()) { sh.do(f) }}
 	if runtime.GOOS == "darwin" {
 		sh.secureInput = platform.SecureInputEnabled
@@ -221,6 +224,10 @@ func (sh *shell) start() {
 
 	sh.routeNotices()
 	sh.followModel(s)
+	if sh.history == nil && s.WebhookURL != "" {
+		sh.rt.Log.Warn("transcriptions are not sent to the webhook: the history, which gives them their IDs, could not be opened")
+	}
+	sh.webhooks.launch(s)
 
 	// The shortcuts register in the background: on macOS that waits for
 	// Fyne's main loop, which starts with the app. Their actions go
@@ -435,6 +442,7 @@ func (sh *shell) applySettings(s config.Settings) {
 	sh.applyDictationSettings(s)
 	sh.followHistory(s)
 	sh.followModel(s)
+	sh.webhooks.follow(s)
 }
 
 func (sh *shell) debugMode(s config.Settings) bool { return s.DebugMode || sh.opts.Debug }

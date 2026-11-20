@@ -291,7 +291,7 @@ func TestNoticeKinds(t *testing.T) {
 	for _, code := range []Code{
 		CodeNoModel, CodeMicrophoneUnavailable, CodePermissionMissing, CodeModelCorrupt,
 		CodeEngineCrashed, CodeEngineCPUFallback, CodePasteFailed, CodeShortcutFailed,
-		CodeTranscriptionFailed, CodeMicrophoneDenied, CodeLoginItemFailed, CodeLLMFailed,
+		CodeTranscriptionFailed, CodeMicrophoneDenied, CodeLoginItemFailed, CodeLLMFailed, CodeWebhookFailed,
 	} {
 		n := New(code, "m")
 		if n.Title() == string(code) || n.Source == "" {
@@ -334,6 +334,22 @@ func TestLoginItemNotices(t *testing.T) {
 	}
 	if n := LoginItemNeedsApproval(); n.Code != CodeLoginItemFailed || n.Action.ID != ActionOpenLoginItems || !strings.Contains(n.Message, "Login Items") {
 		t.Errorf("LoginItemNeedsApproval: %+v", n)
+	}
+}
+
+func TestWebhookNotices(t *testing.T) {
+	refused := errors.New("the server answered 404 Not Found")
+	for _, tt := range []struct {
+		n    Notice
+		want string
+	}{
+		{WebhookFailed("hooks.example.com", 1, refused), "A transcription could not be sent to hooks.example.com: the server answered 404 Not Found. It will not be sent again."},
+		{WebhookFailed("hooks.example.com", 14, errors.New("no answer within 30 s")), "A transcription could not be sent to hooks.example.com in 14 attempts: no answer within 30 s. It will not be sent again."},
+		{WebhookUnavailable("hooks.example.com", errors.New("disk full")), "Transcriptions cannot be sent to hooks.example.com: the jobs database could not be opened (disk full)."},
+	} {
+		if tt.n.Code != CodeWebhookFailed || tt.n.Level != LevelWarning || tt.n.Persistent() || tt.n.Message != tt.want {
+			t.Errorf("got %+v, want the message %q", tt.n, tt.want)
+		}
 	}
 }
 

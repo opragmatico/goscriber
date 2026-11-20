@@ -28,6 +28,8 @@ var (
 
 // Entry is one dictation in the history.
 type Entry struct {
+	// ID identifies the entry, and the transcription to the webhook. IDs
+	// only go up: one is never reused, even after its entry is deleted.
 	ID int64
 	// At is when recording started.
 	At time.Time
@@ -48,6 +50,10 @@ type Entry struct {
 	// Source is the name of the audio file it was transcribed from, or ""
 	// for a dictation.
 	Source string
+	// Visible reports whether the History page shows the entry. Only Add
+	// returns a hidden one: added while the history keeps no dictations, it
+	// is pruned at once.
+	Visible bool
 }
 
 // Record is a finished dictation to add.
@@ -161,28 +167,28 @@ func (s *Store) SetRetention(ctx context.Context, r Retention) error {
 }
 
 // Add saves a dictation, with its recording unless the retention keeps
-// none, then prunes. With a Limit of 0 nothing is saved, and Add returns a
-// zero Entry.
+// none, then prunes. With a Limit of 0 the dictation is added hidden,
+// without its recording, and pruned at once: the Entry Add returns is not
+// Visible, and is there for its ID, which the webhook sends. The app calls
+// Add then only when a webhook is set.
 func (s *Store) Add(ctx context.Context, rec Record) (Entry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.retention.Limit <= 0 {
-		return Entry{}, nil
-	}
 	e := Entry{
 		At: rec.At, Text: rec.Text, RawText: rec.RawText, Model: rec.Model,
 		Language: rec.Language, Duration: rec.Duration, Source: rec.Source,
+		Visible: s.retention.Limit > 0,
 	}
 	file := ""
-	if _, keep := s.retention.maxAge(); keep && len(rec.Samples) > 0 && rec.SampleRate > 0 {
+	if _, keep := s.retention.maxAge(); e.Visible && keep && len(rec.Samples) > 0 && rec.SampleRate > 0 {
 		var err error
 		if file, err = s.writeRecording(rec); err != nil {
 			return Entry{}, err
 		}
 	}
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO entries (at, text, raw_text, model, language, duration_ms, recording, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		e.At.UnixMilli(), e.Text, e.RawText, e.Model, e.Language, e.Duration.Milliseconds(), file, e.Source)
+		`INSERT INTO entries (at, text, raw_text, model, language, duration_ms, recording, source, visible) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		e.At.UnixMilli(), e.Text, e.RawText, e.Model, e.Language, e.Duration.Milliseconds(), file, e.Source, e.Visible)
 	if err != nil {
 		s.removeRecording(file)
 		return Entry{}, fmt.Errorf("history: add: %w", err)
@@ -229,13 +235,13 @@ func (s *Store) writeRecording(rec Record) (string, error) {
 	}
 }
 
-// List returns up to limit entries, the newest first; limit 0 or less
-// returns them all.
+// List returns up to limit visible entries, the newest first; limit 0 or
+// less returns them all.
 func (s *Store) List(ctx context.Context, limit int) ([]Entry, error) {
 	if limit <= 0 {
 		limit = -1
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT `+columns+` FROM entries ORDER BY at DESC, id DESC LIMIT ?`, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+columns+` FROM entries WHERE visible ORDER BY at DESC, id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("history: list: %w", err)
 	}
@@ -254,18 +260,18 @@ func (s *Store) List(ctx context.Context, limit int) ([]Entry, error) {
 	return out, nil
 }
 
-// Count returns how many entries there are.
+// Count returns how many visible entries there are.
 func (s *Store) Count(ctx context.Context) (int, error) {
 	var n int
-	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM entries`).Scan(&n); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM entries WHERE visible`).Scan(&n); err != nil {
 		return 0, fmt.Errorf("history: count: %w", err)
 	}
 	return n, nil
 }
 
-// Get returns the entry with id, or an error matching ErrNotFound.
+// Get returns the visible entry with id, or an error matching ErrNotFound.
 func (s *Store) Get(ctx context.Context, id int64) (Entry, error) {
-	e, err := s.scan(s.db.QueryRowContext(ctx, `SELECT `+columns+` FROM entries WHERE id = ?`, id))
+	e, err := s.scan(s.db.QueryRowContext(ctx, `SELECT `+columns+` FROM entries WHERE id = ? AND visible`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Entry{}, fmt.Errorf("%w: %d", ErrNotFound, id)
 	}
@@ -284,7 +290,7 @@ type Transcript struct {
 // time and recording, and returns the entry as it is now.
 func (s *Store) Retranscribed(ctx context.Context, id int64, t Transcript) (Entry, error) {
 	s.mu.Lock()
-	res, err := s.db.ExecContext(ctx, `UPDATE entries SET text = ?, raw_text = ?, model = ?, language = ? WHERE id = ?`,
+	res, err := s.db.ExecContext(ctx, `UPDATE entries SET text = ?, raw_text = ?, model = ?, language = ? WHERE id = ? AND visible`,
 		t.Text, t.RawText, t.Model, t.Language, id)
 	s.mu.Unlock()
 	if err != nil {
@@ -311,8 +317,9 @@ func (s *Store) DeleteAll(ctx context.Context) error {
 	return s.deleteWhere(ctx, `1`)
 }
 
-// Prune removes the entries beyond the retention's limit, with their
-// recordings, and the recordings older than it keeps.
+// Prune removes the hidden entries and the visible ones beyond the
+// retention's limit, with their recordings, and the recordings older than
+// it keeps.
 func (s *Store) Prune(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -322,7 +329,7 @@ func (s *Store) Prune(ctx context.Context) error {
 func (s *Store) pruneLocked(ctx context.Context) error {
 	r := s.retention
 	err := s.deleteWhere(ctx,
-		`id IN (SELECT id FROM entries ORDER BY at DESC, id DESC LIMIT -1 OFFSET ?)`, max(r.Limit, 0))
+		`NOT visible OR id IN (SELECT id FROM entries WHERE visible ORDER BY at DESC, id DESC LIMIT -1 OFFSET ?)`, max(r.Limit, 0))
 	if err != nil {
 		return err
 	}
@@ -399,7 +406,7 @@ func (s *Store) recordingPath(name string) string {
 	return filepath.Join(s.dir, filepath.Base(name))
 }
 
-const columns = `id, at, text, raw_text, model, language, duration_ms, recording, source`
+const columns = `id, at, text, raw_text, model, language, duration_ms, recording, source, visible`
 
 func (s *Store) scan(row interface{ Scan(...any) error }) (Entry, error) {
 	var (
@@ -407,7 +414,7 @@ func (s *Store) scan(row interface{ Scan(...any) error }) (Entry, error) {
 		at, dur  int64
 		filename string
 	)
-	if err := row.Scan(&e.ID, &at, &e.Text, &e.RawText, &e.Model, &e.Language, &dur, &filename, &e.Source); err != nil {
+	if err := row.Scan(&e.ID, &at, &e.Text, &e.RawText, &e.Model, &e.Language, &dur, &filename, &e.Source, &e.Visible); err != nil {
 		return Entry{}, err
 	}
 	e.At = time.UnixMilli(at)

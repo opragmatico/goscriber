@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -321,5 +322,31 @@ func TestLoadModelUnloadTimeout(t *testing.T) {
 				t.Errorf("Fixed = %v, want model_unload_timeout reported: %v", rep.Fixed, tt.fixed)
 			}
 		})
+	}
+}
+
+// A webhook_url that is no http or https URL is reset to none.
+func TestLoadResetsABadWebhookURL(t *testing.T) {
+	for _, tt := range []struct {
+		in, want string
+		fixed    bool
+	}{
+		{"https://hooks.example.com/goscriber?token=t", "https://hooks.example.com/goscriber?token=t", false},
+		{"http://localhost:8080/in", "http://localhost:8080/in", false},
+		{"", "", false},
+		{"hooks.example.com/in", "", true},
+		{"ftp://hooks.example.com/in", "", true},
+		{"https://", "", true},
+		{" https://hooks.example.com", "", true},
+	} {
+		path := settingsPath(t)
+		writeFile(t, path, fmt.Sprintf(`{"schema_version": 1, "webhook_url": %q}`, tt.in))
+		got, rep, err := Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.WebhookURL != tt.want || slices.Contains(rep.Fixed, "webhook_url") != tt.fixed {
+			t.Errorf("%q: loaded %q, fixed %v", tt.in, got.WebhookURL, rep.Fixed)
+		}
 	}
 }

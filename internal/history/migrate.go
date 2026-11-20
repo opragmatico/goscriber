@@ -26,6 +26,10 @@ var migrations = []string{
 	// 2: the name of the audio file an entry was transcribed from, or ''
 	// for a dictation.
 	`ALTER TABLE entries ADD COLUMN source TEXT NOT NULL DEFAULT '';`,
+	// 3: whether the History page shows the entry. One added while the
+	// history keeps no dictations is hidden and pruned at once: it is there
+	// only so the transcription has an ID, which the webhook sends.
+	`ALTER TABLE entries ADD COLUMN visible INTEGER NOT NULL DEFAULT 1;`,
 }
 
 // migrate brings db's schema, versioned by SQLite's user_version, up to

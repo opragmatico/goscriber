@@ -700,3 +700,34 @@ func TestRefusedChangeShowsTheStoredValue(t *testing.T) {
 type refusingStore struct{ SettingsStore }
 
 func (refusingStore) Update(func(*config.Settings)) error { return errors.New("read-only") }
+
+// The webhook URL is saved as it is typed once it is a URL; text that is
+// not one is shown as wrong and leaves the setting alone, and clearing the
+// field turns the webhook off.
+func TestWebhookURLSetting(t *testing.T) {
+	tw := newTestWindow(t, nil)
+	tw.show(PageAdvanced)
+	if !strings.Contains(tw.pageText(PageAdvanced), WebhookHint) {
+		t.Error("the Advanced page does not explain the webhook")
+	}
+	e := tw.bound(t, "webhook_url").(*widget.Entry)
+
+	e.SetText("  https://hooks.example.com/goscriber?token=t  ")
+	if got := tw.store.Get().WebhookURL; got != "https://hooks.example.com/goscriber?token=t" {
+		t.Errorf("saved %q", got)
+	}
+	e.SetText("hooks.example.com")
+	if e.Validate() == nil {
+		t.Error("a URL without a scheme passes")
+	}
+	if got := tw.store.Get().WebhookURL; got != "https://hooks.example.com/goscriber?token=t" {
+		t.Errorf("text that is no URL saved %q", got)
+	}
+	e.SetText("")
+	if got := tw.store.Get().WebhookURL; got != "" || e.Validate() != nil {
+		t.Errorf("clearing the field left %q", got)
+	}
+	if s := tw.reopen(t); s.WebhookURL != "" {
+		t.Errorf("after a restart: %q", s.WebhookURL)
+	}
+}
