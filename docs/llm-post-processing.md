@@ -4,32 +4,45 @@ An optional stage after [text cleanup](architecture.md#text-cleanup) ([#39](http
 
 ## Setting it up
 
-The settings window's **Post-processing** page turns it on for every dictation and picks the provider, its base URL, the model and the prompt; **Try it** has the model clean a sample dictation with them. The settings are `llm_enabled` (off by default), `llm_base_url` (Ollama's by default), `llm_model` (empty: the [suggested model](#models), for a provider on this computer) and `llm_prompt` (empty: the [built-in prompt](#prompt)). An API key is saved to the OS keychain (the macOS Keychain, the Secret Service on Linux, the Windows Credential Manager) as "Goscriber LLM API key", under its base URL, so each provider keeps its own and none is in `settings.json`.
+The settings window's **Post-processing** page turns it on for every dictation and picks the provider first: Gemini, OpenAI, Claude, OpenRouter, Groq, Ollama, or Other, any server with an OpenAI-compatible API (LM Studio, llama.cpp's `llama-server`). Only the rows that provider needs follow: an API key for the hosted ones (optional for Other), a base URL for Ollama (where it runs, this computer by default) and Other, then the model and the prompt; **Try it** has the model clean a sample dictation with them. Picking a provider points the base URL at it and clears the model, which the next provider would not serve; Other keeps an address of no known provider and otherwise starts from LM Studio's.
+
+The settings are `llm_enabled` (off by default), `llm_provider` (`gemini`, `openai`, `claude`, `openrouter`, `groq`, `ollama` or `custom`; `ollama` by default), `llm_base_url` (set from the provider, typed for `ollama` and `custom`), `llm_model` (empty: the provider's default, `claude-opus-5-5` for Claude and the [suggested model](#models) for a provider on this computer; the other hosted providers need one chosen) and `llm_prompt` (empty: the [built-in prompt](#prompt)). Settings files from before `llm_provider` (schema version 2) get the provider at their base URL, or `custom` for any other address. An API key is saved to the OS keychain (the macOS Keychain, the Secret Service on Linux, the Windows Credential Manager) as "Goscriber LLM API key", under the provider's base URL, so each provider keeps its own and none is in `settings.json`; Ollama's requests carry none.
 
 The **post-processing shortcut** (`post_process_shortcut`, on the General page) dictates as the dictation shortcut does and post-processes that one dictation even with `llm_enabled` off, as Handy's `transcribe_with_post_process` binding does; its defaults are Handy's, `option+shift+space` on macOS, `ctrl+shift+space` on Windows and `ctrl+alt+shift+space` on Linux. The coordinator marks the session (`SessionInfo.PostProcess`), and `llm.Stage` cleans a transcript when either that or `llm_enabled` says so. Handy registers the shortcut only while post-processing is on, and its first shortcut never post-processes; Goscriber keeps the second registered and lets `llm_enabled` decide for the first, so either way of working fits. Clearing the shortcut gives its keys back. [Shortcuts](architecture.md#shortcuts) has how the two share the activation mode.
 
 The [history](architecture.md#history) keeps the model's output (`processed_text`) beside the speech model's transcript (`raw_text`). **Process again** on a History entry post-processes that transcript once more with the settings as they are now, even with `llm_enabled` off, so switching the provider, model or prompt and processing again compares them on the same input without transcribing the audio again. A failure keeps the saved text.
 
-`goscriber transcribe --llm FILE` cleans a file's transcript from the command line with the same settings, whether `llm_enabled` is on or not; `--llm-model` and `--llm-url` override them. It asks the provider for its models before decoding any audio, so a server that is down or lacks the model fails at once, naming the models it has. With `--json`, `text` is the cleaned transcript and `raw_text` the speech model's.
+`goscriber transcribe --llm FILE` cleans a file's transcript from the command line with the same settings, whether `llm_enabled` is on or not; `--llm-model` and `--llm-url` override them (`--llm-url` picks the provider at that address, or a custom server), and `--word` adds custom words to the prompt's `${custom_words}` as well as to the speech model's. It asks the provider for its models before decoding any audio, so a server that is down or lacks the model fails at once, naming the models it has. With `--json`, `text` is the cleaned transcript and `raw_text` the speech model's.
 
 ## Requests
 
-Goscriber speaks one wire format, OpenAI's Chat Completions, which hosted and local providers alike offer:
+Goscriber speaks OpenAI's Chat Completions to every provider but Claude, which it speaks to through Anthropic's Go SDK and its Messages API ([Claude](#claude)):
 
 | Provider | Base URL |
 | --- | --- |
+| Gemini | `https://generativelanguage.googleapis.com/v1beta/openai` |
 | OpenAI | `https://api.openai.com/v1` |
+| Claude | `https://api.anthropic.com` (Messages) |
 | OpenRouter | `https://openrouter.ai/api/v1` |
 | Groq | `https://api.groq.com/openai/v1` |
 | Ollama | `http://localhost:11434/v1` |
-| LM Studio | `http://localhost:1234/v1` |
-| llama.cpp (`llama-server`) | `http://localhost:8080/v1` |
+| Other: LM Studio | `http://localhost:1234/v1` |
+| Other: llama.cpp (`llama-server`) | `http://localhost:8080/v1` |
 
-- **Endpoint.** `POST {base URL}/chat/completions`, with `Authorization: Bearer KEY` when the provider needs a key; `GET {base URL}/models` lists the models to pick from.
-- **Body.** `model`; `messages`, one user message holding the prompt with the transcript in it; `stream: false`; `reasoning_effort: "none"`; and the output cap below.
-- **No reasoning.** A model that thinks before it answers is far too slow for dictation: with thinking on, `qwen3.5:4b` took 58 to 118 s per short transcript, against a median of 0.45 s with it off. On Ollama, `reasoning_effort: "none"` turns thinking off. A server that rejects the field (400 or 422) gets the request again without it, and Goscriber remembers that for the base URL and model, as Handy does.
+- **Endpoint.** `POST {base URL}/chat/completions`, with `Authorization: Bearer KEY` when the provider needs a key; `GET {base URL}/models` lists the models to pick from. The settings list a hosted provider's models only once its key is stored.
+- **Body.** `model`; `messages`, one user message holding the prompt with the transcript in it; `stream: false`; `reasoning_effort`, as below; and the output cap below.
+- **No reasoning.** A model that thinks before it answers is far too slow for dictation: with thinking on, `qwen3.5:4b` took 58 to 118 s per short transcript, against a median of 0.45 s with it off. `reasoning_effort: "none"` turns thinking off on Ollama, OpenAI's newer models and Gemini 2.5. A server that rejects it (400 or 422) gets the request again with `"minimal"`, the least that Gemini 3 and later allow (their thinking cannot be turned off), and then without the field; Goscriber starts from the first value that got through for that base URL and model from then on, as Handy remembers a rejected field.
 - **Output cap.** Every request carries `max_tokens`; OpenAI's own API gets `max_completion_tokens` instead, which all its chat models take and its reasoning models require. Ollama sets no limit of its own, so a model that starts repeating itself runs on until the request times out. A response that stops at the cap (`finish_reason: "length"`) counts as failed.
 - **Failures.** A request that fails, takes more than 30 s, stops at the cap or comes back empty leaves its text as cleanup left it, like any failing [text stage](architecture.md#dictation-pipeline), so a dictation never loses its text to the LLM; the user gets a notice (`llm_failed`) that opens the Post-processing page.
+
+## Claude
+
+Claude goes through Anthropic's official Go SDK (`anthropic-sdk-go`), not an OpenAI-compatible endpoint: `POST /v1/messages` with the key the SDK sends, one user message, and the models from `GET /v1/models`.
+
+- **Thinking** cannot be turned off on current Claude models, only down: requests ask for `output_config.effort: "low"` and leave `thinking` to the model. `max_tokens` is at least 16,000, because thinking counts toward it; the 30 s timeout still bounds a model that runs on, and an answer that stops at `max_tokens` fails as above.
+- **Refusals.** For the models that take them (Fable 5.1 and 5.2, Mythos 5.1 and 5.2, Opus 5 and 5.5, Sonnet 5.5) requests carry server-side fallbacks (`fallbacks: "default"`, beta `server-side-fallback-2026-07-01`), so a request one model declines is answered by another in the same call. A `refusal` that still comes back fails the chunk, which keeps its text.
+- **Older models** that reject effort or fallbacks (400) get the request again without them, remembered as for `reasoning_effort`.
+- **Model.** `claude-opus-5-5` while none is chosen; any model the account serves can be picked, such as Claude Haiku 5.5, for speed and price.
 
 ## Long transcripts
 
@@ -67,6 +80,10 @@ Ollama unloads a model after 5 idle minutes, and the next request waits while it
 The built-in prompt is Handy's default (`default_improve_transcriptions` in its `src-tauri/src/settings.rs`) with examples in more than one language. Handy's examples are English only ("five dollars → $5"), and on a Portuguese transcript `gemma4:26b` followed them: "três mil dólares" became "$3.000" and "um dólar" "$1", and `gemma4:e4b` turned "pra" into "para" and "tavam" into "estavam". Goscriber's prompt shows amounts of money in English, Portuguese and French, says a currency word never becomes a bare `$` outside English, keeps abbreviations such as "IA" in the transcript's language, and names informal words to keep ("pra", "tá", "tava", "gonna").
 
 On a short Portuguese dictation with those words, three runs of each model through Ollama: `gemma4:26b` wrote "3.000 dólares" and "1 dólar" every time (with Handy's prompt, "$3,000" in both runs) and kept "pra", "tá" and "tavam" every time, though one run wrote "tava certa" for "tavam certas"; `gemma4:e4b` wrote "3 mil dólares" every time, but still made informal words formal in 2 runs of 3, once in one and throughout in the other (with Handy's prompt, in both runs). Spanish ("5.000 €") and English ("$5,000") came out in their own conventions, and the injected "ignore all previous instructions" was not followed. A prompt that has no `${output}` gets the transcript after it.
+
+**Placeholders.** Besides `${output}`, a prompt can hold `${language}`, the transcript's language by name ("Portuguese (Brazil)"), when the speech model reports it, and `${custom_words}`, the custom words of the Advanced page, separated by commas. A line that holds one of them is left out while it is unknown or empty, so a prompt can mention them without saying something odd when there is nothing to say. The built-in prompt uses both: a sixth rule asks for the custom words to be spelt as written, also where the speech model wrote something that sounds like them, and a line names the language.
+
+On the 12-minute Portuguese talk transcribed with Parakeet TDT v3 and cleaned by `gemma4:26b`, with Reportei, Reportei Connect, Bain, ElevenLabs, build in public, Fin and Claude Code as custom words: Goscriber's own [word correction](architecture.md#custom-vocabulary) already turned "reporteio", "Reporter", "building public" and "cloud code" into the custom words, but not "Bang" or "Levin Labs", too far from "Bain" and "ElevenLabs" to match; with the words in the prompt, the model fixed those two as well, which it had left wrong without them.
 
 ## Measured
 
