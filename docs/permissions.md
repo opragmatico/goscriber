@@ -21,7 +21,7 @@ macOS attributes a permission to the *responsible* app:
 - **`make run`, `go run`, `./goscriber` from a terminal**: the terminal app (Terminal, iTerm, VS Code) asks for and holds the permissions, and every program it starts shares them. That is the quickest way to try dictation, but it grants your terminal the microphone and Accessibility.
 - **`make app`, then `open dist/Goscriber.app`**: Goscriber asks for itself, under its bundle identifier `io.github.opragmatico.goscriber`, with the microphone description from `packaging/macos/Info.plist`. This is what users get.
 
-macOS ties the grant to the bundle's code signature. `make app` signs ad hoc by default (`CODESIGN_IDENTITY=-`). An ad-hoc signature changes with every build, so after a rebuild macOS asks again, and the Accessibility list may show a stale Goscriber entry that no longer applies. To keep the permissions across rebuilds, sign with a stable identity, for example a free Apple Development certificate from Xcode:
+macOS ties the grant to the bundle's code signature. Releases are signed with Goscriber's Developer ID, so their grants carry over from one version to the next ([releasing.md](releasing.md#signing)). `make app` signs ad hoc by default (`CODESIGN_IDENTITY=-`). An ad-hoc signature changes with every build, so after a rebuild macOS asks again, and the Accessibility list may show a stale Goscriber entry that no longer applies. To keep the permissions across rebuilds, sign with a stable identity, for example a free Apple Development certificate from Xcode:
 
 ```bash
 make app CODESIGN_IDENTITY="Apple Development: Your Name (TEAMID)"

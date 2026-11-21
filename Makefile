@@ -33,8 +33,22 @@ NEMO_TAGS := nemo
 # once `make deps` has built the SDK; without the SDK it builds without one.
 BUILD_TAGS ?= $(if $(wildcard $(NEMO_SPEECH_PREFIX)/lib/pkgconfig/nemo-speech-asr.pc),$(NEMO_TAGS))
 
+# The oldest macOS Goscriber runs on: the NeMo-Speech.cpp libraries'
+# deployment target (scripts/build-nemo-speech.sh reads it from
+# MACOSX_DEPLOYMENT_TARGET) and the app's LSMinimumSystemVersion. Clang would
+# otherwise build the CGo code for the build machine's macOS, and the binary
+# would refuse to start on anything older. The flag goes in CGO_CFLAGS and
+# CGO_LDFLAGS because Go's build cache keys on those, not on
+# MACOSX_DEPLOYMENT_TARGET.
+MACOS_MIN := 13.3
+ifeq ($(shell uname -s),Darwin)
+export MACOSX_DEPLOYMENT_TARGET := $(MACOS_MIN)
+export CGO_CFLAGS := $(or $(CGO_CFLAGS),-O2 -g) -mmacosx-version-min=$(MACOS_MIN)
+export CGO_LDFLAGS := $(or $(CGO_LDFLAGS),-O2 -g) -mmacosx-version-min=$(MACOS_MIN)
+endif
+
 .DEFAULT_GOAL := build
-.PHONY: help build run app dist-linux test test-race test-nocgo test-engine engine-version bench vet lint fmt deps tidy clean clean-deps
+.PHONY: help build run app dist-macos dist-linux test test-race test-nocgo test-engine engine-version bench vet lint fmt deps tidy clean clean-deps
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -45,10 +59,13 @@ build: ## Build ./goscriber with the version stamped in (and the engine, after m
 run: build ## Build and run; pass flags with ARGS="--version"
 	./$(BIN) $(ARGS)
 
-# A development bundle for macOS: no icon, no NeMo-Speech.cpp libraries yet
-# (the release bundle comes with issue #34). Its Info.plist sets LSUIElement,
-# so the app lives in the menu bar with no Dock icon, and carries the
-# microphone usage description macOS shows in its prompt.
+# The macOS app, dist/Goscriber.app, and its disk image (scripts/package-macos.sh,
+# docs/releasing.md): the Info.plist (LSUIElement, so the app lives in the menu
+# bar with no Dock icon, and the microphone usage description macOS shows in
+# its prompt), the icon, and the NeMo-Speech.cpp libraries in
+# Contents/Frameworks, signed with the hardened runtime. dist-macos also
+# notarises, given NOTARY_PROFILE or NOTARY_KEY. Build the SDK with
+# -DGGML_NATIVE=OFF for disk images that run on other Macs.
 #
 # macOS attaches the microphone and Accessibility permissions to the bundle's
 # code signature. The default ad-hoc signature ("-") changes with every
@@ -57,20 +74,14 @@ run: build ## Build and run; pass flags with ARGS="--version"
 # See docs/permissions.md.
 APP_BUNDLE := dist/Goscriber.app
 CODESIGN_IDENTITY ?= -
-# CFBundleVersion only takes dotted numbers: a vX.Y[.Z] tag loses its "v" and
-# any "-commits-gHASH" suffix, and anything else (an untagged build) is 0.0.0.
-BUNDLE_VERSION := $(shell echo '$(VERSION)' | sed -nE 's/^v?([0-9]+\.[0-9]+(\.[0-9]+)?)(-.*)?$$/\1/p')
+PACKAGE_MACOS := VERSION='$(VERSION)' BIN='$(CURDIR)/$(BIN)' MACOS_MIN='$(MACOS_MIN)' \
+	CODESIGN_IDENTITY='$(CODESIGN_IDENTITY)' scripts/package-macos.sh
 
-app: build ## Assemble and sign dist/Goscriber.app (macOS development bundle; CODESIGN_IDENTITY=-)
-	rm -rf $(APP_BUNDLE)
-	mkdir -p $(APP_BUNDLE)/Contents/MacOS
-	sed 's/@VERSION@/$(or $(BUNDLE_VERSION),0.0.0)/g' packaging/macos/Info.plist > $(APP_BUNDLE)/Contents/Info.plist
-	cp $(BIN) $(APP_BUNDLE)/Contents/MacOS/goscriber
-	@if command -v codesign >/dev/null 2>&1; then \
-		codesign --force --sign '$(CODESIGN_IDENTITY)' $(APP_BUNDLE); \
-	else \
-		echo "codesign not found: $(APP_BUNDLE) is not signed"; \
-	fi
+app: build ## macOS: assemble and sign dist/Goscriber.app with the engine's libraries (CODESIGN_IDENTITY=-)
+	$(PACKAGE_MACOS) --app
+
+dist-macos: build ## macOS: dist/Goscriber.app and a .dmg, notarised given NOTARY_PROFILE (docs/releasing.md)
+	$(PACKAGE_MACOS)
 
 # Linux packages: a tarball that runs from wherever it is unpacked and a
 # .deb that installs into /opt/goscriber, both with the NeMo-Speech.cpp

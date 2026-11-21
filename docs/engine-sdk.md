@@ -97,13 +97,13 @@ All platforms:
 - Build portable CPU code. Development builds let ggml tune its CPU code for the build machine (`GGML_NATIVE`). Releases must build with `-DGGML_NATIVE=OFF`, as CI does, or with ggml's run-time-selected CPU variants, or they can crash with illegal instructions on older CPUs.
 - Ship the licences in `share/licenses/nemo-speech/`: NeMo-Speech.cpp (Apache-2.0, with its NOTICE and third-party notices), ggml (MIT), miniaudio, and SentencePiece (Apache-2.0) with the Abseil, protobuf-lite and darts-clone code it bundles.
 
-macOS (the release bundle, [#34](https://github.com/opragmatico/goscriber/issues/34)):
+macOS (`make app` and `make dist-macos`, `scripts/package-macos.sh`; [releasing.md](releasing.md#the-macos-app)):
 
-- Copy the libraries (about 6 MB) into `Goscriber.app/Contents/Frameworks/`, resolving the version symlinks to the names the binaries reference (`libnemo_speech_asr_c.1.dylib`, `libnemo_speech_asr.dylib`, `libggml*.0.dylib`).
-- Give `goscriber` an `@executable_path/../Frameworks` rpath and delete the development one, for example with `install_name_tool -add_rpath` and `-delete_rpath`.
-- Sign each library with the hardened runtime before signing the bundle; notarisation then covers them.
+- The libraries (about 6 MB) go into `Goscriber.app/Contents/Frameworks/` under the names the binaries reference (`libnemo_speech_asr_c.1.dylib`, `libnemo_speech_asr.dylib`, `libggml*.0.dylib`), without the version symlinks.
+- `install_name_tool` replaces the binary's development rpath with `@executable_path/../Frameworks`, and each library's with `@loader_path`.
+- Each library is signed before the bundle, with the hardened runtime when the identity has a team; notarisation then covers them.
 - The Metal shaders are embedded in `libggml-metal` (`GGML_METAL_EMBED_LIBRARY`), so there is no `.metallib` to ship.
-- `LSMinimumSystemVersion` must be at least 13.3, the libraries' deployment target.
+- The binary targets 13.3 too: the Makefile passes `-mmacosx-version-min=13.3` to the CGo compiler and linker, and the same version becomes `LSMinimumSystemVersion`.
 - At run time the libraries need only the system's libc++ and frameworks (Metal, MetalKit, Foundation, Accelerate).
 
 Linux (`make dist-linux`, `scripts/package-linux.sh`; [linux.md](linux.md#packages)):

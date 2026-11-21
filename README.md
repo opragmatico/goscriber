@@ -8,6 +8,15 @@ Goscriber is a Go re-implementation of [Handy](https://github.com/cjpais/Handy) 
 
 > **Status: early development.** `goscriber` runs as a menu bar / tray icon: the shortcut or the tray records, transcribes while you speak (Nemotron shows the words in the overlay as you say them; Parakeet decodes the recording in chunks at your pauses), and pastes the text the moment you stop. The settings window (Settings… in the tray) downloads and selects the model, records the shortcut and holds every other setting; at the first launch it walks you through the permissions, downloading a model and a first dictation. `goscriber transcribe` transcribes WAV files from the command line. See the [roadmap](#roadmap) and the [issue tracker](https://github.com/opragmatico/goscriber/issues).
 
+## Install
+
+Each [release](https://github.com/opragmatico/goscriber/releases) has:
+
+- **macOS** on Apple Silicon, 13.3 or later: a disk image with `Goscriber.app`, signed and notarised. Drag it to Applications.
+- **Linux** on x86-64 or arm64: a `.deb` and a tarball, built on Ubuntu 24.04. Wayland needs some setup: [docs/linux.md](docs/linux.md).
+
+Or build it from source ([Development](#development)). How releases are built and signed: [docs/releasing.md](docs/releasing.md).
+
 ## Supported models
 
 | Model | Hugging Face | Languages | Mode | Notes |
@@ -142,7 +151,8 @@ make build                # build ./goscriber, with the engine once make deps ha
 make run ARGS=--version   # build ./goscriber and run it
 make run ARGS=--debug     # run the app with debug logging and the tray's Debug menu
 ./goscriber --toggle-transcription  # start or stop dictation in the running app (also --cancel)
-make app                  # macOS: assemble dist/Goscriber.app (ad-hoc signed development bundle)
+make app                  # macOS: dist/Goscriber.app with the engine's libraries, signed ad hoc
+make dist-macos           # macOS: the app and a .dmg, signed and notarised given credentials (docs/releasing.md)
 make dist-linux           # Linux: a tarball and a .deb with the engine's libraries (docs/linux.md)
 make test                 # go test -race ./..., then the CGo-free check
 make test-engine          # test the NeMo-Speech.cpp binding against the SDK

@@ -1,0 +1,253 @@
+name: Release
+
+# Pushing a v* tag builds the macOS disk image (Apple Silicon, signed with
+# Developer ID and notarised) and the Linux packages (x86-64 and arm64),
+# checks them, and publishes them with SHA-256 checksums as a GitHub release.
+# Run it by hand to build and check the same files without publishing them:
+# they stay as the run's artifacts, signed ad hoc when the signing secrets are
+# missing. docs/releasing.md lists the secrets and how to cut a release.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GO_VERSION: "1.27.x"
+  # ggml would otherwise tune its CPU code for the runner's processor, and
+  # the packages could crash with an illegal instruction on older ones.
+  NEMO_SPEECH_CMAKE_ARGS: -DGGML_NATIVE=OFF
+
+jobs:
+  macos:
+    name: macOS (arm64)
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # the version comes from git describe
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+          cache-dependency-path: |
+            go.mod
+            go.sum
+
+      # The runner has CMake; Ninja builds the SDK and pkg-config links it.
+      - name: Install the build tools
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+        run: |
+          command -v pkg-config >/dev/null || brew install pkgconf
+          command -v ninja >/dev/null || brew install ninja
+
+      - name: Build the NeMo-Speech.cpp SDK
+        run: make deps
+
+      # The Developer ID certificate goes into a keychain of its own, which
+      # the last step deletes. A tag is never released unsigned.
+      - name: Import the Developer ID certificate
+        id: signing
+        env:
+          CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          if [ -z "$CERTIFICATE" ]; then
+            if [ "$GITHUB_EVENT_NAME" = push ]; then
+              echo "::error::The MACOS_CERTIFICATE secret is missing; a release must be signed (docs/releasing.md)"
+              exit 1
+            fi
+            echo "::warning::No MACOS_CERTIFICATE secret: the app is signed ad hoc and not notarised"
+            echo "identity=-" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(openssl rand -base64 24)"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          printf '%s' "$CERTIFICATE" | base64 --decode >"$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/certificate.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" >/dev/null
+          # shellcheck disable=SC2046 # one argument per keychain
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          identity="$(security find-identity -v -p codesigning "$keychain" | awk '/"Developer ID Application: / { print $2; exit }')"
+          if [ -z "$identity" ]; then
+            echo "::error::MACOS_CERTIFICATE holds no Developer ID Application identity"
+            exit 1
+          fi
+          echo "identity=$identity" >>"$GITHUB_OUTPUT"
+          echo "keychain=$keychain" >>"$GITHUB_OUTPUT"
+
+      - name: Build, sign and notarise the app and the disk image
+        env:
+          CODESIGN_IDENTITY: ${{ steps.signing.outputs.identity }}
+          NOTARY_API_KEY: ${{ secrets.NOTARY_API_KEY }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.NOTARY_API_ISSUER }}
+        run: |
+          if [ "$CODESIGN_IDENTITY" != - ]; then
+            if [ -z "$NOTARY_API_KEY" ] || [ -z "$NOTARY_KEY_ID" ] || [ -z "$NOTARY_ISSUER" ]; then
+              echo "::error::Signing needs notarising: set NOTARY_API_KEY, NOTARY_API_KEY_ID and NOTARY_API_ISSUER (docs/releasing.md)"
+              exit 1
+            fi
+            export NOTARY_KEY="$RUNNER_TEMP/notary.p8"
+            printf '%s\n' "$NOTARY_API_KEY" >"$NOTARY_KEY"
+          fi
+          make dist-macos
+
+      # What a user downloads: the disk image, mounted read-only.
+      - name: Check the disk image
+        env:
+          SIGNED: ${{ steps.signing.outputs.identity != '-' }}
+        run: |
+          dmg="$(echo dist/*.dmg)"
+          mnt="$(mktemp -d)"
+          hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "$dmg"
+          trap 'hdiutil detach "$mnt" -quiet' EXIT
+          app="$mnt/Goscriber.app"
+          # The app downloads the models it needs; it must carry none.
+          weights="$(find "$mnt" -iname '*.gguf')"
+          if [ -n "$weights" ]; then
+            echo "::error::The disk image contains model weights: $weights"
+            exit 1
+          fi
+          codesign --verify --strict --deep --verbose=2 "$app"
+          rpaths="$(otool -l "$app/Contents/MacOS/goscriber" | awk '$1 == "cmd" { rp = ($2 == "LC_RPATH") } rp && $1 == "path" { print $2 }')"
+          if [ "$rpaths" != "@executable_path/../Frameworks" ]; then
+            echo "::error::The executable's run paths are not just its Frameworks: $rpaths"
+            exit 1
+          fi
+          "$app/Contents/MacOS/goscriber" --version
+          if [ "$SIGNED" = true ]; then
+            spctl --assess --type execute --verbose=4 "$app"
+            xcrun stapler validate "$app"
+            xcrun stapler validate "$dmg"
+          fi
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos-arm64
+          path: dist/*.dmg
+          if-no-files-found: error
+
+      - name: Delete the signing keychain
+        if: always() && steps.signing.outputs.keychain != ''
+        env:
+          KEYCHAIN: ${{ steps.signing.outputs.keychain }}
+        run: |
+          security delete-keychain "$KEYCHAIN" || true
+          rm -f "$RUNNER_TEMP/notary.p8"
+
+  # Built on Ubuntu 24.04, the oldest distribution docs/linux.md covers: the
+  # packages need its glibc and libstdc++ or newer.
+  linux:
+    name: Linux (${{ matrix.arch }})
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+          cache-dependency-path: |
+            go.mod
+            go.sum
+
+      # Fyne's system packages and the SDK's build tools (the runner has
+      # CMake), as docs/linux.md lists them, and the packaging tools.
+      - name: Install the build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc g++ pkg-config libgl1-mesa-dev xorg-dev libxkbcommon-dev libwayland-dev libxtst-dev \
+            ninja-build patchelf dpkg-dev
+
+      - name: Build the NeMo-Speech.cpp SDK
+        run: make deps
+
+      - name: Build the tarball and the .deb
+        run: make dist-linux
+
+      - name: Check the packages
+        run: |
+          tarball="$(echo dist/*.tar.gz)"
+          deb="$(echo dist/*.deb)"
+          weights="$( (tar -tzf "$tarball"; dpkg-deb -c "$deb") | grep -i '\.gguf$' || true)"
+          if [ -n "$weights" ]; then
+            echo "::error::The packages contain model weights: $weights"
+            exit 1
+          fi
+          dpkg-deb --info "$deb"
+          mkdir -p "$RUNNER_TEMP/unpacked"
+          tar -xzf "$tarball" -C "$RUNNER_TEMP/unpacked"
+          bin="$(echo "$RUNNER_TEMP"/unpacked/goscriber-*/bin/goscriber)"
+          "$bin" --version
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-${{ matrix.arch }}
+          path: |
+            dist/*.tar.gz
+            dist/*.deb
+          if-no-files-found: error
+
+  publish:
+    name: Publish the release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [macos, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Compute the checksums
+        working-directory: dist
+        run: |
+          sha256sum -- * >SHA256SUMS
+          cat SHA256SUMS
+
+      # The notes start with how to install, then GitHub's list of the pull
+      # requests since the previous release. A tag with a hyphen, such as
+      # v0.2.0-rc.1, is a pre-release.
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          prerelease=()
+          case "$TAG" in *-*) prerelease=(--prerelease) ;; esac
+          gh release create "$TAG" dist/* \
+            --verify-tag \
+            --title "Goscriber $TAG" \
+            --notes "$(sed "s/@VERSION@/$TAG/g" .github/release-notes.md)" \
+            --generate-notes \
+            "${prerelease[@]}"

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The hardened runtime, which notarisation requires, blocks the
+	     microphone unless the signature carries this entitlement; the
+	     user's permission is asked for on top of it. Nothing else is
+	     needed: Go generates no code at run time, the NeMo-Speech.cpp
+	     libraries are signed with the same identity as the app, and the
+	     shortcut and pasting use Accessibility, which is a permission,
+	     not an entitlement. -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+</dict>
+</plist>
