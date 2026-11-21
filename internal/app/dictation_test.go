@@ -29,14 +29,15 @@ import (
 func init() {
 	newServices = func(rt *Runtime, _ Options, _ *notice.Hub) services {
 		return services{
-			recorder: newTestRecorder(),
-			engine:   fake.New(fake.Script{Replies: []fake.Reply{fake.Transcript("hello from the test")}}),
-			output:   &testOutput{},
-			models:   testModels{},
-			files:    models.NewManager(rt.Paths.ModelsDir(), models.Options{}),
-			feedback: &testFeedback{},
-			player:   &testPlayer{},
-			keys:     &testSecrets{},
+			recorder:    newTestRecorder(),
+			engine:      fake.New(fake.Script{Replies: []fake.Reply{fake.Transcript("hello from the test")}}),
+			output:      &testOutput{},
+			models:      testModels{},
+			files:       models.NewManager(rt.Paths.ModelsDir(), models.Options{}),
+			feedback:    &testFeedback{},
+			player:      &testPlayer{},
+			keys:        &testSecrets{},
+			webhookKeys: &testSecrets{},
 		}
 	}
 	listDevices = func() ([]audio.Device, []audio.Device, error) { return nil, nil, nil }

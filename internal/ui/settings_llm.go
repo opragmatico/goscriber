@@ -36,8 +36,6 @@ type LLMActions struct {
 // Labels and texts of the Post-processing page that tests look for.
 const (
 	LabelOtherProvider  = "Other"
-	LabelSaveKey        = "Save"
-	LabelRemoveKey      = "Remove"
 	LabelRefreshModels  = "Refresh"
 	LabelBuiltInPrompt  = "Use the built-in prompt"
 	LabelTryLLM         = "Try it"
@@ -59,10 +57,7 @@ type llmState struct {
 	listNote   string // what the last listing found
 	noteFor    string // the base URL it listed
 
-	key     *widget.Entry
-	keyNote *widget.Label
-	remove  *widget.Button
-	keyFor  string // the base URL keyNote is about
+	key *keyField // nil without LLMActions.SetKey
 
 	try     *widget.Button
 	tryNote *widget.Label
@@ -147,7 +142,9 @@ func (w *SettingsWindow) baseURLShown(baseURL string) {
 	if !w.created {
 		return
 	}
-	w.refreshKey(baseURL)
+	if w.llm.key != nil {
+		w.llm.key.show(baseURL)
+	}
 	if w.visible {
 		w.refreshLLMModels(false)
 	}
@@ -156,76 +153,10 @@ func (w *SettingsWindow) baseURLShown(baseURL string) {
 // apiKeySetting stores an API key for the base URL in the keychain. The
 // stored key is never shown: the field takes a new one.
 func (w *SettingsWindow) apiKeySetting() fyne.CanvasObject {
-	st := &w.llm
-	st.key = widget.NewPasswordEntry()
-	st.key.SetPlaceHolder("API key")
-	st.keyNote = note("")
-	save := func() {
-		key := strings.TrimSpace(st.key.Text)
-		if key == "" {
-			return
-		}
-		w.storeKey(w.cur.LLMBaseURL, key)
-	}
-	st.key.OnSubmitted = func(string) { save() }
-	saveButton := widget.NewButton(LabelSaveKey, save)
-	st.remove = widget.NewButtonWithIcon(LabelRemoveKey, theme.DeleteIcon(), func() { w.storeKey(w.cur.LLMBaseURL, "") })
-	return container.NewVBox(
-		container.NewBorder(nil, nil, nil, container.NewHBox(saveButton, st.remove), st.key),
-		st.keyNote,
-	)
-}
-
-// storeKey stores key for baseURL, or removes it with "", in the
-// background.
-func (w *SettingsWindow) storeKey(baseURL, key string) {
-	set := w.opts.LLM.SetKey
-	go func() {
-		err := set(baseURL, key)
-		w.do(func() {
-			if err != nil {
-				w.log().Warn("the API key could not be stored", "err", err)
-				w.llm.keyNote.SetText(fmt.Sprintf("Could not store the key: %v", err))
-				return
-			}
-			w.llm.key.SetText("")
-			w.llm.keyFor = ""
-			w.refreshKey(baseURL)
-		})
-	}()
-}
-
-// refreshKey says whether a key is stored for baseURL, reading the
-// keychain in the background.
-func (w *SettingsWindow) refreshKey(baseURL string) {
-	st := &w.llm
-	has := w.opts.LLM.HasKey
-	if st.keyNote == nil || has == nil || st.keyFor == baseURL {
-		return
-	}
-	st.keyFor = baseURL
-	go func() {
-		stored, err := has(baseURL)
-		w.do(func() {
-			if st.keyFor != baseURL {
-				return
-			}
-			switch {
-			case err != nil:
-				w.log().Warn("the keychain could not be read", "err", err)
-				st.keyNote.SetText(llmKeyUnknownHint)
-			case stored:
-				st.keyNote.SetText(llmKeyStoredHint)
-			default:
-				st.keyNote.SetText(llmNoKeyHint)
-			}
-			if stored {
-				st.remove.Enable()
-			} else {
-				st.remove.Disable()
-			}
-		})
-	}()
+	a := w.opts.LLM
+	w.llm.key = newKeyField(w, "API key", keyHints{stored: llmKeyStoredHint, none: llmNoKeyHint, unknown: llmKeyUnknownHint},
+		a.HasKey, a.SetKey)
+	return w.llm.key.box
 }
 
 // llmModelSetting is the model: typed, or picked from those the provider
