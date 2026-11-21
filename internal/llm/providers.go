@@ -47,6 +47,9 @@ type Provider struct {
 	// ChunkWords is the most words a chunk of a long transcript holds; 0
 	// is ChunkWords.
 	ChunkWords int
+	// Hidden keeps the provider out of the settings' choices (Choices).
+	// Settings that already name it still use it.
+	Hidden bool
 }
 
 // The models the hosted providers post-process with while none is chosen:
@@ -76,6 +79,8 @@ var Providers = []Provider{
 	{
 		ID: config.LLMClaude, Name: "Claude", BaseURL: config.LLMClaude.BaseURL(), Key: KeyRequired,
 		KeyHelp: "Create one in the Claude Console, under API keys.", API: Messages, Model: ClaudeModel,
+		// Not offered for now.
+		Hidden:     true,
 		ChunkWords: HostedChunkWords,
 	},
 	{
@@ -88,6 +93,19 @@ var Providers = []Provider{
 	},
 	{ID: config.LLMOllama, Name: "Ollama", BaseURL: config.LLMOllama.BaseURL(), EditableURL: true},
 	{ID: config.LLMCustom, Name: "Other (OpenAI-compatible)", EditableURL: true, Key: KeyOptional},
+}
+
+// Choices are the providers the settings offer, in their order: those not
+// Hidden, and current, the one the settings name now, whatever it is, so
+// it can be shown as chosen.
+func Choices(current config.LLMProvider) []Provider {
+	var out []Provider
+	for _, p := range Providers {
+		if !p.Hidden || p.ID == current {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // ProviderByID returns the provider id names; an unknown id is the custom

@@ -17,7 +17,7 @@ import (
 )
 
 // fakeLLM backs the Post-processing page: a keychain in memory, Ollama
-// serving two models and Claude two others, once it has a key.
+// serving two models and Gemini two others, once it has a key.
 type fakeLLM struct {
 	mu     sync.Mutex
 	keys   map[string]string
@@ -36,8 +36,8 @@ func (f *fakeLLM) actions() LLMActions {
 				return nil, errors.New("connection refused")
 			case p.Key == llm.KeyRequired && f.keys[baseURL] == "":
 				return nil, llm.ErrNoKey
-			case p.ID == config.LLMClaude:
-				return []string{"claude-haiku-5-5", "claude-opus-5-5"}, nil
+			case p.ID == config.LLMGemini:
+				return []string{"gemini-3.8-flash", "gemini-4-hydrogen"}, nil
 			}
 			return []string{"gemma4:26b", "gemma4:latest"}, nil
 		},
@@ -91,7 +91,7 @@ func TestPostProcessingProvider(t *testing.T) {
 	tw, f := newLLMWindow(t)
 	provider := boundAs[*widget.Select](t, tw, "llm_provider")
 	url := boundAs[*widget.Entry](t, tw, "llm_base_url")
-	want := []string{"Gemini", "OpenAI", "Claude", "OpenRouter", "Groq", "Ollama", "Other (OpenAI-compatible)"}
+	want := []string{"Gemini", "OpenAI", "OpenRouter", "Groq", "Ollama", "Other (OpenAI-compatible)"}
 	if !slices.Equal(provider.Options, want) {
 		t.Errorf("providers %v, want %v", provider.Options, want)
 	}
@@ -108,32 +108,32 @@ func TestPostProcessingProvider(t *testing.T) {
 		t.Errorf("Ollama's base URL hint %q", got)
 	}
 
-	// Claude: a key, and no address to type.
+	// Gemini: a key, and no address to type.
 	boundAs[*widget.SelectEntry](t, tw, "llm_model").SetText("gemma4:latest")
-	provider.SetSelected("Claude")
+	provider.SetSelected("Gemini")
 	tw.q.drain()
 	s := tw.reopen(t)
-	if s.LLMProvider != config.LLMClaude || s.LLMBaseURL != "https://api.anthropic.com" || s.LLMModel != "" {
-		t.Errorf("after picking Claude: provider %q at %q, model %q; want Claude's address and no model", s.LLMProvider, s.LLMBaseURL, s.LLMModel)
+	if s.LLMProvider != config.LLMGemini || s.LLMBaseURL != config.LLMGemini.BaseURL() || s.LLMModel != "" {
+		t.Errorf("after picking Gemini: provider %q at %q, model %q; want Gemini's address and no model", s.LLMProvider, s.LLMBaseURL, s.LLMModel)
 	}
 	if u, k := shown(); u || !k {
-		t.Errorf("Claude: base URL shown %v, API key shown %v; want the key alone", u, k)
+		t.Errorf("Gemini: base URL shown %v, API key shown %v; want the key alone", u, k)
 	}
 	text := tw.pageText(PagePostProcessing)
-	for _, want := range []string{"Claude Console", llmKeyKept, llmModelsNeedKey, "Left empty, " + llm.ClaudeModel + "."} {
+	for _, want := range []string{"Google AI Studio", llmKeyKept, llmModelsNeedKey, "Left empty, " + llm.GeminiModel + "."} {
 		if !strings.Contains(text, want) {
-			t.Errorf("Claude's rows lack %q:\n%s", want, text)
+			t.Errorf("Gemini's rows lack %q:\n%s", want, text)
 		}
 	}
-	if p := boundAs[*widget.SelectEntry](t, tw, "llm_model").PlaceHolder; p != llm.ClaudeModel {
-		t.Errorf("model placeholder %q, want %s", p, llm.ClaudeModel)
+	if p := boundAs[*widget.SelectEntry](t, tw, "llm_model").PlaceHolder; p != llm.GeminiModel {
+		t.Errorf("model placeholder %q, want %s", p, llm.GeminiModel)
 	}
 
-	// With a key, Claude's models are listed.
-	tw.llm.key.entry.SetText("sk-ant-secret")
+	// With a key, Gemini's models are listed.
+	tw.llm.key.entry.SetText("gemini-secret")
 	test.Tap(tw.buttons(PagePostProcessing)[LabelSaveKey])
-	tw.q.until(t, "Claude's models", func() bool {
-		return strings.Contains(tw.pageText(PagePostProcessing), "The provider serves: claude-haiku-5-5, claude-opus-5-5.")
+	tw.q.until(t, "Gemini's models", func() bool {
+		return strings.Contains(tw.pageText(PagePostProcessing), "The provider serves: gemini-3.8-flash, gemini-4-hydrogen.")
 	})
 
 	// A custom server: an address to type, and a key if it wants one.
@@ -146,7 +146,7 @@ func TestPostProcessingProvider(t *testing.T) {
 		t.Errorf("the custom server's rows say %q and %q", tw.llm.urlHint.Text, tw.llm.keyHelp.Text)
 	}
 	if url.Text != customStartURL {
-		t.Errorf("a custom server after Claude points at %q, want %s rather than Claude's address", url.Text, customStartURL)
+		t.Errorf("a custom server after Gemini points at %q, want %s rather than Gemini's address", url.Text, customStartURL)
 	}
 	url.SetText("http://gpu-box.lan:8000/v1")
 	if s := tw.store.Get(); s.LLMBaseURL != "http://gpu-box.lan:8000/v1" || s.LLMProvider != config.LLMCustom {
@@ -178,6 +178,31 @@ func TestPostProcessingProvider(t *testing.T) {
 	defer f.mu.Unlock()
 	if len(f.listed) == 0 || f.listed[0] != config.DefaultLLMBaseURL {
 		t.Errorf("models listed for %v, want Ollama's first", f.listed)
+	}
+}
+
+// Claude is not offered for now, but settings that already name it show
+// it as chosen, with its rows, and it leaves the list once another is.
+func TestPostProcessingHiddenClaude(t *testing.T) {
+	tw, _ := newLLMWindow(t)
+	if err := tw.store.Update(func(s *config.Settings) {
+		s.LLMProvider, s.LLMBaseURL = config.LLMClaude, config.LLMClaude.BaseURL()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tw.SetSettings(tw.store.Get())
+	tw.q.drain()
+	provider := boundAs[*widget.Select](t, tw, "llm_provider")
+	if provider.Selected != "Claude" || !slices.Contains(provider.Options, "Claude") {
+		t.Errorf("settings naming Claude: selected %q of %v", provider.Selected, provider.Options)
+	}
+	if !strings.Contains(tw.pageText(PagePostProcessing), "Claude Console") {
+		t.Error("Claude's key row is missing")
+	}
+	provider.SetSelected("Gemini")
+	tw.q.drain()
+	if slices.Contains(provider.Options, "Claude") {
+		t.Errorf("Claude is still offered after picking Gemini: %v", provider.Options)
 	}
 }
 

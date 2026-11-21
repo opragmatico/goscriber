@@ -48,7 +48,7 @@ Names and jargon listed in the `custom_words` setting come out spelled your way:
 
 Filler words ("um", "uh") are removed, with the punctuation around them, and the `filler_word_removal` and `custom_filler_words` settings turn that off or change the list ([details](docs/architecture.md#text-cleanup)).
 
-Following Handy, Goscriber keeps a history of past dictations with their recordings (copy, paste again, play, transcribe again), transcribes WAV and FLAC files dropped on its History page, however long, can have a language model clean each transcript before it is pasted, or only those dictated with a second shortcut (Gemini, OpenAI, Claude, OpenRouter, Groq, Ollama, or any OpenAI-compatible server such as LM Studio; see [docs/llm-post-processing.md](docs/llm-post-processing.md)), and can send every transcription to a [webhook](#webhook) of yours.
+Following Handy, Goscriber keeps a history of past dictations with their recordings (copy, paste again, play, transcribe again), transcribes WAV and FLAC files dropped on its History page, however long, can have a language model clean each transcript before it is pasted, or only those dictated with a second shortcut (Gemini, OpenAI, OpenRouter, Groq, Ollama, or any OpenAI-compatible server such as LM Studio; see [docs/llm-post-processing.md](docs/llm-post-processing.md)), and can send every transcription to a [webhook](#webhook) of yours.
 
 ## Webhook
 

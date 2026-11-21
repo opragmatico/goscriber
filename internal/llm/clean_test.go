@@ -340,6 +340,26 @@ func TestCleanContinuationLimits(t *testing.T) {
 	}
 }
 
+// Claude is kept out of the choices for now, unless it is the provider
+// already chosen.
+func TestChoices(t *testing.T) {
+	names := func(ps []Provider) (out []string) {
+		for _, p := range ps {
+			out = append(out, p.Name)
+		}
+		return out
+	}
+	if got := names(Choices(config.LLMOllama)); slices.Contains(got, "Claude") || len(got) != len(Providers)-1 {
+		t.Errorf("choices %v, want every provider but Claude", got)
+	}
+	if got := names(Choices(config.LLMClaude)); !slices.Equal(got, names(Providers)) {
+		t.Errorf("choices with Claude chosen %v, want them all", got)
+	}
+	if p := ProviderByID(config.LLMClaude); p.API != Messages || p.Model != ClaudeModel {
+		t.Errorf("Claude is still a provider for settings that name it: %+v", p)
+	}
+}
+
 // A chunk that fails, stops at the cap or comes back empty keeps its own
 // text; the others are cleaned.
 func TestCleanFailedChunkKeepsItsText(t *testing.T) {

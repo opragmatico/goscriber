@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -115,11 +116,7 @@ const customStartURL = "http://localhost:1234/v1"
 // it (a custom server keeps an address of no known provider) and clears
 // the model, which another provider would not serve.
 func (w *SettingsWindow) providerSetting() *widget.Select {
-	labels := make([]string, 0, len(llm.Providers))
-	for _, p := range llm.Providers {
-		labels = append(labels, p.Name)
-	}
-	sel := widget.NewSelect(labels, nil)
+	sel := widget.NewSelect(providerLabels(w.cur.LLMProvider), nil)
 	sel.OnChanged = func(name string) {
 		for _, p := range llm.Providers {
 			if p.Name != name || p.ID == w.cur.LLMProvider {
@@ -140,11 +137,26 @@ func (w *SettingsWindow) providerSetting() *widget.Select {
 	field := func(s *config.Settings) *config.LLMProvider { return &s.LLMProvider }
 	w.bind("llm_provider", anyField(field), sel, func(s config.Settings) {
 		p := llm.ProviderOf(s)
+		// A hidden provider is listed while it is the one chosen, or the
+		// choice would show another.
+		if labels := providerLabels(s.LLMProvider); !slices.Equal(labels, sel.Options) {
+			sel.SetOptions(labels)
+		}
 		sel.SetSelected(p.Name)
 		w.providerShown(p)
 		w.endpointShown()
 	})
 	return sel
+}
+
+// providerLabels are the names of the providers the settings offer while
+// current is the one chosen (llm.Choices).
+func providerLabels(current config.LLMProvider) []string {
+	var labels []string
+	for _, p := range llm.Choices(current) {
+		labels = append(labels, p.Name)
+	}
+	return labels
 }
 
 // providerShown shows the rows provider p needs, with what they need to
