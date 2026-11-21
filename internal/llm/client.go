@@ -36,6 +36,11 @@ func (e Endpoint) url(path string) string { return strings.TrimRight(e.BaseURL, 
 // and for a 400-word chunk (69 s for 13 of them).
 const RequestTimeout = 30 * time.Second
 
+// ThinkingTimeout is how long a request to a model that thinks at a set
+// effort (modelEfforts) may take: thinking at "medium" comes before the
+// answer, and GPT-6.1 Sol writes at about 40 tokens a second.
+const ThinkingTimeout = 2 * time.Minute
+
 // maxResponse caps how much of a response is read.
 const maxResponse = 4 << 20
 
@@ -90,9 +95,24 @@ type Client struct {
 // efforts are the values of reasoning_effort tried in turn, least thinking
 // first, until a server takes one: "none" turns thinking off on Ollama,
 // OpenAI's newer models and Gemini 2.5; "minimal" is the least that
-// Gemini 3 and later, and OpenAI's first reasoning models, allow; "" leaves
-// the field out, for servers that know neither.
-var efforts = []string{"none", "minimal", ""}
+// Gemini 3 and later, and OpenAI's first reasoning models, allow; "low" is
+// for models that, like GPT-6.1 Sol, take nothing less and would think at
+// "medium" without the field; "" leaves the field out, for servers that
+// know none of them.
+var efforts = []string{"none", "minimal", "low", ""}
+
+// modelEfforts are models asked to think at a set reasoning_effort instead
+// of as little as they allow: they skip the step-down through efforts, and
+// their requests leave room for the thinking, with an output cap of at
+// least thinkingMaxTokens and ThinkingTimeout.
+var modelEfforts = map[string]string{
+	OpenAIModel: "medium",
+}
+
+// thinkingMaxTokens is the least output cap of a request to a model that
+// thinks: the thinking counts toward the cap, so it leaves room for it on
+// top of the answer; the request timeout still bounds a model that runs on.
+const thinkingMaxTokens = 16000
 
 func (c *Client) http() *http.Client {
 	if c.HTTP != nil {
@@ -106,6 +126,14 @@ func (c *Client) timeout() time.Duration {
 		return c.Timeout
 	}
 	return RequestTimeout
+}
+
+// thinkingTimeout bounds a request to a model in modelEfforts.
+func (c *Client) thinkingTimeout() time.Duration {
+	if c.Timeout > 0 {
+		return c.Timeout
+	}
+	return ThinkingTimeout
 }
 
 func effortKey(ep Endpoint, model string) string {
@@ -157,9 +185,10 @@ type chatResponse struct {
 // answer, which may be at most maxTokens long: an answer cut off there
 // fails with ErrTruncated. Thinking is turned as far down as the model
 // allows: with reasoning_effort "none", and when the server rejects the
-// request with it (400 or 422), "minimal", then no reasoning_effort. The
+// request with it (400 or 422), "minimal", "low", then no reasoning_effort. The
 // first value that gets past the server's checks is the one the client
-// starts from for this base URL and model from then on.
+// starts from for this base URL and model from then on. A model in
+// modelEfforts is asked with its effort instead, and given room to think.
 func (c *Client) Complete(ctx context.Context, ep Endpoint, model, prompt string, maxTokens int) (string, error) {
 	if ep.API == Messages {
 		return c.claudeComplete(ctx, ep, model, prompt, maxTokens)
@@ -167,6 +196,10 @@ func (c *Client) Complete(ctx context.Context, ep Endpoint, model, prompt string
 	req := chatRequest{
 		Model:    model,
 		Messages: []message{{Role: "user", Content: prompt}},
+	}
+	effort, thinks := modelEfforts[model]
+	if thinks {
+		maxTokens = max(maxTokens, thinkingMaxTokens)
 	}
 	// OpenAI's own API takes max_completion_tokens from every chat model,
 	// and only that from its reasoning models; max_tokens is what the rest
@@ -176,13 +209,17 @@ func (c *Client) Complete(ctx context.Context, ep Endpoint, model, prompt string
 	} else {
 		req.MaxTokens = maxTokens
 	}
+	if thinks {
+		req.ReasoningEffort = effort
+		return c.chat(ctx, ep, req, c.thinkingTimeout())
+	}
 	key := effortKey(ep, model)
 	start := c.effortFor(key)
 	var answer string
 	var err error
 	for i := start; i < len(efforts); i++ {
 		req.ReasoningEffort = efforts[i]
-		answer, err = c.chat(ctx, ep, req)
+		answer, err = c.chat(ctx, ep, req, c.timeout())
 		if !rejected(err) {
 			if i != start {
 				c.rememberEffort(key, i)
@@ -193,13 +230,13 @@ func (c *Client) Complete(ctx context.Context, ep Endpoint, model, prompt string
 	return answer, err
 }
 
-func (c *Client) chat(ctx context.Context, ep Endpoint, body chatRequest) (string, error) {
+func (c *Client) chat(ctx context.Context, ep Endpoint, body chatRequest, timeout time.Duration) (string, error) {
 	data, err := json.Marshal(body)
 	if err != nil {
 		return "", err
 	}
 	var resp chatResponse
-	if err := c.do(ctx, ep, http.MethodPost, "/chat/completions", data, &resp); err != nil {
+	if err := c.doWithin(ctx, timeout, ep, http.MethodPost, "/chat/completions", data, &resp); err != nil {
 		return "", err
 	}
 	if len(resp.Choices) == 0 {
@@ -238,10 +275,15 @@ func (c *Client) Models(ctx context.Context, ep Endpoint) ([]string, error) {
 // do sends a request with a JSON body, if any, and decodes the JSON answer
 // into out.
 func (c *Client) do(ctx context.Context, ep Endpoint, method, path string, body []byte, out any) error {
+	return c.doWithin(ctx, c.timeout(), ep, method, path, body, out)
+}
+
+// doWithin is do with a timeout of its own.
+func (c *Client) doWithin(ctx context.Context, timeout time.Duration, ep Endpoint, method, path string, body []byte, out any) error {
 	if _, err := ParseBaseURL(ep.BaseURL); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(ctx, c.timeout())
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var r io.Reader
 	if body != nil {
@@ -261,7 +303,7 @@ func (c *Client) do(ctx context.Context, ep Endpoint, method, path string, body 
 	resp, err := c.http().Do(req)
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) && errors.Is(err, context.DeadlineExceeded) {
-			return fmt.Errorf("no answer within %s: %w", c.timeout(), context.DeadlineExceeded)
+			return fmt.Errorf("no answer within %s: %w", timeout, context.DeadlineExceeded)
 		}
 		return err
 	}

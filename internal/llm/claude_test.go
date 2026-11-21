@@ -97,7 +97,7 @@ func TestClaudeComplete(t *testing.T) {
 	}
 	reqs, headers := f.sent()
 	req := reqs[0]
-	if req["model"] != "claude-opus-5-5" || req["max_tokens"] != float64(claudeMaxTokens) {
+	if req["model"] != "claude-opus-5-5" || req["max_tokens"] != float64(thinkingMaxTokens) {
 		t.Errorf("model %v, max_tokens %v", req["model"], req["max_tokens"])
 	}
 	msgs, _ := req["messages"].([]any)

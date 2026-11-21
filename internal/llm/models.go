@@ -30,8 +30,8 @@ func SuggestedModel(memory uint64) string {
 
 // DefaultModel is the model p is asked with at baseURL while none is
 // chosen: the provider's own default, else, for a provider on this
-// computer, the one suggested for memory. It is "" for the other hosted
-// providers, whose model must be chosen.
+// computer, the one suggested for memory. It is "" for the other providers
+// (OpenRouter, Groq, a server elsewhere), whose model must be chosen.
 func DefaultModel(p Provider, baseURL string, memory uint64) string {
 	switch {
 	case p.Model != "":

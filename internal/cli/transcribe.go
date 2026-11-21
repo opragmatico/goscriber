@@ -49,7 +49,8 @@ Flags:
                       in the settings' Post-processing page, on or off there
       --llm-model M   the model to clean with; implies --llm (default: the
                       settings' llm_model, else the provider's default:
-                      claude-opus-5-5 for Claude, and for a provider on
+                      claude-sonnet-5-5 for Claude, gemini-4-hydrogen for
+                      Gemini, gpt-6.1-sol for OpenAI, and for a provider on
                       this computer gemma4:26b with 32 GB of memory or more,
                       gemma4:e4b with less)
       --llm-url URL   the provider's base URL, which picks the provider at

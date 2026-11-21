@@ -46,18 +46,26 @@ type Provider struct {
 	Model string
 }
 
-// ClaudeModel is the model Claude post-processes with while none is chosen.
-const ClaudeModel = "claude-opus-5-5"
+// The models the hosted providers post-process with while none is chosen:
+// each provider's model at the level of Claude Sonnet, in price and in how
+// well it fixes a transcript.
+const (
+	ClaudeModel = "claude-sonnet-5-5"
+	GeminiModel = "gemini-4-hydrogen"
+	// OpenAIModel is priced as Claude Sonnet 5.5 is, and asked to think
+	// at "medium" (modelEfforts).
+	OpenAIModel = "gpt-6.1-sol"
+)
 
 // Providers are the providers the settings offer, in their order.
 var Providers = []Provider{
 	{
 		ID: config.LLMGemini, Name: "Gemini", BaseURL: config.LLMGemini.BaseURL(), Key: KeyRequired,
-		KeyHelp: "Create one in Google AI Studio, under Get API key.",
+		KeyHelp: "Create one in Google AI Studio, under Get API key.", Model: GeminiModel,
 	},
 	{
 		ID: config.LLMOpenAI, Name: "OpenAI", BaseURL: config.LLMOpenAI.BaseURL(), Key: KeyRequired,
-		KeyHelp: "Create one on the OpenAI Platform, under API keys.",
+		KeyHelp: "Create one on the OpenAI Platform, under API keys.", Model: OpenAIModel,
 	},
 	{
 		ID: config.LLMClaude, Name: "Claude", BaseURL: config.LLMClaude.BaseURL(), Key: KeyRequired,

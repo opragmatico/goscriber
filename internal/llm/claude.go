@@ -22,13 +22,6 @@ var ErrRefused = errors.New("the model declined to answer")
 // when none is stored.
 var ErrNoKey = errors.New("no API key is stored for this provider")
 
-// claudeMaxTokens is the least max_tokens a Claude request carries. Claude
-// counts its thinking toward max_tokens, and on current models thinking
-// cannot be turned off, only down (effort "low"), so the cap leaves it
-// room on top of the answer; the request timeout still bounds a model
-// that runs on.
-const claudeMaxTokens = 16000
-
 // fallbackModels take server-side fallbacks: a request one of them declines
 // is answered by another model in the same call, instead of failing.
 var fallbackModels = []string{
@@ -49,8 +42,10 @@ func (c *Client) claude(ep Endpoint) anthropic.Client {
 // server-side fallbacks; models older than effort reject those.
 func claudeRequest(model, prompt string, maxTokens int, extras bool) anthropic.BetaMessageNewParams {
 	req := anthropic.BetaMessageNewParams{
-		Model:     model,
-		MaxTokens: int64(max(maxTokens, claudeMaxTokens)),
+		Model: model,
+		// Thinking cannot be turned off on current models, only down
+		// (effort "low"), so the cap leaves it room.
+		MaxTokens: int64(max(maxTokens, thinkingMaxTokens)),
 		Messages:  []anthropic.BetaMessageParam{anthropic.NewBetaUserMessage(anthropic.NewBetaTextBlock(prompt))},
 	}
 	if extras {

@@ -152,6 +152,41 @@ func TestCompleteOpenAICap(t *testing.T) {
 	}
 }
 
+// OpenAI's default model is asked to think at "medium", with no step-down,
+// and room for the thinking: a cap of thinkingMaxTokens and
+// ThinkingTimeout. A server that rejects the effort fails the request.
+func TestCompleteModelEffort(t *testing.T) {
+	var status int
+	f := newFakeServer(t, func(map[string]any) (int, string) {
+		if status != 0 {
+			return status, `{"error":{"message":"unsupported reasoning_effort"}}`
+		}
+		return 200, reply("ok", "stop")
+	})
+	target, _ := url.Parse(f.srv.URL)
+	c := Client{HTTP: &http.Client{Transport: redirect{target}}}
+	openAI := Endpoint{BaseURL: "https://api.openai.com/v1"}
+	if got, err := c.Complete(context.Background(), openAI, OpenAIModel, "p", 1200); err != nil || got != "ok" {
+		t.Fatalf("Complete = %q, %v", got, err)
+	}
+	req := f.sent()[0]
+	if req["reasoning_effort"] != "medium" || req["max_completion_tokens"] != float64(thinkingMaxTokens) {
+		t.Errorf("reasoning_effort %v, max_completion_tokens %v; want medium and %d", req["reasoning_effort"], req["max_completion_tokens"], thinkingMaxTokens)
+	}
+
+	status = 400
+	if _, err := c.Complete(context.Background(), openAI, OpenAIModel, "p", 1200); err == nil {
+		t.Error("a rejected effort reported success")
+	}
+	if n := len(f.sent()); n != 2 {
+		t.Errorf("%d requests, want one per completion: no step-down", n)
+	}
+
+	if got := (&Client{}).thinkingTimeout(); got != ThinkingTimeout {
+		t.Errorf("thinking timeout %v, want %v", got, ThinkingTimeout)
+	}
+}
+
 // redirect sends every request to target, whatever its URL says.
 type redirect struct{ target *url.URL }
 
@@ -161,8 +196,9 @@ func (r redirect) RoundTrip(req *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(req)
 }
 
-// A server that rejects reasoning_effort gets the request again with less
-// of it: "minimal" after "none", then none at all. The first it takes is
+// A server that rejects reasoning_effort gets the request again with the
+// next least: "minimal" after "none", then "low", then none at all. The
+// first it takes is
 // where that model starts from then on; other models start from "none".
 func TestCompleteReasoningFallback(t *testing.T) {
 	for _, tc := range []struct {
@@ -172,10 +208,15 @@ func TestCompleteReasoningFallback(t *testing.T) {
 		want   []string // reasoning_effort per request, "-" for none
 	}{
 		// Like Ollama before reasoning_effort, or llama.cpp.
-		{"no field 400", 400, func(_ string, ok bool) bool { return !ok }, []string{"none", "minimal", "-", "-", "none"}},
-		{"no field 422", 422, func(_ string, ok bool) bool { return !ok }, []string{"none", "minimal", "-", "-", "none"}},
+		{"no field 400", 400, func(_ string, ok bool) bool { return !ok }, []string{"none", "minimal", "low", "-", "-", "none"}},
+		{"no field 422", 422, func(_ string, ok bool) bool { return !ok }, []string{"none", "minimal", "low", "-", "-", "none"}},
 		// Like Gemini 3, whose thinking cannot be turned off.
 		{"no none", 400, func(e string, _ bool) bool { return e != "none" }, []string{"none", "minimal", "minimal", "none"}},
+		// Like GPT-6.1 Sol, which thinks at "medium" without the field.
+		{
+			"low at the least", 400, func(e string, ok bool) bool { return ok && e != "none" && e != "minimal" },
+			[]string{"none", "minimal", "low", "low", "none"},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFakeServer(t, func(req map[string]any) (int, string) {
@@ -343,6 +384,9 @@ func TestModelFor(t *testing.T) {
 		{groq, groq.BaseURL, "", 36 * gb, "", true},
 		{groq, groq.BaseURL, "llama-3.1-8b-instant", 0, "llama-3.1-8b-instant", false},
 		{claude, claude.BaseURL, "", 0, ClaudeModel, false},
+		{ProviderByID(config.LLMGemini), config.LLMGemini.BaseURL(), "", 0, GeminiModel, false},
+		{ProviderByID(config.LLMOpenAI), config.LLMOpenAI.BaseURL(), "", 0, OpenAIModel, false},
+		{ProviderByID(config.LLMOpenRouter), config.LLMOpenRouter.BaseURL(), "", 0, "", true},
 		{claude, claude.BaseURL, "claude-haiku-5-5", 0, "claude-haiku-5-5", false},
 	} {
 		got, err := ModelFor(tc.p, tc.url, tc.model, tc.memory)
