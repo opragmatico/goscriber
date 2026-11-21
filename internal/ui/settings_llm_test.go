@@ -194,7 +194,7 @@ func TestPostProcessingKey(t *testing.T) {
 	if !tw.buttons(PagePostProcessing)[LabelRemoveKey].Disabled() {
 		t.Error("Remove is enabled with no key stored")
 	}
-	tw.llm.key.SetText("sk-secret")
+	tw.llm.key.entry.SetText("sk-secret")
 	test.Tap(tw.buttons(PagePostProcessing)[LabelSaveKey])
 	tw.q.until(t, "the key stored", func() bool { return strings.Contains(tw.pageText(PagePostProcessing), llmKeyStoredHint) })
 	f.mu.Lock()
@@ -202,7 +202,7 @@ func TestPostProcessingKey(t *testing.T) {
 		t.Errorf("keychain holds %v", f.keys)
 	}
 	f.mu.Unlock()
-	if tw.llm.key.Text != "" || strings.Contains(tw.store.Path(), "sk-secret") {
+	if tw.llm.key.entry.Text != "" || strings.Contains(tw.store.Path(), "sk-secret") {
 		t.Error("the key stays in the field")
 	}
 	if s := tw.reopen(t); strings.Contains(s.LLMBaseURL+s.LLMModel+s.LLMPrompt, "sk-secret") {
