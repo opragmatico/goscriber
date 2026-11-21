@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/opragmatico/goscriber/internal/engine"
+	"github.com/opragmatico/goscriber/engine"
 )
 
 func TestFrameRoundTrip(t *testing.T) {

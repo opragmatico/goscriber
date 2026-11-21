@@ -37,14 +37,13 @@ type LLMActions struct {
 
 // Labels and texts of the Post-processing page that tests look for.
 const (
-	LabelSaveKey       = "Save"
-	LabelRemoveKey     = "Remove"
 	LabelRefreshModels = "Refresh"
 	LabelBuiltInPrompt = "Use the built-in prompt"
 	LabelTryLLM        = "Try it"
 	llmKeyStoredHint   = "A key is stored for this provider. Type another to replace it."
 	llmNoKeyHint       = "No key is stored for this provider."
 	llmKeyUnknownHint  = "The keychain could not be read."
+	llmKeyNoURLHint    = "Type the base URL first."
 	llmKeyKept         = "It is kept in the system keychain, not in the settings file."
 	llmKeyOptional     = "Only if your server asks for one."
 	llmModelsNeedKey   = "Save an API key to list the models it serves."
@@ -74,10 +73,7 @@ type llmState struct {
 	listNote   string // what the last listing found
 	noteFor    string // the endpoint it listed
 
-	key     *widget.Entry
-	keyNote *widget.Label
-	remove  *widget.Button
-	keyFor  string // the base URL keyNote is about
+	key *keyField // nil without LLMActions.SetKey
 
 	try     *widget.Button
 	tryNote *widget.Label
@@ -217,8 +213,8 @@ func (w *SettingsWindow) endpointShown() {
 		return
 	}
 	p, baseURL := w.llmTarget()
-	if p.Key != llm.NoKey {
-		w.refreshKey(baseURL)
+	if w.llm.key != nil && p.Key != llm.NoKey {
+		w.llm.key.show(baseURL)
 	}
 	if w.visible {
 		w.refreshLLMModels(false)
@@ -228,83 +224,20 @@ func (w *SettingsWindow) endpointShown() {
 // apiKeySetting stores an API key for the provider in the keychain. The
 // stored key is never shown: the field takes a new one.
 func (w *SettingsWindow) apiKeySetting() fyne.CanvasObject {
-	st := &w.llm
-	st.key = widget.NewPasswordEntry()
-	st.key.SetPlaceHolder("API key")
-	st.keyNote = note("")
-	st.keyHelp = note("")
-	save := func() {
-		key := strings.TrimSpace(st.key.Text)
-		if key == "" {
-			return
+	a := w.opts.LLM
+	// A key stored or removed changes the models the provider lists.
+	set := func(baseURL, key string) error {
+		err := a.SetKey(baseURL, key)
+		if err == nil {
+			w.do(func() { w.refreshLLMModels(true) })
 		}
-		_, baseURL := w.llmTarget()
-		w.storeKey(baseURL, key)
+		return err
 	}
-	st.key.OnSubmitted = func(string) { save() }
-	saveButton := widget.NewButton(LabelSaveKey, save)
-	st.remove = widget.NewButtonWithIcon(LabelRemoveKey, theme.DeleteIcon(), func() {
-		_, baseURL := w.llmTarget()
-		w.storeKey(baseURL, "")
-	})
-	return container.NewVBox(
-		container.NewBorder(nil, nil, nil, container.NewHBox(saveButton, st.remove), st.key),
-		st.keyNote,
-		st.keyHelp,
-	)
-}
-
-// storeKey stores key for baseURL, or removes it with "", in the
-// background, then lists the models again with the new key.
-func (w *SettingsWindow) storeKey(baseURL, key string) {
-	set := w.opts.LLM.SetKey
-	go func() {
-		err := set(baseURL, key)
-		w.do(func() {
-			if err != nil {
-				w.log().Warn("the API key could not be stored", "err", err)
-				w.llm.keyNote.SetText(fmt.Sprintf("Could not store the key: %v", err))
-				return
-			}
-			w.llm.key.SetText("")
-			w.llm.keyFor = ""
-			w.refreshKey(baseURL)
-			w.refreshLLMModels(true)
-		})
-	}()
-}
-
-// refreshKey says whether a key is stored for baseURL, reading the
-// keychain in the background.
-func (w *SettingsWindow) refreshKey(baseURL string) {
-	st := &w.llm
-	has := w.opts.LLM.HasKey
-	if st.keyNote == nil || has == nil || st.keyFor == baseURL {
-		return
-	}
-	st.keyFor = baseURL
-	go func() {
-		stored, err := has(baseURL)
-		w.do(func() {
-			if st.keyFor != baseURL {
-				return
-			}
-			switch {
-			case err != nil:
-				w.log().Warn("the keychain could not be read", "err", err)
-				st.keyNote.SetText(llmKeyUnknownHint)
-			case stored:
-				st.keyNote.SetText(llmKeyStoredHint)
-			default:
-				st.keyNote.SetText(llmNoKeyHint)
-			}
-			if stored {
-				st.remove.Enable()
-			} else {
-				st.remove.Disable()
-			}
-		})
-	}()
+	w.llm.key = newKeyField(w, "API key",
+		keyHints{stored: llmKeyStoredHint, none: llmNoKeyHint, unknown: llmKeyUnknownHint, noAccount: llmKeyNoURLHint},
+		a.HasKey, set)
+	w.llm.keyHelp = note("")
+	return container.NewVBox(w.llm.key.box, w.llm.keyHelp)
 }
 
 // llmModelSetting is the model: typed, or picked from those the provider

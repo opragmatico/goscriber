@@ -378,6 +378,7 @@ func TestLoadResetsABadWebhookURL(t *testing.T) {
 		{"ftp://hooks.example.com/in", "", true},
 		{"https://", "", true},
 		{" https://hooks.example.com", "", true},
+		{"https://me:s3cret@hooks.example.com/in", "", true},
 	} {
 		path := settingsPath(t)
 		writeFile(t, path, fmt.Sprintf(`{"schema_version": 1, "webhook_url": %q}`, tt.in))
@@ -387,6 +388,36 @@ func TestLoadResetsABadWebhookURL(t *testing.T) {
 		}
 		if got.WebhookURL != tt.want || slices.Contains(rep.Fixed, "webhook_url") != tt.fixed {
 			t.Errorf("%q: loaded %q, fixed %v", tt.in, got.WebhookURL, rep.Fixed)
+		}
+	}
+}
+
+// A webhook_auth Goscriber does not know, or a user name HTTP Basic cannot
+// carry, is reset; the defaults send no credentials.
+func TestLoadResetsBadWebhookAuth(t *testing.T) {
+	if d := Defaults(); d.WebhookAuth != WebhookAuthNone || d.WebhookUsername != "" {
+		t.Errorf("defaults %q, %q", d.WebhookAuth, d.WebhookUsername)
+	}
+	for _, tt := range []struct {
+		auth, user         string
+		wantAuth, wantUser string
+		fixed              []string
+	}{
+		{"basic", "goscriber", "basic", "goscriber", nil},
+		{"bearer", "", "bearer", "", nil},
+		{"digest", "goscriber", "none", "goscriber", []string{"webhook_auth"}},
+		{"basic", "go:scriber", "basic", "", []string{"webhook_username"}},
+		{"basic", "go\nscriber", "basic", "", []string{"webhook_username"}},
+	} {
+		path := settingsPath(t)
+		writeFile(t, path, fmt.Sprintf(`{"schema_version": 1, "webhook_auth": %q, "webhook_username": %q}`, tt.auth, tt.user))
+		got, rep, err := Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		slices.Sort(rep.Fixed)
+		if string(got.WebhookAuth) != tt.wantAuth || got.WebhookUsername != tt.wantUser || !slices.Equal(rep.Fixed, tt.fixed) {
+			t.Errorf("%q/%q: loaded %q/%q, fixed %v", tt.auth, tt.user, got.WebhookAuth, got.WebhookUsername, rep.Fixed)
 		}
 	}
 }

@@ -15,6 +15,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/riverqueue/river"
+
+	"github.com/opragmatico/goscriber/internal/config"
 )
 
 // defaultClient sends the requests when Options.Client is nil.
@@ -42,6 +44,7 @@ type worker struct {
 	userAgent string
 	timeout   time.Duration
 	onFailure func(Failure)
+	secret    func(account string) (string, error)
 	log       *slog.Logger
 }
 
@@ -114,6 +117,9 @@ func (w *worker) post(ctx context.Context, a args) error {
 	if w.userAgent != "" {
 		req.Header.Set("User-Agent", w.userAgent)
 	}
+	if err := w.authenticate(req, a.endpoint()); err != nil {
+		return err
+	}
 	resp, err := w.client.Do(req)
 	if err != nil {
 		return withoutURL(err)
@@ -128,6 +134,33 @@ func (w *worker) post(ctx context.Context, a args) error {
 	default:
 		return &statusError{status: resp.Status, body: start, refused: true}
 	}
+}
+
+// authenticate adds the endpoint's credentials to req, with the password or
+// token the keychain holds now. One that cannot be read, or is missing, is
+// worth retrying: the user may store it before the attempts run out.
+// net/http drops the Authorization header on a redirect to another host,
+// so the secret goes to the URL's own host only.
+func (w *worker) authenticate(req *http.Request, e Endpoint) error {
+	if !e.NeedsSecret() {
+		return nil
+	}
+	if w.secret == nil {
+		return fmt.Errorf("no %s for it is in the keychain", e.SecretName())
+	}
+	secret, err := w.secret(KeyAccount(e.URL))
+	if err != nil {
+		return fmt.Errorf("its %s could not be read from the keychain: %w", e.SecretName(), err)
+	}
+	if secret == "" {
+		return fmt.Errorf("no %s for it is in the keychain", e.SecretName())
+	}
+	if e.Auth == config.WebhookAuthBasic {
+		req.SetBasicAuth(e.Username, secret)
+	} else {
+		req.Header.Set("Authorization", "Bearer "+secret)
+	}
+	return nil
 }
 
 // withoutURL drops the URL that net/http puts in its errors: it may hold a

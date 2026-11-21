@@ -4,9 +4,9 @@ package main
 import (
 	"os"
 
+	"github.com/opragmatico/goscriber/engine"
 	"github.com/opragmatico/goscriber/internal/cli"
 	"github.com/opragmatico/goscriber/internal/config"
-	"github.com/opragmatico/goscriber/internal/engine"
 )
 
 // version is stamped at link time: go build -ldflags "-X main.version=v1.2.3".

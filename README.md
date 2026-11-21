@@ -76,7 +76,25 @@ User-Agent: Goscriber/0.4.0
 - **At least once.** Each POST is a job in a local queue ([River](https://riverqueue.com) on SQLite, in `jobs.sqlite3` beside the settings), so a transcription waits while the server is down or Goscriber is closed, and goes after the next launch. An attempt cut short, by quitting mid-request for instance, is made again, so the same POST can arrive twice: drop repeats by the `webhook-id` header, as [Standard Webhooks](https://www.standardwebhooks.com) names it. It is a random UUID made when the transcription is queued, the same on every attempt and unique to that delivery. Do not drop repeats by `transcription_id`: every machine numbers its own entries, so two can send the same number.
 - **Retries.** A network error, no answer within 30 s, a 408, a 429 or a 5xx answer is tried again after attempt⁴ seconds (1 s, 16 s, 81 s, …), up to 14 attempts in about a day. Any other answer outside 2xx (401, 404, a redirect other than 307 or 308) is not retried. A transcription Goscriber gives up raises one notice, which names the URL's host, never the URL, as it may hold a token.
 - **IDs.** IDs only go up. With a webhook set, a transcription gets its number even when the history keeps no dictations (`history_limit` 0): it is saved hidden and removed at once. Without a webhook, nothing is saved then. IDs start again from 1 only if the history database, `history.sqlite3`, is deleted.
+- **Authentication.** Settings → Advanced → Webhook → Authentication (`webhook_auth`) is none, the default; Basic, with a user name (`webhook_username`) and a password; or a Bearer token, sent in the `Authorization` header. The password or token is kept in the OS keychain (the macOS Keychain, the Secret Service on Linux), as "Goscriber webhook secret" under the webhook URL, never in `settings.json` or the jobs database, so each URL keeps its own. Every attempt reads it again: a replaced one applies to the transcriptions already waiting, and while none is stored they wait for it, with a notice. A redirect to another host does not carry it, and a URL with a user name and password in it is refused.
 - **Changes.** A new URL applies to the transcriptions that follow; those already queued keep the URL they were queued for. A delivered transcription is deleted from the jobs database a minute later, and one given up a week later.
+
+## Use the engine from another Go program
+
+Goscriber's speech recognition is a library too. [`engine`](engine/doc.go) defines the interface (load a model, recognize a clip or stream audio, get text with word timings and languages), and [`engine/nemo`](engine/nemo/doc.go) implements it on NeMo-Speech.cpp. Everything else stays internal to the app.
+
+```go
+e := nemo.New()
+if _, err := e.Load(ctx, engine.LoadSpec{Path: "parakeet-tdt-0.6b-v2.q8_0.gguf"}); err != nil {
+	return err
+}
+defer e.Unload()
+res, err := e.Recognize(ctx, samples, 16000, engine.Options{WordTimestamps: true}) // mono float32 in [-1, 1]
+```
+
+The binding uses CGo and the NeMo-Speech.cpp SDK, so `go get` alone is not enough. Build the SDK once in a Goscriber checkout with `make deps`, point `PKG_CONFIG_PATH` at `.deps/nemo-speech/lib/pkgconfig`, and build your program with `-tags nemo`. The engine downloads nothing: pass it a GGUF, such as one `goscriber models pull` fetched. A crash in the native code ends the process that loaded it, so the app runs the engine in a child process; see the [package documentation](engine/nemo/doc.go) for the whole recipe and a streaming example.
+
+If you only need transcripts of files, `goscriber transcribe --json FILE...` needs no Go code and prints the text, the words with their timings and the language as JSON.
 
 ## Stack
 
@@ -138,7 +156,7 @@ make help                 # every target
 
 ### Where CGo is allowed
 
-Only `internal/app`, `internal/ui`, `internal/platform` and `internal/engine/nemo` may use CGo (Fyne, native OS code and the NeMo-Speech.cpp binding). Everything else must build and test with `CGO_ENABLED=0`, which keeps most tests fast and portable; `make test-nocgo` enforces it, and CI runs it on macOS and Linux. `cmd/goscriber` links the desktop app only when CGo is on, so a `CGO_ENABLED=0` build is a command-line-only binary. The one exception is `internal/audio`: its malgo (miniaudio) backend sits in a `cgo`-tagged file, so the package, with its ring buffer, levels, recorder and WAV code, still builds and tests without CGo, just with no devices.
+Only `internal/app`, `internal/ui`, `internal/platform` and `engine/nemo` may use CGo (Fyne, native OS code and the NeMo-Speech.cpp binding). Everything else must build and test with `CGO_ENABLED=0`, which keeps most tests fast and portable; `make test-nocgo` enforces it, and CI runs it on macOS and Linux. `cmd/goscriber` links the desktop app only when CGo is on, so a `CGO_ENABLED=0` build is a command-line-only binary. The one exception is `internal/audio`: its malgo (miniaudio) backend sits in a `cgo`-tagged file, so the package, with its ring buffer, levels, recorder and WAV code, still builds and tests without CGo, just with no devices.
 
 `goscriber debug devices` lists the audio devices, and `goscriber debug record [--device NAME] [--seconds 10] out.wav` records the microphone and reports the sample rate, dropped samples and levels.
 

@@ -94,6 +94,8 @@ func (sh *shell) noticeAction(id notice.ActionID) {
 		sh.openURL(platform.LoginItemsSettingsURL)
 	case notice.ActionOpenPostProcessing:
 		sh.settings.Show(ui.PagePostProcessing)
+	case notice.ActionOpenAdvanced:
+		sh.settings.Show(ui.PageAdvanced)
 	default:
 		sh.settings.Show(ui.PageGeneral)
 	}

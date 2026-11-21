@@ -41,6 +41,10 @@ Handy's own GGUFs (`handy-computer/*-gguf`) target `transcribe.cpp`, not NeMo-Sp
 
 ```text
 cmd/goscriber/             # main: GUI by default; subcommands `transcribe`, `engine-worker`
+engine/                    # public: other Go programs can import these
+├── engine.go              # Engine / Stream interfaces, Result, Word, options
+├── nemo/                  # CGo binding to nemo_speech/asr.h (cgo and the nemo tag)
+└── fake/                  # scripted engine for tests and CGo-free builds
 internal/
 ├── app/                   # Fyne app bootstrap and object wiring
 ├── cli/                   # flags, subcommands, remote-control client
@@ -58,13 +62,10 @@ internal/
 │   ├── sounds/            # the cues, made by gen_sounds.go
 │   ├── decode.go          # WAV or FLAC files, told apart by content, for the History page and the CLI
 │   └── wav.go             # WAV read / write for history and the CLI
-├── engine/
-│   ├── engine.go          # Engine / Stream interfaces, Result, Word, options
-│   ├── nemo/              # CGo binding to nemo_speech/asr.h (built with cgo only)
+├── engine/                # the app's layers over the public engine package
 │   ├── worker/            # supervisor (parent) + worker (child) and their protocol
 │   ├── autounload/        # unloads an idle model, reloads it on next use
-│   ├── warmup/            # decodes silence after each load, so no dictation runs cold
-│   └── fake/              # scripted engine for tests and CGo-free builds
+│   └── warmup/            # decodes silence after each load, so no dictation runs cold
 ├── models/
 │   ├── catalog.json       # the three models (+ Silero VAD), pinned revisions and checksums
 │   ├── catalog.go
@@ -75,7 +76,7 @@ internal/
 │   └── coordinator.go     # recording → transcription → output state machine
 ├── text/                  # cleanup, filler words, custom-word correction
 ├── llm/                   # optional post-processing: providers, Chat Completions and Claude clients, chunking, the LLM stage
-├── keychain/              # API keys in the macOS Keychain, the Secret Service, the Windows Credential Manager
+├── keychain/              # API keys and webhook secrets in the macOS Keychain, the Secret Service, the Windows Credential Manager
 ├── output/                # clipboard paste with restore, direct typing
 ├── typing/                # Linux typing tools: xdotool, wtype, dotool, ydotool
 ├── session/               # X11 or Wayland
@@ -163,7 +164,7 @@ The `autostart` setting (Settings → Advanced → Launch at login) is the OS's 
 | --- | --- |
 | **General** | the dictation, post-processing and cancel shortcuts (recorded by pressing them; the post-processing one may also be cleared), activation mode and hold threshold, microphone, start / stop sounds with their volume and output device, mute while recording, overlay style and position |
 | **Models** | a card per catalog model: what it does, size, licence, quantisation (Parakeet TDT v2 has two), status, and Download (with progress, cancellable), Delete (asks first) and Use. With no model downloaded the page says so. Below the cards, the [language picker](#language) |
-| **Advanced** | app (start hidden, tray icon, launch at login, unload timeout, loading the model at launch), output (paste method, on Linux the paste keys and typing tool, clipboard, delays, trailing space, Return), transcription (accelerator, offering only what the engine was built with, live-text latency, decoding while recording, always-on microphone, VAD and its thresholds, shortest recording, silence threshold) and text (filler words, custom words with their [boost and correction threshold](#custom-vocabulary)) |
+| **Advanced** | app (start hidden, tray icon, launch at login, unload timeout, loading the model at launch), output (paste method, on Linux the paste keys and typing tool, clipboard, delays, trailing space, Return), transcription (accelerator, offering only what the engine was built with, live-text latency, decoding while recording, always-on microphone, VAD and its thresholds, shortest recording, silence threshold) text (filler words, custom words with their [boost and correction threshold](#custom-vocabulary)) and the [webhook](#webhook) (its URL and authentication: none, Basic with a user name and a password, or a Bearer token, the secret saved to the system keychain under the URL and never shown again; only the rows the authentication uses show) |
 | **Post-processing** | [LLM post-processing](llm-post-processing.md): on or off, provider (Gemini, OpenAI, Claude, OpenRouter, Groq, Ollama, or Other, any OpenAI-compatible server), then only the rows it needs: base URL (Ollama and Other), API key (hosted providers, optional for Other; saved to the system keychain, never shown again), model (typed, or picked from the provider's list; empty is the provider's default, if it has one), the prompt (the built-in one until edited, with a button to go back to it; `${output}`, `${language}` and `${custom_words}` placeholders), and Try it, which cleans a sample dictation |
 | **Permissions** | each macOS permission, with a button to System Settings when missing ([permissions.md](permissions.md)); on Linux, what a Wayland session needs set up ([linux.md](linux.md)) |
 | **History** | how many dictations and how long recordings are kept; [transcribing audio files](#transcribing-files), chosen or dropped on the window, with progress and Cancel; then the latest dictations (up to 100), newest first, each with Copy, Paste again, Play, Transcribe again, Process again and Delete, and Delete all ([history](#history)) |
@@ -271,7 +272,7 @@ Handy's "reliable paste" (restore only once the target app has read the pasteboa
 
 ## The CGo engine
 
-NeMo-Speech.cpp exposes a stable C ABI: opaque handles, size-prefixed POD config structs, explicit ownership and status codes. `internal/engine/nemo` wraps it:
+NeMo-Speech.cpp exposes a stable C ABI: opaque handles, size-prefixed POD config structs, explicit ownership and status codes. `engine/nemo` wraps it:
 
 - **Recognizer**: `nemo_speech_asr_create` / `_destroy`. One recognizer per loaded model. Backend `gpu = 0` uses the first device of the SDK's GPU backend (Metal, Vulkan or CUDA), `gpu = -1` the CPU. The backend is the preset's that `make deps` built, which the binding reads from the ggml backend library the process loaded (`nemo.GPUBackend()`): an SDK without one (`cpu-asr`, Linux's default) always loads with `-1`, since it refuses any GPU index, and a GPU that cannot take the model (no Vulkan device, no memory) is retried on the CPU. `ModelInfo.CPU` says where the model ended up.
 - **Offline**: `nemo_speech_asr_recognize_f32` for a whole utterance.
@@ -310,7 +311,7 @@ A `GGML_ASSERT`, a GPU driver fault or an `abort()` inside C++ takes the whole G
 
 **Logs.** The worker writes its own log as JSON lines on stderr and the native engine prints its own lines there (`[asr] model=… backend=MTL0`). The supervisor re-logs each line through `log/slog` with the worker's process ID as the `worker` attribute: the worker's own lines keep their level, the native ones are debug, or warnings when they read like a failure.
 
-**Cost.** Measured on an M4 Max with Metal (`TestWorkerIPCOverhead` in `internal/engine/nemo`), the fastest of 15 runs each:
+**Cost.** Measured on an M4 Max with Metal (`TestWorkerIPCOverhead` in `engine/nemo`), the fastest of 15 runs each:
 
 | | In process | Through the worker | Overhead |
 | --- | --- | --- | --- |
@@ -331,7 +332,7 @@ The first dictation should be as fast as the next, and an idle model should not 
 
 **While it loads** the tray menu shows "Loading <model>…" under the model, from the coordinator's `EventModel` (loading, ready or failed, for background loads and a recording's own). Dictation stays available: a background load runs on the engine goroutine like everything else the engine does, so a recording started meanwhile records at once (the recorder buffers its audio) and is decoded once the model is ready. No background load starts during a session, which keeps its model until the transcript is out; the end of the session brings the engine in line instead. A background load that fails raises no notice, since nobody asked to dictate, and is not tried again in the background; the next recording tries again and says why it cannot transcribe. Quitting cancels a load in progress.
 
-**Warm-up.** On Metal the first decode after a load compiles the GPU pipelines and allocates the compute buffers: Parakeet TDT's first decode of an 11 s clip took three to five times as long as the next on an M4 Max. `engine/warmup` decodes silence right after every load, idle reloads included, so the cost moves into the load: an offline model decodes 25 s of silence, the longest chunk the coordinator cuts (`pipeline.LongestChunk`), which also sizes its buffers for every later decode (half a second compiles the pipelines but leaves a decode longer than any before it growing the buffers, 7–13 % slower); a streaming model decodes half a second whole (its fallback) and streams half a second, since dictation decodes it through a stream. On an M4 Max it takes about 160 ms for Parakeet and 120 ms for Nemotron on Metal, at no cost in memory; on the CPU, about 650 ms for Parakeet, whose footprint while loaded grows by about 180 MB. A warm-up that fails is logged and the model stays loaded. Measured by `TestModelLifecycle` in `internal/engine/nemo` (M4 Max, Metal, Silero VAD loaded, in process), the first dictation after a load takes 0.93–0.98× the median of the next five for Parakeet decoding `jfk.wav` whole, and 0.68–1.02× for Nemotron streaming it in 20 ms chunks; without a warm-up, Parakeet's took 1.3–5×.
+**Warm-up.** On Metal the first decode after a load compiles the GPU pipelines and allocates the compute buffers: Parakeet TDT's first decode of an 11 s clip took three to five times as long as the next on an M4 Max. `engine/warmup` decodes silence right after every load, idle reloads included, so the cost moves into the load: an offline model decodes 25 s of silence, the longest chunk the coordinator cuts (`pipeline.LongestChunk`), which also sizes its buffers for every later decode (half a second compiles the pipelines but leaves a decode longer than any before it growing the buffers, 7–13 % slower); a streaming model decodes half a second whole (its fallback) and streams half a second, since dictation decodes it through a stream. On an M4 Max it takes about 160 ms for Parakeet and 120 ms for Nemotron on Metal, at no cost in memory; on the CPU, about 650 ms for Parakeet, whose footprint while loaded grows by about 180 MB. A warm-up that fails is logged and the model stays loaded. Measured by `TestModelLifecycle` in `engine/nemo` (M4 Max, Metal, Silero VAD loaded, in process), the first dictation after a load takes 0.93–0.98× the median of the next five for Parakeet decoding `jfk.wav` whole, and 0.68–1.02× for Nemotron streaming it in 20 ms chunks; without a warm-up, Parakeet's took 1.3–5×.
 
 **Idle unload.** A loaded model holds hundreds of megabytes, so `engine/autounload` unloads the model once it has been idle for `model_unload_timeout`: a number of seconds (30 by default; `0` unloads it as soon as it is idle), or `"never"`. The model is busy while a `Recognize` is in flight, a stream is open, or the coordinator holds it with `Acquire`, which it does from the start of a recording until the transcript is out. Holding it then hides a reload, and its warm-up, behind the user speaking, and a long batch recording, when the engine itself has no work, cannot outlast the timeout. An idle unload keeps the `LoadSpec`, and the next call loads the same model again; an explicit `Unload` forgets it. The tray's Unload Model is an idle unload on request (`UnloadNow`), which leaves a model in use alone; `SetOnChange` signals each time the model comes into memory or leaves it, which the tray follows to offer the item only while there is something to unload. The coordinator passes settings changes on with `SetTimeout`. With the supervisor, an unload ends the worker, so all the engine's memory goes back to the OS; in process, `TestModelLifecycle` finds the footprint back within a megabyte of where it was before the load.
 
@@ -397,7 +398,7 @@ Names and jargon in `custom_words` come out spelled the way the user writes them
 
 Correction is skipped after boosting, as in Handy: the boosted transcript already spells the words, and a second pass would only add the chance of turning an ordinary word into a custom one. The custom words are trimmed and de-duplicated (ignoring case) first. `goscriber transcribe` applies them the same way, with `--word` adding more.
 
-Measured with `testdata/audio/queequeg.wav`, a LibriVox reading of *Moby-Dick* (`TestNemotronBoostsCustomWords`, `TestParakeetCorrectsCustomWords` in `internal/engine/nemo`):
+Measured with `testdata/audio/queequeg.wav`, a LibriVox reading of *Moby-Dick* (`TestNemotronBoostsCustomWords`, `TestParakeetCorrectsCustomWords` in `engine/nemo`):
 
 | Model | Without custom words | With "Queequeg" among ten custom words |
 | --- | --- | --- |
@@ -444,7 +445,7 @@ The History page transcribes existing recordings without the command line: Choos
 - **Long files.** `Coordinator.Transcribe` decodes audio of any length the way dictation decodes a recording live ([live transcription](#live-transcription)): through a stream for a streaming model (Nemotron), and in chunks of 3 to 25 s cut at pauses for an offline one (Parakeet), whatever `long_form_chunking` says. The issue proposed a single pass for Parakeet up to its 24 minutes, but NeMo-Speech.cpp splits anything past 6 min 40 s anyway, and long inputs decoded at once can come back with whole stretches missing ([long audio](models/parakeet-tdt-0.6b-v2.md#long-audio)), while chunks of that size have never failed. The custom words and the cleanup and LLM stages apply as to a dictation; once the audio is decoded, the page shows the language model's progress through the transcript's parts ("part 3 of 13").
 - **Sharing the engine.** The decode runs on the coordinator's engine goroutine one 10 s slice at a time, each handed to the decoder a second at a time, and progress is reported after each slice. A dictation started meanwhile queues its own work behind at most one slice, so it is not held up by a long file, and the file resumes once the dictation's decode is done (reloading its model if the dictation used another; a stream that breaks then falls back to decoding the file whole). The model is held loaded from the first slice to the end. Cancelling stops between pushes, closes the stream and leaves nothing in the history.
 
-**Measured** (`TestTranscribeTenMinuteFile` in `internal/engine/nemo`, M4 Max, Metal, in process): a 10 min 4 s WAV, the JFK fixture 53 times over, read back from disk and transcribed word for word by both models, with 61 progress reports. Parakeet TDT 0.6B v2 took 5.4 s in chunks; Nemotron Streaming 3.5 took 22.3 s through its stream, which decodes 320 ms at a time.
+**Measured** (`TestTranscribeTenMinuteFile` in `engine/nemo`, M4 Max, Metal, in process): a 10 min 4 s WAV, the JFK fixture 53 times over, read back from disk and transcribed word for word by both models, with 61 progress reports. Parakeet TDT 0.6B v2 took 5.4 s in chunks; Nemotron Streaming 3.5 took 22.3 s through its stream, which decodes 320 ms at a time.
 
 ### Webhook
 
@@ -453,6 +454,7 @@ The History page transcribes existing recordings without the command line: Choos
 - **Two IDs.** The body's `transcription_id` is the history entry's ID, which says which transcription a POST carries. The `webhook-id` header, Standard Webhooks' name, is the key to drop repeats by: a random UUID that `Enqueue` makes and stores in the job's arguments, so every attempt sends the same one, across relaunches, and queueing the transcription again would be a new delivery with a new one. Neither entry IDs nor River's job IDs would do as that key: each is a per-machine counter, so two machines send the same numbers, and it starts again if its database is deleted.
 - **When it runs.** The shell opens the queue on first need: at launch when a URL is set, or when `jobs.sqlite3` exists and still holds jobs (a URL set before and cleared since); when the user sets a URL; or at the first transcription to send. Without a URL there is no jobs database and nothing polls one.
 - **Polling.** River runs poll-only (`PollOnly`), fetching jobs every second: its SQLite driver otherwise emulates `LISTEN` with a table it polls every 50 ms. One connection, as the driver advises, and two workers.
+- **Authentication.** `webhook.Endpoint` is the URL, `webhook_auth` (none, Basic or Bearer) and Basic's `webhook_username`; the job's arguments keep it, without the secret, as they keep the URL. The password or token is in the OS keychain as "Goscriber webhook secret", under the URL (`webhook.KeyAccount`), so a job never sends another URL's. `Options.Secret` reads it at every attempt, through the shell's `keychain.Store`, which the settings window writes through too, so a key stored or replaced meanwhile is the one sent. One missing or unreadable fails the attempt, which River retries, so storing it in time still delivers; the shell raises `webhook_failed` at once when it queues a transcription whose secret is missing, rather than a day later when the attempts run out. `net/http` drops the `Authorization` header on a redirect to another host. A URL with a user name and password in it is refused, or `net/http` would send them as Basic credentials straight from `settings.json`.
 - **Attempts.** 30 s each, the answer included (`JobTimeout`). The worker sorts the outcome: 2xx is done; a network error, a timeout, 408, 429 and 5xx return an error, which River retries after attempt⁴ seconds, up to 14 attempts; any other answer is a `JobCancel`. The client follows 307 and 308 only, since Go turns a POST into a GET on other redirects, which would look like success. On the last attempt, or a refusal, the worker calls `OnFailure` once, and the shell raises `webhook_failed`. Messages name the URL's host: `net/http` errors carry the whole URL, so the worker unwraps them.
 - **Quitting.** The shell closes the queue after the coordinator, so the last dictation is queued first. `StopAndCancel` cuts requests in flight short; River puts such a job back without counting the attempt, since the error wraps the cancellation, and the next launch sends it again. A crash leaves the job running until River's rescuer moves it on, a minute after its timeout.
 - **Retention.** River deletes a completed job a minute after it finishes and a cancelled or discarded one after a week. River's own info logs (client start, leadership, each failed attempt) are dropped; the worker logs each failed attempt as a warning.
@@ -481,7 +483,7 @@ From the moment recording starts, the coordinator hands the recorder's 10 ms fra
 
 Each `Next` that decodes a chunk takes about 12 to 25 ms, so the overlay shows a word within about 0.2 s of its end at `low` and `balanced`, and within a second at `accurate`. Every preset transcribes the fixture without error; `accurate` is the one the model card's word error rates are measured with.
 
-**Measured end to end** (`TestLiveNemotronDictation`, `TestLiveParakeetChunkedDictation` in `internal/engine/nemo`, the coordinator on the real engine with the recording played in 10 ms frames, M4 Max, Metal):
+**Measured end to end** (`TestLiveNemotronDictation`, `TestLiveParakeetChunkedDictation` in `engine/nemo`, the coordinator on the real engine with the recording played in 10 ms frames, M4 Max, Metal):
 
 - Nemotron, `balanced`, the fixture in real time: words show in the overlay a median 125 ms and at most 209 ms after they end, and the transcript is ready 30 ms after the recording stops.
 - Parakeet TDT 0.6B v2, a two-minute dictation (the fixture eleven times): decoded in 32 chunks while recording, ready 57 ms after the recording stops, word for word what was said. Decoding the same recording whole takes 1.2 s.
@@ -513,5 +515,6 @@ Goroutines talk through channels and the coordinator; nothing outside the main t
 - **Webhook jobs**: `os.UserConfigDir()/goscriber/jobs.sqlite3`, created when a webhook URL is first set
 - **Logs**: `os.UserCacheDir()/goscriber/logs/goscriber.log`
 - **API keys** of LLM providers: the OS keychain, as "Goscriber LLM API key" under each base URL; never in `settings.json`
+- **Webhook passwords and tokens**: the OS keychain, as "Goscriber webhook secret" under each webhook URL; never in `settings.json` or `jobs.sqlite3`
 - **Single instance**: `os.UserConfigDir()/goscriber/goscriber.lock` and `…/goscriber.sock` (the [control socket](#single-instance-and-remote-control))
 - **Login item** on Linux: `$XDG_CONFIG_HOME/autostart/io.github.opragmatico.goscriber.desktop` ([launch at login](#launch-at-login)); `GOSCRIBER_HOME` does not move it

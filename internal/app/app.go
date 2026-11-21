@@ -6,8 +6,8 @@ import (
 	"os"
 	"sync"
 
+	"github.com/opragmatico/goscriber/engine"
 	"github.com/opragmatico/goscriber/internal/config"
-	"github.com/opragmatico/goscriber/internal/engine"
 	"github.com/opragmatico/goscriber/internal/instance"
 	"github.com/opragmatico/goscriber/internal/logging"
 )

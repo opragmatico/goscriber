@@ -20,7 +20,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/opragmatico/goscriber/internal/engine"
+	"github.com/opragmatico/goscriber/engine"
 )
 
 // Silence is the shortest warm-up: enough for the pipelines, and all a

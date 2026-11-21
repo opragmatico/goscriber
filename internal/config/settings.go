@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // ActivationMode is how the transcribe shortcut's key events drive a recording.
@@ -95,6 +96,17 @@ const (
 	RetentionDays3         RecordingRetention = "days_3"
 	RetentionWeeks2        RecordingRetention = "weeks_2"
 	RetentionMonths3       RecordingRetention = "months_3"
+)
+
+// WebhookAuth is how the POSTs to the webhook authenticate.
+type WebhookAuth string
+
+// Webhook authentication options. The password or token is kept in the OS
+// keychain, never in the settings.
+const (
+	WebhookAuthNone   WebhookAuth = "none"
+	WebhookAuthBasic  WebhookAuth = "basic"  // HTTP Basic: WebhookUsername and a password
+	WebhookAuthBearer WebhookAuth = "bearer" // Authorization: Bearer and a token
 )
 
 // UnloadTimeout is how many seconds the model stays loaded with nothing to do
@@ -303,8 +315,12 @@ type Settings struct {
 
 	// WebhookURL receives every finished transcription with an HTTP POST
 	// (internal/webhook); "" sends nothing. CheckWebhookURL says which URLs
-	// it takes.
-	WebhookURL string `json:"webhook_url"`
+	// it takes. WebhookAuth is how the POSTs authenticate: the password or
+	// token is in the OS keychain under the URL, and WebhookUsername is
+	// Basic's user name.
+	WebhookURL      string      `json:"webhook_url"`
+	WebhookAuth     WebhookAuth `json:"webhook_auth"`
+	WebhookUsername string      `json:"webhook_username"`
 
 	// App. DebugMode reveals debug-only UI such as the Debug settings page;
 	// --debug turns it on for one session without saving it. Autostart is
@@ -358,6 +374,7 @@ func defaultsFor(goos string) Settings {
 		TypingTool:          TypingAuto,
 		HistoryLimit:        5,
 		RecordingRetention:  RetentionPreserveLimit,
+		WebhookAuth:         WebhookAuthNone,
 		LogLevel:            LogInfo,
 		ShowTrayIcon:        true,
 
@@ -558,12 +575,17 @@ func (s *Settings) normalize(def Settings) []string {
 	check("llm_provider", oneOf(s.LLMProvider, LLMProviders...),
 		func() { s.LLMProvider = LLMProviderFor(s.LLMBaseURL) })
 	check("webhook_url", CheckWebhookURL(s.WebhookURL) == nil, func() { s.WebhookURL = def.WebhookURL })
+	check("webhook_auth", oneOf(s.WebhookAuth, WebhookAuthNone, WebhookAuthBasic, WebhookAuthBearer),
+		func() { s.WebhookAuth = def.WebhookAuth })
+	check("webhook_username", CheckWebhookUsername(s.WebhookUsername) == nil, func() { s.WebhookUsername = def.WebhookUsername })
 	check("log_level", oneOf(s.LogLevel, LogDebug, LogInfo, LogWarn, LogError), func() { s.LogLevel = def.LogLevel })
 	return fixed
 }
 
 // CheckWebhookURL reports whether u can be the webhook_url setting: empty,
-// for no webhook, or an absolute http or https URL with a host.
+// for no webhook, or an absolute http or https URL with a host. A user name
+// and password in the URL are refused: they belong with Basic
+// authentication, whose password the keychain keeps.
 func CheckWebhookURL(u string) error {
 	if u == "" {
 		return nil
@@ -571,6 +593,22 @@ func CheckWebhookURL(u string) error {
 	p, err := url.Parse(u)
 	if err != nil || (p.Scheme != "https" && p.Scheme != "http") || p.Host == "" || p.Hostname() == "" {
 		return errors.New("enter a URL that starts with https:// or http://")
+	}
+	if p.User != nil {
+		return errors.New("leave the user name and password out of the URL: choose Basic authentication instead")
+	}
+	return nil
+}
+
+// CheckWebhookUsername reports whether name can be Basic's user name:
+// HTTP Basic cannot carry a colon in it (RFC 7617), nor control
+// characters.
+func CheckWebhookUsername(name string) error {
+	if strings.Contains(name, ":") {
+		return errors.New("a user name cannot hold a colon")
+	}
+	if strings.IndexFunc(name, unicode.IsControl) >= 0 {
+		return errors.New("a user name cannot hold control characters")
 	}
 	return nil
 }
