@@ -49,8 +49,8 @@ func (sh *shell) transcriptSink() pipeline.HistorySink {
 		return nil
 	}
 	return pipeline.HistorySinkFunc(func(ctx context.Context, e pipeline.HistoryEntry) error {
-		hook := e.Settings.WebhookURL
-		if sh.history.Retention().Limit <= 0 && hook == "" {
+		hook := webhook.EndpointFrom(e.Settings)
+		if sh.history.Retention().Limit <= 0 && hook.URL == "" {
 			return nil
 		}
 		saved, err := sh.history.Add(ctx, history.Record{
@@ -219,8 +219,8 @@ func (sh *shell) transcribeFile(ctx context.Context, path string, progress func(
 		Duration: time.Duration(len(samples)) * time.Second / time.Duration(rate),
 		Source:   filepath.Base(path),
 	}
-	hook := sh.rt.Settings.Get().WebhookURL
-	if sh.history == nil || (sh.history.Retention().Limit <= 0 && hook == "") {
+	hook := webhook.EndpointFrom(sh.rt.Settings.Get())
+	if sh.history == nil || (sh.history.Retention().Limit <= 0 && hook.URL == "") {
 		return e, nil
 	}
 	saved, err := sh.history.Add(ctx, history.Record{

@@ -107,6 +107,8 @@ type SettingsOptions struct {
 	// LLM backs the Post-processing page: the provider's models, the
 	// keychain and the Try button.
 	LLM LLMActions
+	// Webhook keeps the webhook's password or token in the keychain.
+	Webhook WebhookActions
 	// Devices lists the microphones and outputs for the General page. Nil
 	// means the system's, from internal/audio.
 	Devices func() (inputs, outputs []audio.Device, err error)
@@ -190,6 +192,7 @@ type SettingsWindow struct {
 	logs       logsState
 	history    historyState
 	llm        llmState
+	webhook    webhookState
 	onboarding onboardingState
 
 	// confirm asks before something that cannot be undone, such as

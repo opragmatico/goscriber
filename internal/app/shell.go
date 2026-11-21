@@ -197,7 +197,7 @@ func newShell(rt *Runtime, a fyne.App, opts Options) *shell {
 	}
 	sh.svc = newServices(rt, opts, sh.notices)
 	sh.history = openHistory(rt)
-	sh.webhooks = newWebhooks(rt, sh.notices, opts.Version)
+	sh.webhooks = newWebhooks(rt, sh.notices, sh.svc.webhookKeys, opts.Version)
 	sh.permissionRows = &latest{do: func(f func()) { sh.do(f) }}
 	if runtime.GOOS == "darwin" {
 		sh.secureInput = platform.SecureInputEnabled
@@ -364,6 +364,7 @@ func (sh *shell) newSettingsWindow() *ui.SettingsWindow {
 		History:            sh.historyStore(),
 		HistoryActions:     sh.historyActions(),
 		LLM:                sh.llmActions(),
+		Webhook:            sh.webhookActions(),
 		Devices:            listDevices,
 		Logs:               sh.rt.Log.Ring().Entries,
 		ForceDebug:         sh.opts.Debug,

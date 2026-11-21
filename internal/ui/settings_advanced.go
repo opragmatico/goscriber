@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"slices"
+	"strings"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -128,17 +129,108 @@ func (w *SettingsWindow) advancedPage() fyne.CanvasObject {
 				sliderSetting(w, "word_correction_threshold", func(s *config.Settings) *float64 { return &s.WordCorrectionThreshold },
 					0, 1, 0.02, formatOff)),
 		),
-		group("Webhook",
-			w.row("Send transcriptions to", WebhookHint,
-				textEntrySetting(w, "webhook_url", func(s *config.Settings) *string { return &s.WebhookURL },
-					"https://example.com/transcriptions", config.CheckWebhookURL)),
-		),
+		group("Webhook", w.webhookRows()...),
 	)
 }
 
-// WebhookHint explains the webhook URL setting.
-const WebhookHint = "Each finished transcription is posted to this URL as JSON, and sent again for about a day until it arrives. " +
-	"Its transcription_id is the number the History page shows. Empty sends nothing: transcripts leave this computer only once you set it."
+// WebhookActions keep the webhook's password or token in the keychain,
+// under its URL. Nil SetKey leaves the field out.
+type WebhookActions struct {
+	// HasKey reports whether a password or token is stored for the URL.
+	HasKey func(webhookURL string) (bool, error)
+	// SetKey stores the password or token for the URL; "" removes it.
+	SetKey func(webhookURL, secret string) error
+}
+
+// Texts of the webhook rows that tests look for.
+const (
+	// WebhookHint explains the webhook URL setting.
+	WebhookHint = "Each finished transcription is posted to this URL as JSON, and sent again for about a day until it arrives. " +
+		"Its transcription_id is the number the History page shows. Empty sends nothing: transcripts leave this computer only once you set it."
+	// WebhookAuthHint explains the authentication setting.
+	WebhookAuthHint = "How each POST proves it comes from you, in its Authorization header. " +
+		"The password or token is kept in the system keychain under this URL, not in the settings file."
+	LabelWebhookPassword = "Password"
+	LabelWebhookToken    = "Token"
+)
+
+// webhookState is what the webhook rows know beyond the settings.
+type webhookState struct {
+	user   fyne.CanvasObject // the user name's row
+	key    *keyField         // nil without WebhookActions.SetKey
+	keyRow fyne.CanvasObject
+}
+
+// webhookRows are the webhook's URL and its authentication: none, Basic
+// with a user name and password, or a Bearer token. Only the rows the
+// authentication uses are shown.
+func (w *SettingsWindow) webhookRows() []fyne.CanvasObject {
+	st := &w.webhook
+	authField := func(s *config.Settings) *config.WebhookAuth { return &s.WebhookAuth }
+	auth := choiceSetting(w, "webhook_auth", authField, []choice[config.WebhookAuth]{
+		{config.WebhookAuthNone, "None"},
+		{config.WebhookAuthBasic, "Basic: user name and password"},
+		{config.WebhookAuthBearer, "Bearer token"},
+	}, nil)
+	st.user = w.row("User name", "",
+		textEntrySetting(w, "webhook_username", func(s *config.Settings) *string { return &s.WebhookUsername },
+			"User name", config.CheckWebhookUsername))
+	rows := []fyne.CanvasObject{
+		w.row("Send transcriptions to", WebhookHint,
+			textEntrySetting(w, "webhook_url", func(s *config.Settings) *string { return &s.WebhookURL },
+				"https://example.com/transcriptions", config.CheckWebhookURL)),
+		w.row("Authentication", WebhookAuthHint, auth),
+		st.user,
+	}
+	if a := w.opts.Webhook; a.SetKey != nil {
+		st.key = newKeyField(w, "", webhookKeyHints(LabelWebhookPassword), a.HasKey, a.SetKey)
+		st.keyRow = w.row(LabelWebhookPassword, "", st.key.box)
+		rows = append(rows, st.keyRow)
+	}
+	// Every settings change runs this, the URL's included.
+	w.bind("webhook_auth", anyField(authField), auth, w.showWebhookAuth)
+	return rows
+}
+
+// showWebhookAuth shows the rows the authentication in s uses, the secret's
+// named for it, and whether one is stored for the URL.
+func (w *SettingsWindow) showWebhookAuth(s config.Settings) {
+	st := &w.webhook
+	showIf(st.user, s.WebhookAuth == config.WebhookAuthBasic)
+	if st.key == nil {
+		return
+	}
+	secret := s.WebhookAuth == config.WebhookAuthBasic || s.WebhookAuth == config.WebhookAuthBearer
+	showIf(st.keyRow, secret)
+	if !secret {
+		return
+	}
+	name := LabelWebhookToken
+	if s.WebhookAuth == config.WebhookAuthBasic {
+		name = LabelWebhookPassword
+	}
+	rowLabel(st.keyRow).SetText(name)
+	st.key.entry.SetPlaceHolder(name)
+	st.key.setHints(webhookKeyHints(name))
+	st.key.show(s.WebhookURL)
+}
+
+// webhookKeyHints are what the note under the webhook's password or token
+// says.
+func webhookKeyHints(name string) keyHints {
+	lower := strings.ToLower(name)
+	return keyHints{
+		stored:    fmt.Sprintf("A %s is stored for this URL. Type another to replace it.", lower),
+		none:      fmt.Sprintf("No %s is stored for this URL: transcriptions wait to be sent until you store one.", lower),
+		unknown:   "The keychain could not be read.",
+		noAccount: "Set the URL first: the " + lower + " is stored under it.",
+	}
+}
+
+// rowLabel is the label of a row that SettingsWindow.row made.
+func rowLabel(row fyne.CanvasObject) *widget.Label {
+	return row.(*fyne.Container).Objects[0].(*widget.Label)
+}
 
 // LaunchAtLoginHint explains the launch at login setting where Goscriber
 // can launch at login.

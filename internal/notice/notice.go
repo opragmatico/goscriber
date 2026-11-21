@@ -86,6 +86,9 @@ const (
 	// ActionOpenPostProcessing opens the Post-processing page of the
 	// settings window.
 	ActionOpenPostProcessing ActionID = "open_post_processing"
+	// ActionOpenAdvanced opens the Advanced page of the settings window,
+	// where the webhook is set up.
+	ActionOpenAdvanced ActionID = "open_advanced"
 )
 
 // Action is a notice's button.
@@ -279,7 +282,23 @@ func WebhookFailed(host string, attempts int, reason error) Notice {
 	if attempts > 1 {
 		tries = fmt.Sprintf(" in %d attempts", attempts)
 	}
-	return New(CodeWebhookFailed, fmt.Sprintf("A transcription could not be sent to %s%s: %v. It will not be sent again.", host, tries, reason))
+	n := New(CodeWebhookFailed, fmt.Sprintf("A transcription could not be sent to %s%s: %v. It will not be sent again.", host, tries, reason))
+	n.Action = Action{Label: "Open Settings", ID: ActionOpenAdvanced}
+	return n
+}
+
+// WebhookSecretMissing is the notice for a transcription queued for the
+// webhook at host, which authenticates with a secret (a "password" or a
+// "token") the keychain does not hold, or cannot give: it waits to be
+// sent until the secret is stored, or its attempts run out.
+func WebhookSecretMissing(host, secret string, err error) Notice {
+	why := fmt.Sprintf("no %s for it is in the keychain", secret)
+	if err != nil {
+		why = fmt.Sprintf("its %s could not be read from the keychain (%v)", secret, err)
+	}
+	n := New(CodeWebhookFailed, fmt.Sprintf("Transcriptions wait to be sent to %s: %s. Store it in Settings → Advanced → Webhook.", host, why))
+	n.Action = Action{Label: "Open Settings", ID: ActionOpenAdvanced}
+	return n
 }
 
 // WebhookUnavailable is the notice for transcriptions that cannot be queued

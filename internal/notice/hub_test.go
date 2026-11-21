@@ -346,9 +346,16 @@ func TestWebhookNotices(t *testing.T) {
 		{WebhookFailed("hooks.example.com", 1, refused), "A transcription could not be sent to hooks.example.com: the server answered 404 Not Found. It will not be sent again."},
 		{WebhookFailed("hooks.example.com", 14, errors.New("no answer within 30 s")), "A transcription could not be sent to hooks.example.com in 14 attempts: no answer within 30 s. It will not be sent again."},
 		{WebhookUnavailable("hooks.example.com", errors.New("disk full")), "Transcriptions cannot be sent to hooks.example.com: the jobs database could not be opened (disk full)."},
+		{WebhookSecretMissing("hooks.example.com", "token", nil), "Transcriptions wait to be sent to hooks.example.com: no token for it is in the keychain. Store it in Settings → Advanced → Webhook."},
+		{WebhookSecretMissing("hooks.example.com", "password", errors.New("locked")), "Transcriptions wait to be sent to hooks.example.com: its password could not be read from the keychain (locked). Store it in Settings → Advanced → Webhook."},
 	} {
 		if tt.n.Code != CodeWebhookFailed || tt.n.Level != LevelWarning || tt.n.Persistent() || tt.n.Message != tt.want {
 			t.Errorf("got %+v, want the message %q", tt.n, tt.want)
+		}
+	}
+	for _, n := range []Notice{WebhookFailed("h", 1, errors.New("x")), WebhookSecretMissing("h", "token", nil)} {
+		if n.Action.ID != ActionOpenAdvanced {
+			t.Errorf("%q: action %+v, want the Advanced page", n.Message, n.Action)
 		}
 	}
 }

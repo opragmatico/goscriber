@@ -20,6 +20,7 @@ import (
 	"github.com/opragmatico/goscriber/internal/pipeline"
 	"github.com/opragmatico/goscriber/internal/platform"
 	"github.com/opragmatico/goscriber/internal/ui"
+	"github.com/opragmatico/goscriber/internal/webhook"
 )
 
 // services are what dictation runs on: the microphone, the speech engine,
@@ -37,6 +38,8 @@ type services struct {
 	player recordingPlayer
 	// keys keeps the API keys of LLM providers.
 	keys secrets
+	// webhookKeys keeps the webhooks' passwords and tokens.
+	webhookKeys secrets
 }
 
 // feedback plays the cues and mutes other audio around recordings.
@@ -79,12 +82,13 @@ func systemServices(rt *Runtime, opts Options, notices *notice.Hub) services {
 		engine: autounload.New(
 			warmup.New(speechEngine(rt, opts, s, notices), warmup.Options{Longest: pipeline.LongestChunk, Log: rt.Log.Logger}),
 			s.ModelUnloadTimeout.Duration(), rt.Log.Logger),
-		output:   output.New(platform.GeneralPasteboard(), platform.Keyboard{Settings: rt.Settings.Get, Log: rt.Log.Logger}, rt.Log.Logger),
-		models:   pipeline.CatalogModels{Manager: files},
-		files:    files,
-		feedback: audio.NewFeedback(audio.NewPlayer(), platform.MuteOutput, rt.Log.Logger),
-		player:   audio.NewPlayer(),
-		keys:     keychain.New(llm.KeychainService),
+		output:      output.New(platform.GeneralPasteboard(), platform.Keyboard{Settings: rt.Settings.Get, Log: rt.Log.Logger}, rt.Log.Logger),
+		models:      pipeline.CatalogModels{Manager: files},
+		files:       files,
+		feedback:    audio.NewFeedback(audio.NewPlayer(), platform.MuteOutput, rt.Log.Logger),
+		player:      audio.NewPlayer(),
+		keys:        keychain.New(llm.KeychainService),
+		webhookKeys: keychain.New(webhook.KeychainService),
 	}
 }
 

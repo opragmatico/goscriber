@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -69,18 +70,62 @@ const (
 	failedRetention = 7 * 24 * time.Hour
 )
 
+// KeychainService is the name the OS keychain shows the webhooks'
+// passwords and tokens under, each under its URL (KeyAccount).
+const KeychainService = "Goscriber webhook secret"
+
+// KeyAccount is the keychain account a webhook URL's password or token is
+// stored under: the URL itself. Each URL keeps its own, so a job queued
+// for one URL never sends the secret of another.
+func KeyAccount(webhookURL string) string { return strings.TrimSpace(webhookURL) }
+
+// Endpoint is where transcriptions go, and how the POSTs authenticate.
+type Endpoint struct {
+	URL string
+	// Auth is how the POSTs authenticate. Basic and Bearer send the
+	// password or token Options.Secret returns for KeyAccount(URL).
+	Auth config.WebhookAuth
+	// Username is Basic's user name.
+	Username string
+}
+
+// EndpointFrom is the endpoint the settings name; its URL is "" when there
+// is no webhook.
+func EndpointFrom(s config.Settings) Endpoint {
+	return Endpoint{URL: s.WebhookURL, Auth: s.WebhookAuth, Username: s.WebhookUsername}
+}
+
+// NeedsSecret reports whether the endpoint's authentication sends a
+// password or token from the keychain.
+func (e Endpoint) NeedsSecret() bool {
+	return e.Auth == config.WebhookAuthBasic || e.Auth == config.WebhookAuthBearer
+}
+
+// SecretName is what the endpoint's secret is called: "password" or
+// "token".
+func (e Endpoint) SecretName() string {
+	if e.Auth == config.WebhookAuthBasic {
+		return "password"
+	}
+	return "token"
+}
+
 // args are a job's arguments, stored as JSON in the jobs database: the
-// delivery's ID, the URL the transcription was queued for, and the
-// transcription.
+// delivery's ID, the endpoint the transcription was queued for, without
+// its password or token, and the transcription.
 type args struct {
 	// ID identifies the delivery, in the webhook-id header: a random UUID,
 	// made when the job is queued and stored with it, so every attempt
 	// carries the same one, and no other delivery, from this machine or
 	// another, ever does.
-	ID            string        `json:"id"`
-	URL           string        `json:"url"`
-	Transcription Transcription `json:"transcription"`
+	ID            string             `json:"id"`
+	URL           string             `json:"url"`
+	Auth          config.WebhookAuth `json:"auth,omitempty"`
+	Username      string             `json:"username,omitempty"`
+	Transcription Transcription      `json:"transcription"`
 }
+
+func (a args) endpoint() Endpoint { return Endpoint{URL: a.URL, Auth: a.Auth, Username: a.Username} }
 
 // Kind implements river.JobArgs.
 func (args) Kind() string { return "transcription_webhook" }
@@ -112,6 +157,11 @@ type Options struct {
 	// Log gets a line per failed attempt, and River's own warnings and
 	// errors. Nil logs nothing.
 	Log *slog.Logger
+	// Secret returns the password or token stored for a keychain account
+	// (KeyAccount), or "" when there is none. Every attempt that
+	// authenticates asks, so a secret replaced meanwhile is the one sent.
+	// Nil has none.
+	Secret func(account string) (string, error)
 
 	// Tests shorten these; zero means the default.
 	maxAttempts    int
@@ -177,6 +227,7 @@ func newQueue(ctx context.Context, db *sql.DB, opts Options) (*Queue, error) {
 		userAgent: opts.UserAgent,
 		timeout:   timeout,
 		onFailure: opts.OnFailure,
+		secret:    opts.Secret,
 		log:       log,
 	})
 	cfg := &river.Config{
@@ -212,21 +263,33 @@ func (q *Queue) Start(ctx context.Context) error {
 	return q.client.Start(ctx)
 }
 
-// Enqueue queues t to be sent to webhookURL and returns the delivery's ID,
-// which every attempt sends as webhook-id. The job keeps the URL, so a
-// later change of the setting leaves it alone.
-func (q *Queue) Enqueue(ctx context.Context, webhookURL string, t Transcription) (string, error) {
-	if webhookURL == "" {
+// Enqueue queues t to be sent to the endpoint and returns the delivery's
+// ID, which every attempt sends as webhook-id. The job keeps the endpoint,
+// without its secret, so a later change of the settings leaves it alone.
+func (q *Queue) Enqueue(ctx context.Context, e Endpoint, t Transcription) (string, error) {
+	if e.URL == "" {
 		return "", errors.New("webhook: no URL")
 	}
-	if err := config.CheckWebhookURL(webhookURL); err != nil {
+	if err := config.CheckWebhookURL(e.URL); err != nil {
+		return "", fmt.Errorf("webhook: %w", err)
+	}
+	if err := config.CheckWebhookUsername(e.Username); err != nil {
 		return "", fmt.Errorf("webhook: %w", err)
 	}
 	if t.ID <= 0 {
 		return "", errors.New("webhook: the transcription has no ID")
 	}
 	t.StartedAt = t.StartedAt.UTC().Truncate(time.Millisecond)
-	a := args{ID: uuid.NewString(), URL: webhookURL, Transcription: t}
+	a := args{ID: uuid.NewString(), URL: e.URL, Transcription: t}
+	switch e.Auth {
+	case config.WebhookAuthNone, "":
+	case config.WebhookAuthBasic:
+		a.Auth, a.Username = e.Auth, e.Username
+	case config.WebhookAuthBearer:
+		a.Auth = e.Auth
+	default:
+		return "", fmt.Errorf("webhook: unknown authentication %q", e.Auth)
+	}
 	if _, err := q.client.Insert(ctx, a, nil); err != nil {
 		return "", fmt.Errorf("webhook: queue the transcription: %w", err)
 	}

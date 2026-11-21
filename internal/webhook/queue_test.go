@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/opragmatico/goscriber/internal/config"
 )
 
 var ctx = context.Background()
@@ -38,8 +40,8 @@ type receiver struct {
 
 // request is what a receiver got.
 type request struct {
-	method, path, contentType, webhookID, userAgent string
-	body                                            []byte
+	method, path, contentType, webhookID, userAgent, authorization string
+	body                                                           []byte
 }
 
 func newReceiver(t *testing.T, statuses ...int) *receiver {
@@ -55,7 +57,7 @@ func (r *receiver) serve(w http.ResponseWriter, req *http.Request) {
 	r.mu.Lock()
 	r.got = append(r.got, request{
 		method: req.Method, path: req.URL.Path, contentType: req.Header.Get("Content-Type"),
-		webhookID: req.Header.Get("webhook-id"), userAgent: req.Header.Get("User-Agent"), body: body,
+		webhookID: req.Header.Get("webhook-id"), userAgent: req.Header.Get("User-Agent"), authorization: req.Header.Get("Authorization"), body: body,
 	})
 	status := http.StatusOK
 	if len(r.statuses) > 0 {
@@ -171,7 +173,7 @@ func TestSendsTheTranscription(t *testing.T) {
 	r := newReceiver(t)
 	var f failures
 	q := startQueue(t, testOptions(&f))
-	id, err := q.Enqueue(ctx, r.URL+"/transcriptions?token=x", transcription(1))
+	id, err := q.Enqueue(ctx, Endpoint{URL: r.URL + "/transcriptions?token=x"}, transcription(1))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +221,7 @@ func TestRetriesWithTheSameID(t *testing.T) {
 			r := newReceiver(t, status, status, http.StatusNoContent)
 			var f failures
 			q := startQueue(t, testOptions(&f))
-			id, err := q.Enqueue(ctx, r.URL, transcription(2))
+			id, err := q.Enqueue(ctx, Endpoint{URL: r.URL}, transcription(2))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -248,7 +250,7 @@ func TestRefusalsAreNotRetried(t *testing.T) {
 			r := newReceiver(t, status)
 			var f failures
 			q := startQueue(t, testOptions(&f))
-			if _, err := q.Enqueue(ctx, r.URL, transcription(3)); err != nil {
+			if _, err := q.Enqueue(ctx, Endpoint{URL: r.URL}, transcription(3)); err != nil {
 				t.Fatal(err)
 			}
 			eventually(t, "the failure", func() bool { return len(f.list()) == 1 })
@@ -276,7 +278,7 @@ func TestFollowsRedirectsThatKeepThePOST(t *testing.T) {
 	t.Cleanup(redirect.Close)
 	var f failures
 	q := startQueue(t, testOptions(&f))
-	if _, err := q.Enqueue(ctx, redirect.URL, transcription(4)); err != nil {
+	if _, err := q.Enqueue(ctx, Endpoint{URL: redirect.URL}, transcription(4)); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "the POST at the target", func() bool { return len(target.requests()) == 1 })
@@ -293,7 +295,7 @@ func TestGivesUpAfterTheLastAttempt(t *testing.T) {
 	r := newReceiver(t, http.StatusBadGateway)
 	var f failures
 	q := startQueue(t, testOptions(&f))
-	if _, err := q.Enqueue(ctx, r.URL, transcription(5)); err != nil {
+	if _, err := q.Enqueue(ctx, Endpoint{URL: r.URL}, transcription(5)); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "the failure", func() bool { return len(f.list()) == 1 })
@@ -316,7 +318,7 @@ func TestNetworkErrorsAreRetriedWithoutShowingTheURL(t *testing.T) {
 
 	var f failures
 	q := startQueue(t, testOptions(&f))
-	if _, err := q.Enqueue(ctx, "http://"+addr+"/hook/s3cret?token=t0ken", transcription(6)); err != nil {
+	if _, err := q.Enqueue(ctx, Endpoint{URL: "http://" + addr + "/hook/s3cret?token=t0ken"}, transcription(6)); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "the failure", func() bool { return len(f.list()) == 1 })
@@ -331,7 +333,7 @@ func TestNetworkErrorsAreRetriedWithoutShowingTheURL(t *testing.T) {
 	opts.attemptTimeout = 100 * time.Millisecond
 	opts.maxAttempts = 2
 	q = startQueue(t, opts)
-	if _, err := q.Enqueue(ctx, slow.URL, transcription(7)); err != nil {
+	if _, err := q.Enqueue(ctx, Endpoint{URL: slow.URL}, transcription(7)); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "the timeout failure", func() bool { return len(f.list()) == 2 })
@@ -352,7 +354,7 @@ func TestQueuedTranscriptionSurvivesAClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id, err := q.Enqueue(ctx, r.URL, transcription(8))
+	id, err := q.Enqueue(ctx, Endpoint{URL: r.URL}, transcription(8))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +400,7 @@ func TestInterruptedAttemptDoesNotCount(t *testing.T) {
 	if err := q.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	id, err := q.Enqueue(ctx, r.URL, transcription(9))
+	id, err := q.Enqueue(ctx, Endpoint{URL: r.URL}, transcription(9))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,11 +442,11 @@ func TestEachDeliveryHasItsOwnID(t *testing.T) {
 	r := newReceiver(t)
 	var f failures
 	q := startQueue(t, testOptions(&f))
-	first, err := q.Enqueue(ctx, r.URL, transcription(10))
+	first, err := q.Enqueue(ctx, Endpoint{URL: r.URL}, transcription(10))
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := q.Enqueue(ctx, r.URL, transcription(10))
+	second, err := q.Enqueue(ctx, Endpoint{URL: r.URL}, transcription(10))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -466,16 +468,19 @@ func TestEnqueueRefusesWhatCannotBeSent(t *testing.T) {
 	var f failures
 	q := openQueue(t, filepath.Join(t.TempDir(), "jobs.sqlite3"), testOptions(&f))
 	for _, tt := range []struct {
-		url string
-		t   Transcription
+		e Endpoint
+		t Transcription
 	}{
-		{"", transcription(1)},
-		{"ftp://example.com/x", transcription(1)},
-		{"example.com/hook", transcription(1)},
-		{"https://example.com/hook", transcription(0)},
+		{Endpoint{}, transcription(1)},
+		{Endpoint{URL: "ftp://example.com/x"}, transcription(1)},
+		{Endpoint{URL: "example.com/hook"}, transcription(1)},
+		{Endpoint{URL: "https://user:pass@example.com/hook"}, transcription(1)},
+		{Endpoint{URL: "https://example.com/hook"}, transcription(0)},
+		{Endpoint{URL: "https://example.com/hook", Auth: "digest"}, transcription(1)},
+		{Endpoint{URL: "https://example.com/hook", Auth: config.WebhookAuthBasic, Username: "a:b"}, transcription(1)},
 	} {
-		if _, err := q.Enqueue(ctx, tt.url, tt.t); err == nil {
-			t.Errorf("Enqueue(%q, ID %d) succeeded", tt.url, tt.t.ID)
+		if _, err := q.Enqueue(ctx, tt.e, tt.t); err == nil {
+			t.Errorf("Enqueue(%+v, ID %d) succeeded", tt.e, tt.t.ID)
 		}
 	}
 	if pending, err := q.Pending(ctx); err != nil || pending {
@@ -502,5 +507,174 @@ func TestErrorsForRefusals(t *testing.T) {
 	}
 	if errors.Is(&statusError{status: "503 Service Unavailable"}, errRefused) {
 		t.Error("a 503 counts as refused")
+	}
+}
+
+// keychain is a keychain in memory, for Options.Secret; it counts the reads.
+type keychain struct {
+	mu      sync.Mutex
+	secrets map[string]string
+	err     error
+	reads   int
+}
+
+func (k *keychain) get(account string) (string, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.reads++
+	return k.secrets[account], k.err
+}
+
+func (k *keychain) set(account, secret string) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.secrets == nil {
+		k.secrets = map[string]string{}
+	}
+	k.secrets[account] = secret
+}
+
+// Basic and Bearer send the secret stored for the URL; none sends nothing.
+func TestAuthentication(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		auth     config.WebhookAuth
+		username string
+		want     string
+	}{
+		{config.WebhookAuthNone, "", ""},
+		{"", "", ""},
+		{config.WebhookAuthBasic, "goscriber", "Basic Z29zY3JpYmVyOnMzY3JldA=="}, // goscriber:s3cret
+		{config.WebhookAuthBasic, "", "Basic OnMzY3JldA=="},                      // :s3cret
+		{config.WebhookAuthBearer, "ignored", "Bearer s3cret"},
+	} {
+		t.Run(string(tt.auth)+"/"+tt.username, func(t *testing.T) {
+			t.Parallel()
+			r := newReceiver(t)
+			var f failures
+			var k keychain
+			k.set(r.URL, "s3cret")
+			k.set(r.URL+"/other", "not this one")
+			opts := testOptions(&f)
+			opts.Secret = k.get
+			q := startQueue(t, opts)
+			if _, err := q.Enqueue(ctx, Endpoint{URL: r.URL, Auth: tt.auth, Username: tt.username}, transcription(11)); err != nil {
+				t.Fatal(err)
+			}
+			eventually(t, "the POST", func() bool { return len(r.requests()) == 1 })
+			if got := r.requests()[0].authorization; got != tt.want {
+				t.Errorf("Authorization %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// Every attempt reads the secret again, so one replaced between attempts
+// is the one sent; and one missing is retried until it is stored, without
+// reaching the server meanwhile.
+func TestSecretIsReadAtEveryAttempt(t *testing.T) {
+	t.Parallel()
+	r := newReceiver(t, http.StatusServiceUnavailable, http.StatusOK)
+	var f failures
+	var k keychain
+	opts := testOptions(&f)
+	opts.Secret = k.get
+	opts.maxAttempts = 50
+	opts.retryDelay = 20 * time.Millisecond
+	q := startQueue(t, opts)
+	if _, err := q.Enqueue(ctx, Endpoint{URL: r.URL, Auth: config.WebhookAuthBearer}, transcription(12)); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "a few attempts without a token", func() bool {
+		k.mu.Lock()
+		defer k.mu.Unlock()
+		return k.reads >= 2
+	})
+	if n := len(r.requests()); n != 0 {
+		t.Fatalf("%d requests went out without the token", n)
+	}
+	k.set(r.URL, "first")
+	eventually(t, "the attempt the server fails", func() bool { return len(r.requests()) == 1 })
+	k.set(r.URL, "second")
+	eventually(t, "the attempt it accepts", func() bool { return len(r.requests()) == 2 })
+	if got := []string{r.requests()[0].authorization, r.requests()[1].authorization}; got[0] != "Bearer first" || got[1] != "Bearer second" {
+		t.Errorf("Authorization %q, want the token as it was at each attempt", got)
+	}
+	if got := f.list(); len(got) != 0 {
+		t.Errorf("failures %+v", got)
+	}
+}
+
+// A secret never stored, or a keychain that cannot be read, fails the
+// attempts and says so; no request goes out.
+func TestMissingSecretIsReported(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name string
+		e    func(url string) Endpoint
+		k    *keychain
+		want string
+	}{
+		{
+			"no password", func(u string) Endpoint { return Endpoint{URL: u, Auth: config.WebhookAuthBasic, Username: "me"} },
+			&keychain{}, "no password for it is in the keychain",
+		},
+		{
+			"no token", func(u string) Endpoint { return Endpoint{URL: u, Auth: config.WebhookAuthBearer} },
+			&keychain{}, "no token for it is in the keychain",
+		},
+		{
+			"locked keychain", func(u string) Endpoint { return Endpoint{URL: u, Auth: config.WebhookAuthBearer} },
+			&keychain{err: errors.New("the keychain is locked")}, "its token could not be read from the keychain: the keychain is locked",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			r := newReceiver(t)
+			var f failures
+			opts := testOptions(&f)
+			opts.Secret = tt.k.get
+			q := startQueue(t, opts)
+			if _, err := q.Enqueue(ctx, tt.e(r.URL), transcription(13)); err != nil {
+				t.Fatal(err)
+			}
+			eventually(t, "the failure", func() bool { return len(f.list()) == 1 })
+			if got := f.list()[0]; got.Attempts != 3 || got.Err.Error() != tt.want {
+				t.Errorf("failure %+v, want 3 attempts and %q", got, tt.want)
+			}
+			if n := len(r.requests()); n != 0 {
+				t.Errorf("%d requests went out", n)
+			}
+		})
+	}
+}
+
+// A redirect to another host does not take the credentials along.
+func TestCredentialsStayWithTheirHost(t *testing.T) {
+	t.Parallel()
+	target := newReceiver(t)
+	// The target as localhost, a host other than the 127.0.0.1 it is
+	// served on, which the redirect comes from.
+	elsewhere := strings.Replace(target.URL, "127.0.0.1", "localhost", 1)
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Header.Get("Authorization") != "Bearer s3cret" {
+			http.Error(w, "no token", http.StatusUnauthorized)
+			return
+		}
+		http.Redirect(w, req, elsewhere+"/moved", http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(redirect.Close)
+	var f failures
+	var k keychain
+	k.set(redirect.URL, "s3cret")
+	opts := testOptions(&f)
+	opts.Secret = k.get
+	q := startQueue(t, opts)
+	if _, err := q.Enqueue(ctx, Endpoint{URL: redirect.URL, Auth: config.WebhookAuthBearer}, transcription(14)); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the POST at the other host", func() bool { return len(target.requests()) == 1 })
+	if got := target.requests()[0]; got.authorization != "" || got.path != "/moved" {
+		t.Errorf("request %+v: the token followed the redirect", got)
 	}
 }

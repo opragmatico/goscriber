@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -729,5 +730,111 @@ func TestWebhookURLSetting(t *testing.T) {
 	}
 	if s := tw.reopen(t); s.WebhookURL != "" {
 		t.Errorf("after a restart: %q", s.WebhookURL)
+	}
+}
+
+// fakeWebhookKeys is a keychain in memory for the webhook rows.
+type fakeWebhookKeys struct {
+	mu   sync.Mutex
+	keys map[string]string
+}
+
+func (f *fakeWebhookKeys) actions() WebhookActions {
+	return WebhookActions{
+		HasKey: func(u string) (bool, error) {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			return f.keys[u] != "", nil
+		},
+		SetKey: func(u, secret string) error {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if secret == "" {
+				delete(f.keys, u)
+			} else {
+				f.keys[u] = secret
+			}
+			return nil
+		},
+	}
+}
+
+func (f *fakeWebhookKeys) get(u string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.keys[u]
+}
+
+// The webhook's authentication shows only the rows it uses: Basic a user
+// name and a password, Bearer a token. The secret goes to the keychain
+// under the URL, never to the settings, and needs a URL to be stored under.
+func TestWebhookAuthenticationRows(t *testing.T) {
+	keys := &fakeWebhookKeys{keys: map[string]string{}}
+	tw := newTestWindow(t, func(o *SettingsOptions) { o.Webhook = keys.actions() })
+	tw.show(PageAdvanced)
+	st := &tw.webhook
+	if st.user.Visible() || st.keyRow.Visible() {
+		t.Fatal("with no authentication, the user name or the secret shows")
+	}
+
+	tw.bound(t, "webhook_auth").(*widget.Select).SetSelected("Bearer token")
+	if st.user.Visible() || !st.keyRow.Visible() || rowLabel(st.keyRow).Text != LabelWebhookToken {
+		t.Fatalf("Bearer: user name shown %v, secret row %q shown %v", st.user.Visible(), rowLabel(st.keyRow).Text, st.keyRow.Visible())
+	}
+	if !st.key.entry.Disabled() || !strings.Contains(st.key.note.Text, "Set the URL first") {
+		t.Errorf("without a URL the token can be stored: %q", st.key.note.Text)
+	}
+
+	const hook = "https://hooks.example.com/goscriber"
+	tw.bound(t, "webhook_url").(*widget.Entry).SetText(hook)
+	tw.q.until(t, "the note about the token", func() bool { return strings.HasPrefix(st.key.note.Text, "No token is stored") })
+	st.key.entry.SetText("t0ken")
+	test.Tap(st.key.save)
+	tw.q.until(t, "the token stored", func() bool { return strings.HasPrefix(st.key.note.Text, "A token is stored") })
+	if keys.get(hook) != "t0ken" || st.key.entry.Text != "" || st.key.remove.Disabled() {
+		t.Errorf("keychain %v, field %q, Remove disabled %v", keys.keys, st.key.entry.Text, st.key.remove.Disabled())
+	}
+	if data, err := os.ReadFile(tw.store.Path()); err != nil || strings.Contains(string(data), "t0ken") {
+		t.Errorf("the token is in the settings file (%v)", err)
+	}
+
+	tw.bound(t, "webhook_auth").(*widget.Select).SetSelected("Basic: user name and password")
+	if !st.user.Visible() || !st.keyRow.Visible() || rowLabel(st.keyRow).Text != LabelWebhookPassword {
+		t.Fatalf("Basic: user name shown %v, secret row %q", st.user.Visible(), rowLabel(st.keyRow).Text)
+	}
+	user := tw.bound(t, "webhook_username").(*widget.Entry)
+	user.SetText("goscriber")
+	user.SetText("go:scriber")
+	if user.Validate() == nil {
+		t.Error("a user name with a colon passes")
+	}
+	if s := tw.store.Get(); s.WebhookAuth != config.WebhookAuthBasic || s.WebhookUsername != "goscriber" {
+		t.Errorf("saved %q as %q", s.WebhookAuth, s.WebhookUsername)
+	}
+
+	test.Tap(st.key.remove)
+	tw.q.until(t, "the password removed", func() bool { return strings.HasPrefix(st.key.note.Text, "No password is stored") })
+	if keys.get(hook) != "" {
+		t.Errorf("keychain still holds %v", keys.keys)
+	}
+
+	// Another URL has a key of its own.
+	keys.keys["https://other.example.com/in"] = "other"
+	tw.bound(t, "webhook_url").(*widget.Entry).SetText("https://other.example.com/in")
+	tw.q.until(t, "the other URL's password", func() bool { return strings.HasPrefix(st.key.note.Text, "A password is stored") })
+}
+
+// A URL with a user name and password in it is refused: they belong under
+// Basic authentication.
+func TestWebhookURLRefusesCredentials(t *testing.T) {
+	tw := newTestWindow(t, nil)
+	tw.show(PageAdvanced)
+	e := tw.bound(t, "webhook_url").(*widget.Entry)
+	e.SetText("https://me:s3cret@hooks.example.com/in")
+	if e.Validate() == nil {
+		t.Error("a URL with a password passes")
+	}
+	if got := tw.store.Get().WebhookURL; got != "" {
+		t.Errorf("saved %q", got)
 	}
 }
