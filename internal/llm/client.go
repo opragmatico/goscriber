@@ -15,23 +15,33 @@ import (
 	"time"
 )
 
-// Endpoint is an OpenAI-compatible API: its base URL, such as
-// http://localhost:11434/v1, and the key it takes, if any.
+// Endpoint is a provider's API: its base URL, such as
+// http://localhost:11434/v1, the key it takes, if any, and the wire format
+// it speaks.
 type Endpoint struct {
 	BaseURL string
-	// APIKey is sent as a bearer token; "" sends no Authorization header,
-	// as local providers want.
+	// APIKey is sent as a bearer token; "" sends none, as local providers
+	// want.
 	APIKey string
+	// API is ChatCompletions, the zero value, or Messages for Claude.
+	API API
 }
 
 // url joins the base URL and an endpoint path such as "/models".
 func (e Endpoint) url(path string) string { return strings.TrimRight(e.BaseURL, "/") + path }
 
-// RequestTimeout is how long a request may take, the retry without
-// reasoning_effort apart, before it counts as failed. It leaves room for
+// RequestTimeout is how long a request for a chunk of up to ChunkWords
+// words may take, the retry without reasoning_effort apart, before it
+// counts as failed; a longer chunk gets as many times more as its output
+// cap is a full one's (requestTimeout). It leaves room for
 // Ollama to load a model it unloaded (3.6 s for gemma4:26b on an M4 Max)
 // and for a 400-word chunk (69 s for 13 of them).
 const RequestTimeout = 30 * time.Second
+
+// ThinkingTimeout is RequestTimeout for a model that thinks at a set
+// effort (modelEfforts): thinking at "medium" comes before the answer, and
+// GPT-6.1 Sol writes at about 40 tokens a second.
+const ThinkingTimeout = 2 * time.Minute
 
 // maxResponse caps how much of a response is read.
 const maxResponse = 4 << 20
@@ -67,18 +77,49 @@ func rejected(err error) bool {
 	return ok && (se.Status == http.StatusBadRequest || se.Status == http.StatusUnprocessableEntity)
 }
 
-// Client talks to OpenAI-compatible providers through Chat Completions.
-// It is safe for concurrent use, and remembers which base URL and model
-// pairs reject reasoning_effort, so keep one for the life of the app.
+// Client talks to providers through Chat Completions, and to Claude
+// through its Messages API (claude.go). It is safe for concurrent use, and
+// remembers how far each base URL and model pair let thinking be turned
+// down, so keep one for the life of the app.
 type Client struct {
 	// HTTP sends the requests; nil means http.DefaultClient.
 	HTTP *http.Client
 	// Timeout bounds each request; 0 means RequestTimeout.
 	Timeout time.Duration
 
-	mu       sync.Mutex
-	noEffort map[string]bool // base URL + "\x00" + model
+	mu sync.Mutex
+	// effort is, by base URL + "\x00" + model, the index in efforts of the
+	// first reasoning_effort the pair did not reject; for Claude, 1 once
+	// the model rejected the extras of claudeRequest.
+	effort map[string]int
 }
+
+// efforts are the values of reasoning_effort tried in turn, least thinking
+// first, until a server takes one, for a model not in modelEfforts: "none"
+// turns thinking off on Ollama and Gemini 2.5 Flash; "minimal" and "low"
+// are for models that reject "none", such as gpt-oss-120b on Groq, which
+// takes "low" at the least; "" leaves the field out, for servers that know
+// none of them. A value taken is not always thinking turned off: Gemini 2.5 Pro,
+// Gemini 3 and Gemini 4 think whatever they are asked (gemini-4-hydrogen
+// takes "none" and still thinks for about 1,000 tokens on a 400-word
+// chunk), so their requests leave room for it (thinksAnyway); Gemini's
+// default model is asked at "medium" (modelEfforts).
+var efforts = []string{"none", "minimal", "low", ""}
+
+// modelEfforts are models asked to think at a set reasoning_effort instead
+// of as little as they allow: they skip the step-down through efforts, and
+// their requests leave room for the thinking, with thinkingMaxTokens more
+// output and ThinkingTimeout.
+var modelEfforts = map[string]string{
+	OpenAIModel: "medium",
+	GeminiModel: "medium",
+}
+
+// thinkingMaxTokens is how much a request to a model that thinks adds to
+// its output cap: the thinking counts toward the cap, so this leaves room
+// for it on top of the answer; the request timeout still bounds a model
+// that runs on.
+const thinkingMaxTokens = 16000
 
 func (c *Client) http() *http.Client {
 	if c.HTTP != nil {
@@ -94,23 +135,41 @@ func (c *Client) timeout() time.Duration {
 	return RequestTimeout
 }
 
+// requestTimeout bounds a request whose answer may be maxTokens long
+// (before any room for thinking): RequestTimeout, or ThinkingTimeout for a
+// model that thinks at a set effort, once per full chunk's worth of output
+// cap, so a 4,000-word chunk gets ten times what a 400-word one does.
+// Client.Timeout, when set, is used as it is.
+func (c *Client) requestTimeout(maxTokens int, thinking bool) time.Duration {
+	if c.Timeout > 0 {
+		return c.Timeout
+	}
+	base := RequestTimeout
+	if thinking {
+		base = ThinkingTimeout
+	}
+	full := TokensPerWord * ChunkWords
+	return base * time.Duration(max(1, (maxTokens+full-1)/full))
+}
+
 func effortKey(ep Endpoint, model string) string {
 	return strings.TrimRight(ep.BaseURL, "/") + "\x00" + model
 }
 
-func (c *Client) rejectsEffort(key string) bool {
+// effortFor is the index in efforts to start from for key.
+func (c *Client) effortFor(key string) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.noEffort[key]
+	return c.effort[key]
 }
 
-func (c *Client) rememberNoEffort(key string) {
+func (c *Client) rememberEffort(key string, i int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.noEffort == nil {
-		c.noEffort = map[string]bool{}
+	if c.effort == nil {
+		c.effort = map[string]int{}
 	}
-	c.noEffort[key] = true
+	c.effort[key] = i
 }
 
 type message struct {
@@ -140,14 +199,24 @@ type chatResponse struct {
 
 // Complete sends prompt to model as one user message and returns the
 // answer, which may be at most maxTokens long: an answer cut off there
-// fails with ErrTruncated. Thinking is turned off with reasoning_effort
-// "none"; a server that rejects the request with it (400 or 422) gets it
-// again without, and if that gets past its checks, the client leaves the
-// field out for this base URL and model from then on.
+// fails with ErrTruncated. Thinking is turned as far down as the model
+// allows: with reasoning_effort "none", and when the server rejects the
+// request with it (400 or 422), "minimal", "low", then no reasoning_effort. The
+// first value that gets past the server's checks is the one the client
+// starts from for this base URL and model from then on. A model in
+// modelEfforts is asked with its effort instead, and given room to think.
 func (c *Client) Complete(ctx context.Context, ep Endpoint, model, prompt string, maxTokens int) (string, error) {
+	if ep.API == Messages {
+		return c.claudeComplete(ctx, ep, model, prompt, maxTokens)
+	}
 	req := chatRequest{
 		Model:    model,
 		Messages: []message{{Role: "user", Content: prompt}},
+	}
+	effort, thinks := modelEfforts[model]
+	timeout := c.requestTimeout(maxTokens, thinks)
+	if thinks || thinksAnyway(ep.BaseURL) {
+		maxTokens += thinkingMaxTokens
 	}
 	// OpenAI's own API takes max_completion_tokens from every chat model,
 	// and only that from its reasoning models; max_tokens is what the rest
@@ -157,29 +226,34 @@ func (c *Client) Complete(ctx context.Context, ep Endpoint, model, prompt string
 	} else {
 		req.MaxTokens = maxTokens
 	}
-	key := effortKey(ep, model)
-	effort := !c.rejectsEffort(key)
-	if effort {
-		req.ReasoningEffort = "none"
+	if thinks {
+		req.ReasoningEffort = effort
+		return c.chat(ctx, ep, req, timeout)
 	}
-	answer, err := c.chat(ctx, ep, req)
-	if effort && rejected(err) {
-		req.ReasoningEffort = ""
-		answer, err = c.chat(ctx, ep, req)
+	key := effortKey(ep, model)
+	start := c.effortFor(key)
+	var answer string
+	var err error
+	for i := start; i < len(efforts); i++ {
+		req.ReasoningEffort = efforts[i]
+		answer, err = c.chat(ctx, ep, req, timeout)
 		if !rejected(err) {
-			c.rememberNoEffort(key)
+			if i != start {
+				c.rememberEffort(key, i)
+			}
+			break
 		}
 	}
 	return answer, err
 }
 
-func (c *Client) chat(ctx context.Context, ep Endpoint, body chatRequest) (string, error) {
+func (c *Client) chat(ctx context.Context, ep Endpoint, body chatRequest, timeout time.Duration) (string, error) {
 	data, err := json.Marshal(body)
 	if err != nil {
 		return "", err
 	}
 	var resp chatResponse
-	if err := c.do(ctx, ep, http.MethodPost, "/chat/completions", data, &resp); err != nil {
+	if err := c.doWithin(ctx, timeout, ep, http.MethodPost, "/chat/completions", data, &resp); err != nil {
 		return "", err
 	}
 	if len(resp.Choices) == 0 {
@@ -194,6 +268,9 @@ func (c *Client) chat(ctx context.Context, ep Endpoint, body chatRequest) (strin
 
 // Models lists the models the provider serves, sorted.
 func (c *Client) Models(ctx context.Context, ep Endpoint) ([]string, error) {
+	if ep.API == Messages {
+		return c.claudeModels(ctx, ep)
+	}
 	var resp struct {
 		Data []struct {
 			ID string `json:"id"`
@@ -204,8 +281,14 @@ func (c *Client) Models(ctx context.Context, ep Endpoint) ([]string, error) {
 	}
 	ids := make([]string, 0, len(resp.Data))
 	for _, m := range resp.Data {
-		if m.ID != "" {
-			ids = append(ids, m.ID)
+		id := m.ID
+		if isGemini(ep.BaseURL) {
+			// Gemini lists "models/gemini-4-hydrogen", and takes the model
+			// with or without the prefix.
+			id = strings.TrimPrefix(id, "models/")
+		}
+		if id != "" {
+			ids = append(ids, id)
 		}
 	}
 	slices.Sort(ids)
@@ -215,10 +298,15 @@ func (c *Client) Models(ctx context.Context, ep Endpoint) ([]string, error) {
 // do sends a request with a JSON body, if any, and decodes the JSON answer
 // into out.
 func (c *Client) do(ctx context.Context, ep Endpoint, method, path string, body []byte, out any) error {
+	return c.doWithin(ctx, c.timeout(), ep, method, path, body, out)
+}
+
+// doWithin is do with a timeout of its own.
+func (c *Client) doWithin(ctx context.Context, timeout time.Duration, ep Endpoint, method, path string, body []byte, out any) error {
 	if _, err := ParseBaseURL(ep.BaseURL); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(ctx, c.timeout())
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var r io.Reader
 	if body != nil {
@@ -238,7 +326,7 @@ func (c *Client) do(ctx context.Context, ep Endpoint, method, path string, body 
 	resp, err := c.http().Do(req)
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) && errors.Is(err, context.DeadlineExceeded) {
-			return fmt.Errorf("no answer within %s: %w", c.timeout(), context.DeadlineExceeded)
+			return fmt.Errorf("no answer within %s: %w", timeout, context.DeadlineExceeded)
 		}
 		return err
 	}
@@ -292,9 +380,19 @@ func ParseBaseURL(s string) (*url.URL, error) {
 }
 
 // isOpenAI reports whether baseURL is OpenAI's own API.
-func isOpenAI(baseURL string) bool {
+func isOpenAI(baseURL string) bool { return hostIs(baseURL, "api.openai.com") }
+
+// isGemini reports whether baseURL is Gemini's API.
+func isGemini(baseURL string) bool { return hostIs(baseURL, "generativelanguage.googleapis.com") }
+
+// thinksAnyway reports whether the models at baseURL think however little
+// reasoning_effort asks for, so a request's output cap must leave room for
+// the thinking, which counts toward it: Gemini's, from 2.5 Pro on.
+func thinksAnyway(baseURL string) bool { return isGemini(baseURL) }
+
+func hostIs(baseURL, host string) bool {
 	u, err := ParseBaseURL(baseURL)
-	return err == nil && strings.EqualFold(u.Hostname(), "api.openai.com")
+	return err == nil && strings.EqualFold(u.Hostname(), host)
 }
 
 // IsLocal reports whether baseURL is a server on this computer, such as

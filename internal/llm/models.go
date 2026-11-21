@@ -28,18 +28,30 @@ func SuggestedModel(memory uint64) string {
 	return SmallModel
 }
 
-// ModelFor is the model a job sends to: model when set, else, for a local
-// provider, the one suggested for memory. A hosted provider has no
-// default: its model must be chosen.
-func ModelFor(baseURL, model string, memory uint64) (string, error) {
+// DefaultModel is the model p is asked with at baseURL while none is
+// chosen: the provider's own default, else, for a provider on this
+// computer, the one suggested for memory. It is "" for the other providers
+// (OpenRouter, Groq, a server elsewhere), whose model must be chosen.
+func DefaultModel(p Provider, baseURL string, memory uint64) string {
 	switch {
-	case model != "":
-		return model, nil
+	case p.Model != "":
+		return p.Model
 	case IsLocal(baseURL):
-		return SuggestedModel(memory), nil
-	default:
-		return "", fmt.Errorf("no model is chosen for %s", baseURL)
+		return SuggestedModel(memory)
 	}
+	return ""
+}
+
+// ModelFor is the model a job sends to: model when set, else the
+// provider's default (DefaultModel).
+func ModelFor(p Provider, baseURL, model string, memory uint64) (string, error) {
+	if model != "" {
+		return model, nil
+	}
+	if m := DefaultModel(p, baseURL, memory); m != "" {
+		return m, nil
+	}
+	return "", fmt.Errorf("no model is chosen for %s", p.Name)
 }
 
 // FormatMemory writes memory in whole gigabytes, as "36 GB".

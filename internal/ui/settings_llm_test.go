@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -15,8 +16,8 @@ import (
 	"github.com/opragmatico/goscriber/internal/llm"
 )
 
-// fakeLLM backs the Post-processing page: a keychain in memory and a
-// provider serving two models.
+// fakeLLM backs the Post-processing page: a keychain in memory, Ollama
+// serving two models and Gemini two others, once it has a key.
 type fakeLLM struct {
 	mu     sync.Mutex
 	keys   map[string]string
@@ -26,12 +27,17 @@ type fakeLLM struct {
 
 func (f *fakeLLM) actions() LLMActions {
 	return LLMActions{
-		Models: func(_ context.Context, baseURL string) ([]string, error) {
+		Models: func(_ context.Context, p llm.Provider, baseURL string) ([]string, error) {
 			f.mu.Lock()
 			defer f.mu.Unlock()
 			f.listed = append(f.listed, baseURL)
-			if strings.Contains(baseURL, "down") {
+			switch {
+			case strings.Contains(baseURL, "down"):
 				return nil, errors.New("connection refused")
+			case p.Key == llm.KeyRequired && f.keys[baseURL] == "":
+				return nil, llm.ErrNoKey
+			case p.ID == config.LLMGemini:
+				return []string{"gemini-3.8-flash", "gemini-4-hydrogen"}, nil
 			}
 			return []string{"gemma4:26b", "gemma4:latest"}, nil
 		},
@@ -83,33 +89,120 @@ func boundAs[T fyne.CanvasObject](t *testing.T, tw *testWindow, key string) T {
 
 func TestPostProcessingProvider(t *testing.T) {
 	tw, f := newLLMWindow(t)
-	provider := boundAs[*widget.Select](t, tw, "llm_base_url")
+	provider := boundAs[*widget.Select](t, tw, "llm_provider")
 	url := boundAs[*widget.Entry](t, tw, "llm_base_url")
+	want := []string{"Gemini", "OpenAI", "OpenRouter", "Groq", "Ollama", "Other (OpenAI-compatible)"}
+	if !slices.Equal(provider.Options, want) {
+		t.Errorf("providers %v, want %v", provider.Options, want)
+	}
+	shown := func() (url, key bool) { return tw.llm.urlRow.Visible(), tw.llm.keyRow.Visible() }
+
+	// Ollama, the default: its address, and no key.
 	if provider.Selected != "Ollama" || url.Text != config.DefaultLLMBaseURL {
 		t.Fatalf("provider %q, base URL %q; want Ollama's", provider.Selected, url.Text)
 	}
-
-	provider.SetSelected("OpenAI")
-	tw.q.drain()
-	if got := tw.store.Get().LLMBaseURL; got != "https://api.openai.com/v1" || url.Text != got {
-		t.Errorf("after picking OpenAI: stored %q, shown %q", got, url.Text)
+	if u, k := shown(); !u || k {
+		t.Errorf("Ollama: base URL shown %v, API key shown %v; want the base URL alone", u, k)
+	}
+	if got := tw.llm.urlHint.Text; got != llmOllamaURLHint {
+		t.Errorf("Ollama's base URL hint %q", got)
 	}
 
-	// A base URL of no known provider is Other; one that is no URL is not
-	// saved.
+	// Gemini: a key, and no address to type.
+	boundAs[*widget.SelectEntry](t, tw, "llm_model").SetText("gemma4:latest")
+	provider.SetSelected("Gemini")
+	tw.q.drain()
+	s := tw.reopen(t)
+	if s.LLMProvider != config.LLMGemini || s.LLMBaseURL != config.LLMGemini.BaseURL() || s.LLMModel != "" {
+		t.Errorf("after picking Gemini: provider %q at %q, model %q; want Gemini's address and no model", s.LLMProvider, s.LLMBaseURL, s.LLMModel)
+	}
+	if u, k := shown(); u || !k {
+		t.Errorf("Gemini: base URL shown %v, API key shown %v; want the key alone", u, k)
+	}
+	text := tw.pageText(PagePostProcessing)
+	for _, want := range []string{"Google AI Studio", llmKeyKept, llmModelsNeedKey, "Left empty, " + llm.GeminiModel + "."} {
+		if !strings.Contains(text, want) {
+			t.Errorf("Gemini's rows lack %q:\n%s", want, text)
+		}
+	}
+	if p := boundAs[*widget.SelectEntry](t, tw, "llm_model").PlaceHolder; p != llm.GeminiModel {
+		t.Errorf("model placeholder %q, want %s", p, llm.GeminiModel)
+	}
+
+	// With a key, Gemini's models are listed.
+	tw.llm.key.entry.SetText("gemini-secret")
+	test.Tap(tw.buttons(PagePostProcessing)[LabelSaveKey])
+	tw.q.until(t, "Gemini's models", func() bool {
+		return strings.Contains(tw.pageText(PagePostProcessing), "The provider serves: gemini-3.8-flash, gemini-4-hydrogen.")
+	})
+
+	// A custom server: an address to type, and a key if it wants one.
+	provider.SetSelected("Other (OpenAI-compatible)")
+	tw.q.drain()
+	if u, k := shown(); !u || !k {
+		t.Errorf("custom: base URL shown %v, API key shown %v; want both", u, k)
+	}
+	if tw.llm.urlHint.Text != llmCustomURLHint || !strings.HasPrefix(tw.llm.keyHelp.Text, llmKeyOptional) {
+		t.Errorf("the custom server's rows say %q and %q", tw.llm.urlHint.Text, tw.llm.keyHelp.Text)
+	}
+	if url.Text != customStartURL {
+		t.Errorf("a custom server after Gemini points at %q, want %s rather than Gemini's address", url.Text, customStartURL)
+	}
 	url.SetText("http://gpu-box.lan:8000/v1")
-	if got := tw.store.Get().LLMBaseURL; got != "http://gpu-box.lan:8000/v1" || provider.Selected != LabelOtherProvider {
-		t.Errorf("typed base URL: stored %q, provider %q", got, provider.Selected)
+	if s := tw.store.Get(); s.LLMBaseURL != "http://gpu-box.lan:8000/v1" || s.LLMProvider != config.LLMCustom {
+		t.Errorf("typed base URL: stored %q for %q", s.LLMBaseURL, s.LLMProvider)
 	}
 	url.SetText("gpu-box.lan")
 	if got := tw.reopen(t).LLMBaseURL; got != "http://gpu-box.lan:8000/v1" {
 		t.Errorf("a base URL without a scheme was saved: %q", got)
 	}
+
+	// After Ollama, whose address is a known provider's too, Other starts
+	// from LM Studio's again.
+	provider.SetSelected("Ollama")
 	tw.q.drain()
+	provider.SetSelected("Other (OpenAI-compatible)")
+	tw.q.drain()
+	if url.Text != customStartURL {
+		t.Errorf("Other after Ollama points at %q", url.Text)
+	}
+	url.SetText("http://gpu-box.lan:8000/v1")
+
+	// Back to Ollama: its own address again.
+	provider.SetSelected("Ollama")
+	tw.q.drain()
+	if s := tw.reopen(t); s.LLMProvider != config.LLMOllama || s.LLMBaseURL != config.DefaultLLMBaseURL {
+		t.Errorf("back to Ollama: %q at %q", s.LLMProvider, s.LLMBaseURL)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if len(f.listed) == 0 || f.listed[0] != config.DefaultLLMBaseURL {
 		t.Errorf("models listed for %v, want Ollama's first", f.listed)
+	}
+}
+
+// Claude is not offered for now, but settings that already name it show
+// it as chosen, with its rows, and it leaves the list once another is.
+func TestPostProcessingHiddenClaude(t *testing.T) {
+	tw, _ := newLLMWindow(t)
+	if err := tw.store.Update(func(s *config.Settings) {
+		s.LLMProvider, s.LLMBaseURL = config.LLMClaude, config.LLMClaude.BaseURL()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tw.SetSettings(tw.store.Get())
+	tw.q.drain()
+	provider := boundAs[*widget.Select](t, tw, "llm_provider")
+	if provider.Selected != "Claude" || !slices.Contains(provider.Options, "Claude") {
+		t.Errorf("settings naming Claude: selected %q of %v", provider.Selected, provider.Options)
+	}
+	if !strings.Contains(tw.pageText(PagePostProcessing), "Claude Console") {
+		t.Error("Claude's key row is missing")
+	}
+	provider.SetSelected("Gemini")
+	tw.q.drain()
+	if slices.Contains(provider.Options, "Claude") {
+		t.Errorf("Claude is still offered after picking Gemini: %v", provider.Options)
 	}
 }
 
@@ -188,6 +281,9 @@ func TestPostProcessingPrompt(t *testing.T) {
 
 func TestPostProcessingKey(t *testing.T) {
 	tw, f := newLLMWindow(t)
+	const openAI = "https://api.openai.com/v1"
+	boundAs[*widget.Select](t, tw, "llm_provider").SetSelected("OpenAI")
+	tw.q.drain()
 	if !strings.Contains(tw.pageText(PagePostProcessing), llmNoKeyHint) {
 		t.Error("the page does not say no key is stored")
 	}
@@ -198,7 +294,7 @@ func TestPostProcessingKey(t *testing.T) {
 	test.Tap(tw.buttons(PagePostProcessing)[LabelSaveKey])
 	tw.q.until(t, "the key stored", func() bool { return strings.Contains(tw.pageText(PagePostProcessing), llmKeyStoredHint) })
 	f.mu.Lock()
-	if f.keys[config.DefaultLLMBaseURL] != "sk-secret" {
+	if f.keys[openAI] != "sk-secret" {
 		t.Errorf("keychain holds %v", f.keys)
 	}
 	f.mu.Unlock()

@@ -23,29 +23,41 @@ type postProcessor struct {
 
 // newPostProcessor resolves --llm, --llm-url and --llm-model against the
 // settings' post-processing, and reads the provider's API key from the
-// keychain.
+// keychain. --llm-url picks the provider at that address, or a custom
+// OpenAI-compatible server.
 func newPostProcessor(env Env, s config.Settings, fl transcribeFlags) (*postProcessor, error) {
-	baseURL := firstNonEmpty(fl.llmURL, s.LLMBaseURL)
+	p := llm.ProviderOf(s)
+	baseURL := p.URL(s)
+	if fl.llmURL != "" {
+		baseURL = fl.llmURL
+		p = llm.ProviderByID(config.LLMProviderFor(baseURL))
+	}
 	if _, err := llm.ParseBaseURL(baseURL); err != nil {
 		return nil, fmt.Errorf("--llm-url: %w", err)
 	}
-	model, err := llm.ModelFor(baseURL, firstNonEmpty(fl.llmModel, s.LLMModel), llm.TotalMemory())
+	model, err := llm.ModelFor(p, baseURL, firstNonEmpty(fl.llmModel, s.LLMModel), llm.TotalMemory())
 	if err != nil {
 		return nil, fmt.Errorf("%w; choose one with --llm-model", err)
 	}
-	getKey := env.LLMKey
-	if getKey == nil {
-		store := keychain.New(llm.KeychainService)
-		getKey = func(baseURL string) (string, error) { return store.Get(llm.KeyAccount(baseURL)) }
+	var key string
+	if p.Key != llm.NoKey {
+		getKey := env.LLMKey
+		if getKey == nil {
+			store := keychain.New(llm.KeychainService)
+			getKey = func(baseURL string) (string, error) { return store.Get(llm.KeyAccount(baseURL)) }
+		}
+		if key, err = getKey(baseURL); err != nil {
+			fmt.Fprintf(env.Stderr, "goscriber: sending the language model no API key: %v\n", err)
+		}
 	}
-	key, err := getKey(baseURL)
-	if err != nil {
-		fmt.Fprintf(env.Stderr, "goscriber: sending the language model no API key: %v\n", err)
+	job := llm.Job{
+		Endpoint: p.Endpoint(baseURL, key),
+		Model:    model,
+		Prompt:   s.LLMPrompt,
+		Vars:     llm.Vars{Words: append(slices.Clone(s.CustomWords), fl.words...)},
 	}
-	return &postProcessor{
-		client: &llm.Client{},
-		job:    llm.Job{Endpoint: llm.Endpoint{BaseURL: baseURL, APIKey: key}, Model: model, Prompt: s.LLMPrompt},
-	}, nil
+	job.ChunkWords, job.ContextWords = p.Chunking()
+	return &postProcessor{client: &llm.Client{}, job: job}, nil
 }
 
 // check asks the provider for its models before any audio is decoded, so a
@@ -69,11 +81,14 @@ func (p *postProcessor) check(ctx context.Context) error {
 	return fmt.Errorf("%s; it serves %s, which --llm-model can pick", msg, strings.Join(models, ", "))
 }
 
-// clean has the model clean text. A part it failed on is left as it was,
-// and the error says how many.
-func (p *postProcessor) clean(ctx context.Context, text string) (string, time.Duration, error) {
+// clean has the model clean text, in the language lang ("" or "auto" when
+// unknown). A part it failed on is left as it was, and the error says how
+// many.
+func (p *postProcessor) clean(ctx context.Context, text, lang string) (string, time.Duration, error) {
 	start := time.Now()
-	res := p.client.Clean(ctx, p.job, text)
+	job := p.job
+	job.Vars.Language = llm.LanguageName(lang)
+	res := p.client.Clean(ctx, job, text)
 	took := time.Since(start)
 	if err := ctx.Err(); err != nil {
 		return "", took, err

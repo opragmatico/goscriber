@@ -256,7 +256,7 @@ func TestTryLLM(t *testing.T) {
 	if err != nil || got != strings.ToUpper(llm.SampleTranscript) {
 		t.Errorf("Try = %q, %v", got, err)
 	}
-	models, err := sh.llmActions().Models(context.Background(), srv.URL+"/v1")
+	models, err := sh.llmActions().Models(context.Background(), llm.ProviderByID(config.LLMOllama), srv.URL+"/v1")
 	if err == nil || models != nil {
 		t.Errorf("Models from a server without /models = %v, %v; want an error", models, err)
 	}

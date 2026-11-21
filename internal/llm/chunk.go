@@ -6,11 +6,29 @@ import (
 	"unicode/utf8"
 )
 
-// ChunkWords is the most words a request carries. Sent whole, a 4,886-word
-// talk made gemma4:26b repeat a sentence over and over in 3 of 5 attempts;
-// in 400-word chunks none of 65 requests looped, and the talk was done
-// sooner (docs/llm-post-processing.md#long-transcripts).
+// ChunkWords is the most words a request to a provider on the user's own
+// computer or network carries. Sent whole, a 4,886-word talk made
+// gemma4:26b repeat a sentence over and over in 3 of 5 attempts; in
+// 400-word chunks none of 65 requests looped, and the talk was done sooner
+// (docs/llm-post-processing.md#long-transcripts).
 const ChunkWords = 400
+
+// HostedChunkWords is the most words a request to Gemini, OpenAI or
+// Claude carries: their models take a long transcript in far fewer
+// requests, so a 30-minute talk is two or three of them, and each gave
+// back a 2,920-word one whole (docs/llm-post-processing.md#long-transcripts).
+const HostedChunkWords = 4000
+
+// OpenModelChunkWords is the most words a request to a hosted service of
+// open models, Groq or OpenRouter, carries: gpt-oss-120b on Groq gave back
+// only 1,875 words of a 2,920-word chunk, with no sign of having stopped
+// short, but every passage of the same talk in 800-word chunks.
+const OpenModelChunkWords = 800
+
+// ContextWords is how many of the previous chunk's last words a request to
+// a hosted provider carries before its own chunk, as context only, so the
+// model knows how the chunk begins (Vars.Context).
+const ContextWords = 100
 
 // TokensPerWord sizes each request's max_tokens: three tokens per word of
 // its chunk, and never less than for a full one (1,200). No chunk of the
@@ -19,6 +37,12 @@ const TokensPerWord = 3
 
 // maxTokens is the output cap for a chunk of words words.
 func maxTokens(words int) int { return TokensPerWord * max(words, ChunkWords) }
+
+// lastWords is the last n words of s, joined by single spaces.
+func lastWords(s string, n int) string {
+	words := strings.Fields(s)
+	return strings.Join(words[max(0, len(words)-n):], " ")
+}
 
 // Split cuts text into chunks of whole sentences of at most maxWords words
 // each, in order. A sentence ends after a ".", "!" or "?" followed by a

@@ -12,7 +12,7 @@ import (
 
 // SchemaVersion is the settings layout this build reads and writes. Bump it
 // only together with a new entry in migrations.
-const SchemaVersion = 2
+const SchemaVersion = 3
 
 // A migration upgrades a raw settings document by one schema version, in place.
 type migration func(doc map[string]json.RawMessage) error
@@ -29,6 +29,26 @@ var migrations = []migration{
 	// it: turn it on.
 	func(doc map[string]json.RawMessage) error {
 		doc["filler_word_removal"] = json.RawMessage("true")
+		return nil
+	},
+	// v2 -> v3: the post-processing provider is a setting of its own,
+	// llm_provider, where v2 had only the base URL: the provider is the one
+	// at that address, and any other address is a custom server. A file
+	// with no base URL keeps the default, Ollama.
+	func(doc map[string]json.RawMessage) error {
+		raw, ok := doc["llm_base_url"]
+		if !ok {
+			return nil
+		}
+		var baseURL string
+		if json.Unmarshal(raw, &baseURL) != nil {
+			return nil // a base URL of the wrong type falls back to the default
+		}
+		p, err := json.Marshal(LLMProviderFor(baseURL))
+		if err != nil {
+			return err
+		}
+		doc["llm_provider"] = p
 		return nil
 	},
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/opragmatico/goscriber/internal/config"
+	"github.com/opragmatico/goscriber/internal/models"
 	"github.com/opragmatico/goscriber/internal/pipeline"
 )
 
@@ -46,13 +47,14 @@ func (s *Stage) Process(ctx context.Context, text string, info pipeline.SessionI
 		s.failed(err)
 		return "", err
 	}
+	job.Vars.Language = LanguageName(info.TextLanguage)
 	start := time.Now()
 	res := s.Client.Clean(ctx, job, text)
 	if ctx.Err() != nil {
 		return "", ctx.Err()
 	}
 	s.log().Info("transcript post-processed", "session", info.Session, "model", job.Model,
-		"chunks", res.Chunks, "failed", res.Failed, "took", time.Since(start).Round(time.Millisecond))
+		"chunks", res.Chunks, "failed", res.Failed, "continued", res.Continued, "took", time.Since(start).Round(time.Millisecond))
 	if res.Failed == 0 {
 		return res.Text, nil
 	}
@@ -69,21 +71,39 @@ func (s *Stage) Process(ctx context.Context, text string, info pipeline.SessionI
 }
 
 // Job is what the settings ask a transcript to be cleaned with: their
-// base URL with its stored key, model (or the suggested one) and prompt.
+// provider at its base URL with the key stored for it, model (or the
+// provider's default), prompt and custom words. The language is the
+// transcript's, which the settings do not know.
 func (s *Stage) Job(set config.Settings) (Job, error) {
-	model, err := ModelFor(set.LLMBaseURL, set.LLMModel, s.Memory)
+	p := ProviderOf(set)
+	baseURL := p.URL(set)
+	model, err := ModelFor(p, baseURL, set.LLMModel, s.Memory)
 	if err != nil {
 		return Job{}, err
 	}
-	job := Job{Endpoint: Endpoint{BaseURL: set.LLMBaseURL}, Model: model, Prompt: set.LLMPrompt}
-	if s.Key != nil {
-		key, err := s.Key(set.LLMBaseURL)
-		if err != nil {
+	var key string
+	if s.Key != nil && p.Key != NoKey {
+		if key, err = s.Key(baseURL); err != nil {
 			s.log().Warn("the API key could not be read from the keychain; sending none", "err", err)
 		}
-		job.APIKey = key
 	}
+	job := Job{
+		Endpoint: p.Endpoint(baseURL, key),
+		Model:    model,
+		Prompt:   set.LLMPrompt,
+		Vars:     Vars{Words: set.CustomWords},
+	}
+	job.ChunkWords, job.ContextWords = p.Chunking()
 	return job, nil
+}
+
+// LanguageName is a transcript language code, such as "pt-BR", by name,
+// for the prompt's LanguagePlaceholder; "" for an unknown language.
+func LanguageName(code string) string {
+	if code == "" || code == models.LanguageAuto {
+		return ""
+	}
+	return models.LanguageName(code)
 }
 
 func (s *Stage) failed(err error) {

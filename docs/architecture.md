@@ -17,7 +17,7 @@ Handy is built with Tauri (Rust backend + React UI) and runs a broad catalog of 
 | Paste / typing | `enigo`, platform paste code, typing tools on Linux | `NSPasteboard` and `CGEventPost` through CGo on macOS; X11 selections and XTEST through CGo on Linux, or wtype, dotool or ydotool on Wayland ([linux.md](linux.md)) |
 | Settings | `tauri-plugin-store` (JSON) | Go structs persisted as JSON under `os.UserConfigDir()` |
 | History | SQLite (`rusqlite`) | SQLite (`modernc.org/sqlite`, pure Go) + WAV files |
-| LLM post-processing | HTTP clients for OpenAI-compatible and Anthropic Messages APIs | `net/http` client for OpenAI's Chat Completions, which hosted and local providers alike offer; API keys in the OS keychain (`zalando/go-keyring`) ([llm-post-processing.md](llm-post-processing.md)) |
+| LLM post-processing | HTTP clients for OpenAI-compatible and Anthropic Messages APIs | `net/http` client for OpenAI's Chat Completions, which every provider but Claude offers, and Anthropic's Go SDK (`anthropic-sdk-go`) for Claude; API keys in the OS keychain (`zalando/go-keyring`) ([llm-post-processing.md](llm-post-processing.md)) |
 | Single instance / CLI | `tauri-plugin-single-instance`, `clap` | Unix socket / named pipe, stdlib `flag` |
 | Sound effects | `rodio` | `malgo` playback |
 
@@ -75,7 +75,7 @@ internal/
 ├── pipeline/
 │   └── coordinator.go     # recording → transcription → output state machine
 ├── text/                  # cleanup, filler words, custom-word correction
-├── llm/                   # optional post-processing: Chat Completions client, chunking, the LLM stage
+├── llm/                   # optional post-processing: providers, Chat Completions and Claude clients, chunking, the LLM stage
 ├── keychain/              # API keys and webhook secrets in the macOS Keychain, the Secret Service, the Windows Credential Manager
 ├── output/                # clipboard paste with restore, direct typing
 ├── typing/                # Linux typing tools: xdotool, wtype, dotool, ydotool
@@ -165,7 +165,7 @@ The `autostart` setting (Settings → Advanced → Launch at login) is the OS's 
 | **General** | the dictation, post-processing and cancel shortcuts (recorded by pressing them; the post-processing one may also be cleared), activation mode and hold threshold, microphone, start / stop sounds with their volume and output device, mute while recording, overlay style and position |
 | **Models** | a card per catalog model: what it does, size, licence, quantisation (Parakeet TDT v2 has two), status, and Download (with progress, cancellable), Delete (asks first) and Use. With no model downloaded the page says so. Below the cards, the [language picker](#language) |
 | **Advanced** | app (start hidden, tray icon, launch at login, unload timeout, loading the model at launch), output (paste method, on Linux the paste keys and typing tool, clipboard, delays, trailing space, Return), transcription (accelerator, offering only what the engine was built with, live-text latency, decoding while recording, always-on microphone, VAD and its thresholds, shortest recording, silence threshold) text (filler words, custom words with their [boost and correction threshold](#custom-vocabulary)) and the [webhook](#webhook) (its URL and authentication: none, Basic with a user name and a password, or a Bearer token, the secret saved to the system keychain under the URL and never shown again; only the rows the authentication uses show) |
-| **Post-processing** | [LLM post-processing](llm-post-processing.md): on or off, provider (Ollama, LM Studio, llama.cpp, OpenAI, OpenRouter, Groq, or any base URL), API key (saved to the system keychain, never shown again), model (typed, or picked from the provider's list; empty is the one suggested for the computer's memory), the prompt (the built-in one until edited, with a button to go back to it), and Try it, which cleans a sample dictation |
+| **Post-processing** | [LLM post-processing](llm-post-processing.md): on or off, provider (Gemini, OpenAI, OpenRouter, Groq, Ollama, or Other, any OpenAI-compatible server; Claude is kept out for now), then only the rows it needs: base URL (Ollama and Other), API key (hosted providers, optional for Other; saved to the system keychain, never shown again), model (typed, or picked from the provider's list; empty is the provider's default, if it has one), the prompt (the built-in one until edited, with a button to go back to it; `${output}`, `${language}` and `${custom_words}` placeholders), and Try it, which cleans a sample dictation |
 | **Permissions** | each macOS permission, with a button to System Settings when missing ([permissions.md](permissions.md)); on Linux, what a Wayland session needs set up ([linux.md](linux.md)) |
 | **History** | how many dictations and how long recordings are kept; [transcribing audio files](#transcribing-files), chosen or dropped on the window, with progress and Cancel; then the latest dictations (up to 100), newest first, each with Copy, Paste again, Play, Transcribe again, Process again and Delete, and Delete all ([history](#history)) |
 | **Debug** | only in debug mode: debug mode, log level, running the engine in the app ([profiling](#process-isolation)), and a viewer over the last 400 records of the logger's in-memory ring |

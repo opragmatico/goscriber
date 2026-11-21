@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/opragmatico/goscriber/internal/config"
 )
 
 // fakeServer is an OpenAI-compatible provider. Its answer function sees
@@ -150,6 +152,98 @@ func TestCompleteOpenAICap(t *testing.T) {
 	}
 }
 
+// OpenAI's default model is asked to think at "medium", with no step-down,
+// and room for the thinking: thinkingMaxTokens more output and
+// ThinkingTimeout. A server that rejects the effort fails the request.
+func TestCompleteModelEffort(t *testing.T) {
+	var status int
+	f := newFakeServer(t, func(map[string]any) (int, string) {
+		if status != 0 {
+			return status, `{"error":{"message":"unsupported reasoning_effort"}}`
+		}
+		return 200, reply("ok", "stop")
+	})
+	target, _ := url.Parse(f.srv.URL)
+	c := Client{HTTP: &http.Client{Transport: redirect{target}}}
+	openAI := Endpoint{BaseURL: "https://api.openai.com/v1"}
+	if got, err := c.Complete(context.Background(), openAI, OpenAIModel, "p", 1200); err != nil || got != "ok" {
+		t.Fatalf("Complete = %q, %v", got, err)
+	}
+	req := f.sent()[0]
+	if req["reasoning_effort"] != "medium" || req["max_completion_tokens"] != float64(1200+thinkingMaxTokens) {
+		t.Errorf("reasoning_effort %v, max_completion_tokens %v; want medium and %d", req["reasoning_effort"], req["max_completion_tokens"], 1200+thinkingMaxTokens)
+	}
+
+	status = 400
+	if _, err := c.Complete(context.Background(), openAI, OpenAIModel, "p", 1200); err == nil {
+		t.Error("a rejected effort reported success")
+	}
+	if n := len(f.sent()); n != 2 {
+		t.Errorf("%d requests, want one per completion: no step-down", n)
+	}
+}
+
+// A request's timeout is RequestTimeout, or ThinkingTimeout for a model
+// that thinks at a set effort, once per full 400-word chunk's worth of
+// output cap; Client.Timeout overrides it.
+func TestRequestTimeout(t *testing.T) {
+	var c Client
+	for _, tc := range []struct {
+		maxTokens int
+		thinking  bool
+		want      time.Duration
+	}{
+		{1200, false, RequestTimeout},
+		{1201, false, 2 * RequestTimeout},
+		{maxTokens(HostedChunkWords), false, 10 * RequestTimeout},
+		{1200, true, ThinkingTimeout},
+		{maxTokens(HostedChunkWords), true, 10 * ThinkingTimeout},
+	} {
+		if got := c.requestTimeout(tc.maxTokens, tc.thinking); got != tc.want {
+			t.Errorf("requestTimeout(%d, %v) = %v, want %v", tc.maxTokens, tc.thinking, got, tc.want)
+		}
+	}
+	if got := (&Client{Timeout: time.Second}).requestTimeout(12000, true); got != time.Second {
+		t.Errorf("with Client.Timeout: %v", got)
+	}
+}
+
+// Gemini's models think however little reasoning_effort asks for, so its
+// requests leave room for the thinking, and its default model is asked at
+// "medium"; its model list loses the "models/" prefix, which its API does
+// not need.
+func TestGemini(t *testing.T) {
+	var sent map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1beta/openai/models":
+			_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"models/gemini-4-hydrogen"},{"id":"models/gemini-3.8-flash"}]}`))
+		case "/v1beta/openai/chat/completions":
+			_ = json.NewDecoder(r.Body).Decode(&sent)
+			_, _ = w.Write([]byte(reply("ok", "stop")))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	target, _ := url.Parse(srv.URL)
+	c := Client{HTTP: &http.Client{Transport: redirect{target}}}
+	ep := Endpoint{BaseURL: config.LLMGemini.BaseURL(), APIKey: "k"}
+
+	for model, effort := range map[string]string{GeminiModel: "medium", "gemini-3.8-flash": "none"} {
+		if _, err := c.Complete(context.Background(), ep, model, "p", 1200); err != nil {
+			t.Fatal(err)
+		}
+		if sent["max_tokens"] != float64(1200+thinkingMaxTokens) || sent["reasoning_effort"] != effort {
+			t.Errorf("%s: max_tokens %v, reasoning_effort %v; want %d and %s", model, sent["max_tokens"], sent["reasoning_effort"], 1200+thinkingMaxTokens, effort)
+		}
+	}
+	models, err := c.Models(context.Background(), ep)
+	if err != nil || !slices.Equal(models, []string{"gemini-3.8-flash", "gemini-4-hydrogen"}) {
+		t.Errorf("Models = %v, %v", models, err)
+	}
+}
+
 // redirect sends every request to target, whatever its URL says.
 type redirect struct{ target *url.URL }
 
@@ -159,15 +253,33 @@ func (r redirect) RoundTrip(req *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(req)
 }
 
-// A server that rejects reasoning_effort gets the request again without
-// it, and from then on never sees it for that model; other models still
-// get it.
+// A server that rejects reasoning_effort gets the request again with the
+// next least: "minimal" after "none", then "low", then none at all. The
+// first it takes is
+// where that model starts from then on; other models start from "none".
 func TestCompleteReasoningFallback(t *testing.T) {
-	for _, status := range []int{400, 422} {
-		t.Run(http.StatusText(status), func(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		takes  func(effort string, ok bool) bool
+		want   []string // reasoning_effort per request, "-" for none
+	}{
+		// Like Ollama before reasoning_effort, or llama.cpp.
+		{"no field 400", 400, func(_ string, ok bool) bool { return !ok }, []string{"none", "minimal", "low", "-", "-", "none"}},
+		{"no field 422", 422, func(_ string, ok bool) bool { return !ok }, []string{"none", "minimal", "low", "-", "-", "none"}},
+		// Like Gemini 3, whose thinking cannot be turned off.
+		{"no none", 400, func(e string, _ bool) bool { return e != "none" }, []string{"none", "minimal", "minimal", "none"}},
+		// Like GPT-6.1 Sol, which thinks at "medium" without the field.
+		{
+			"low at the least", 400, func(e string, ok bool) bool { return ok && e != "none" && e != "minimal" },
+			[]string{"none", "minimal", "low", "low", "none"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			f := newFakeServer(t, func(req map[string]any) (int, string) {
-				if _, ok := req["reasoning_effort"]; ok && req["model"] == "picky" {
-					return status, `{"error":{"message":"unknown field reasoning_effort"}}`
+				effort, ok := req["reasoning_effort"].(string)
+				if req["model"] == "picky" && !tc.takes(effort, ok) {
+					return tc.status, `{"error":{"message":"unsupported reasoning_effort"}}`
 				}
 				return 200, reply("fine", "stop")
 			})
@@ -180,14 +292,16 @@ func TestCompleteReasoningFallback(t *testing.T) {
 			if _, err := c.Complete(context.Background(), f.endpoint(), "other", "p", 10); err != nil {
 				t.Fatal(err)
 			}
-			var efforts []bool
+			var efforts []string
 			for _, r := range f.sent() {
-				_, ok := r["reasoning_effort"]
-				efforts = append(efforts, ok)
+				e, ok := r["reasoning_effort"].(string)
+				if !ok {
+					e = "-"
+				}
+				efforts = append(efforts, e)
 			}
-			// picky: with, without (remembered); picky again: without; other: with.
-			if want := []bool{true, false, false, true}; !slices.Equal(efforts, want) {
-				t.Errorf("reasoning_effort sent: %v, want %v", efforts, want)
+			if !slices.Equal(efforts, tc.want) {
+				t.Errorf("reasoning_effort sent: %v, want %v", efforts, tc.want)
 			}
 		})
 	}
@@ -212,11 +326,11 @@ func TestCompleteBadRequestNotRemembered(t *testing.T) {
 		t.Fatal("no error")
 	}
 	sent := f.sent()
-	if len(sent) != 4 {
-		t.Fatalf("%d requests, want 2 per completion", len(sent))
+	if len(sent) != 2*len(efforts) {
+		t.Fatalf("%d requests, want %d per completion", len(sent), len(efforts))
 	}
-	if _, ok := sent[2]["reasoning_effort"]; !ok {
-		t.Error("reasoning_effort was dropped after a retry that failed the same way")
+	if e := sent[len(efforts)]["reasoning_effort"]; e != "none" {
+		t.Errorf("the second completion started from reasoning_effort %v, want none: retries that failed the same way were remembered", e)
 	}
 }
 
@@ -309,24 +423,32 @@ func TestIsLocal(t *testing.T) {
 
 func TestModelFor(t *testing.T) {
 	const gb = 1 << 30
+	ollama, groq, claude := ProviderByID(config.LLMOllama), ProviderByID(config.LLMGroq), ProviderByID(config.LLMClaude)
 	for _, tc := range []struct {
+		p          Provider
 		url, model string
 		memory     uint64
 		want       string
 		err        bool
 	}{
-		{"http://localhost:11434/v1", "", 36 * gb, LargeModel, false},
-		{"http://localhost:11434/v1", "", 32 * gb, LargeModel, false},
-		{"http://localhost:11434/v1", "", 31 * gb, LargeModel, false}, // a 32 GB Linux machine
-		{"http://localhost:11434/v1", "", 16 * gb, SmallModel, false},
-		{"http://localhost:11434/v1", "", 0, SmallModel, false},
-		{"http://localhost:11434/v1", "qwen3.5:4b", 36 * gb, "qwen3.5:4b", false},
-		{"https://api.groq.com/openai/v1", "", 36 * gb, "", true},
-		{"https://api.groq.com/openai/v1", "llama-3.1-8b-instant", 0, "llama-3.1-8b-instant", false},
+		{ollama, "http://localhost:11434/v1", "", 36 * gb, LargeModel, false},
+		{ollama, "http://localhost:11434/v1", "", 32 * gb, LargeModel, false},
+		{ollama, "http://localhost:11434/v1", "", 31 * gb, LargeModel, false}, // a 32 GB Linux machine
+		{ollama, "http://localhost:11434/v1", "", 16 * gb, SmallModel, false},
+		{ollama, "http://localhost:11434/v1", "", 0, SmallModel, false},
+		{ollama, "http://localhost:11434/v1", "qwen3.5:4b", 36 * gb, "qwen3.5:4b", false},
+		{ollama, "http://gpu-box.lan:11434/v1", "", 36 * gb, "", true},
+		{groq, groq.BaseURL, "", 36 * gb, "", true},
+		{groq, groq.BaseURL, "llama-3.1-8b-instant", 0, "llama-3.1-8b-instant", false},
+		{claude, claude.BaseURL, "", 0, ClaudeModel, false},
+		{ProviderByID(config.LLMGemini), config.LLMGemini.BaseURL(), "", 0, GeminiModel, false},
+		{ProviderByID(config.LLMOpenAI), config.LLMOpenAI.BaseURL(), "", 0, OpenAIModel, false},
+		{ProviderByID(config.LLMOpenRouter), config.LLMOpenRouter.BaseURL(), "", 0, "", true},
+		{claude, claude.BaseURL, "claude-haiku-5-5", 0, "claude-haiku-5-5", false},
 	} {
-		got, err := ModelFor(tc.url, tc.model, tc.memory)
+		got, err := ModelFor(tc.p, tc.url, tc.model, tc.memory)
 		if got != tc.want || (err != nil) != tc.err {
-			t.Errorf("ModelFor(%q, %q, %d GB) = %q, %v", tc.url, tc.model, tc.memory/gb, got, err)
+			t.Errorf("ModelFor(%s, %q, %q, %d GB) = %q, %v", tc.p.Name, tc.url, tc.model, tc.memory/gb, got, err)
 		}
 	}
 }

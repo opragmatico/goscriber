@@ -43,12 +43,18 @@ func (sh *shell) llmStage() *llm.Stage {
 // llmActions back the settings window's Post-processing page.
 func (sh *shell) llmActions() ui.LLMActions {
 	return ui.LLMActions{
-		Models: func(ctx context.Context, baseURL string) ([]string, error) {
-			key, err := sh.llmKey(baseURL)
-			if err != nil {
-				sh.rt.Log.Warn("the API key could not be read from the keychain; sending none", "err", err)
+		Models: func(ctx context.Context, p llm.Provider, baseURL string) ([]string, error) {
+			var key string
+			if p.Key != llm.NoKey {
+				var err error
+				if key, err = sh.llmKey(baseURL); err != nil {
+					sh.rt.Log.Warn("the API key could not be read from the keychain; sending none", "err", err)
+				}
 			}
-			return sh.llm.Models(ctx, llm.Endpoint{BaseURL: baseURL, APIKey: key})
+			if p.Key == llm.KeyRequired && key == "" {
+				return nil, llm.ErrNoKey
+			}
+			return sh.llm.Models(ctx, p.Endpoint(baseURL, key))
 		},
 		HasKey: func(baseURL string) (bool, error) {
 			key, err := sh.llmKey(baseURL)
