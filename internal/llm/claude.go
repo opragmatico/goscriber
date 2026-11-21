@@ -38,18 +38,21 @@ func (c *Client) claude(ep Endpoint) anthropic.Client {
 	)
 }
 
-// claudeRequest is the request for prompt. With extras it asks for the
-// least thinking (effort "low") and, from a model that takes them,
-// server-side fallbacks; models older than effort reject those.
+// claudeRequest is the request for prompt. With extras it turns thinking
+// off and asks for the least effort, and, from a model that takes them,
+// server-side fallbacks; models older than these reject them. Current
+// models turn thinking off with thinking "between_tools", which thinks only
+// between tool calls, and this request has none; they reject "disabled".
 func claudeRequest(model, prompt string, maxTokens int, extras bool) anthropic.BetaMessageNewParams {
 	req := anthropic.BetaMessageNewParams{
 		Model: model,
-		// Thinking cannot be turned off on current models, only down
-		// (effort "low"), so the cap leaves it room.
+		// Room for thinking, for a model sent no extras, which thinks as it
+		// sees fit.
 		MaxTokens: int64(maxTokens + thinkingMaxTokens),
 		Messages:  []anthropic.BetaMessageParam{anthropic.NewBetaUserMessage(anthropic.NewBetaTextBlock(prompt))},
 	}
 	if extras {
+		req.Thinking = anthropic.BetaThinkingConfigParamUnion{OfBetweenTools: &anthropic.BetaThinkingConfigBetweenToolsParam{}}
 		req.OutputConfig = anthropic.BetaOutputConfigParam{Effort: anthropic.BetaOutputConfigEffortLow}
 		if slices.Contains(fallbackModels, model) {
 			req.Fallbacks = anthropic.BetaFallbacksParamOfDefault()

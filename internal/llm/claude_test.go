@@ -110,8 +110,8 @@ func TestClaudeComplete(t *testing.T) {
 	if req["fallbacks"] != "default" || headers[0].Get("Anthropic-Beta") != "server-side-fallback-2026-07-01" {
 		t.Errorf("fallbacks %v with beta %q", req["fallbacks"], headers[0].Get("Anthropic-Beta"))
 	}
-	if _, ok := req["thinking"]; ok {
-		t.Errorf("thinking = %v, want it left to the model", req["thinking"])
+	if th, _ := req["thinking"].(map[string]any); th["type"] != "between_tools" {
+		t.Errorf("thinking = %v, want it off (between_tools)", req["thinking"])
 	}
 
 	// A model without server-side fallbacks gets effort only.
@@ -141,8 +141,8 @@ func TestClaudeHostedChunk(t *testing.T) {
 	}
 }
 
-// A model that rejects effort gets the request again without it, and is
-// sent none from then on.
+// A model that rejects effort or thinking "between_tools" gets the request
+// again without them, and is sent neither from then on.
 func TestClaudeEffortFallback(t *testing.T) {
 	f := newFakeClaude(t, func(req map[string]any, _ http.Header) (int, string) {
 		if _, ok := req["output_config"]; ok && req["model"] == "claude-haiku-4-5" {
@@ -159,8 +159,12 @@ func TestClaudeEffortFallback(t *testing.T) {
 	reqs, _ := f.sent()
 	var with []bool
 	for _, r := range reqs {
-		_, ok := r["output_config"]
-		with = append(with, ok)
+		_, effort := r["output_config"]
+		_, thinking := r["thinking"]
+		if effort != thinking {
+			t.Errorf("effort sent %v, thinking %v; want both or neither", effort, thinking)
+		}
+		with = append(with, effort)
 	}
 	if want := []bool{true, false, false}; !slices.Equal(with, want) {
 		t.Errorf("output_config sent: %v, want %v", with, want)
