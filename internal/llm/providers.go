@@ -51,6 +51,7 @@ type Provider struct {
 // well it fixes a transcript.
 const (
 	ClaudeModel = "claude-sonnet-5-5"
+	// GeminiModel is asked to think at "medium" (modelEfforts).
 	GeminiModel = "gemini-4-hydrogen"
 	// OpenAIModel is priced as Claude Sonnet 5.5 is, and asked to think
 	// at "medium" (modelEfforts).

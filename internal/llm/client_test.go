@@ -188,8 +188,9 @@ func TestCompleteModelEffort(t *testing.T) {
 }
 
 // Gemini's models think however little reasoning_effort asks for, so its
-// requests leave room for the thinking; its model list loses the
-// "models/" prefix, which its API does not need.
+// requests leave room for the thinking, and its default model is asked at
+// "medium"; its model list loses the "models/" prefix, which its API does
+// not need.
 func TestGemini(t *testing.T) {
 	var sent map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -208,11 +209,13 @@ func TestGemini(t *testing.T) {
 	c := Client{HTTP: &http.Client{Transport: redirect{target}}}
 	ep := Endpoint{BaseURL: config.LLMGemini.BaseURL(), APIKey: "k"}
 
-	if _, err := c.Complete(context.Background(), ep, GeminiModel, "p", 1200); err != nil {
-		t.Fatal(err)
-	}
-	if sent["max_tokens"] != float64(thinkingMaxTokens) || sent["reasoning_effort"] != "none" {
-		t.Errorf("max_tokens %v, reasoning_effort %v; want %d and none", sent["max_tokens"], sent["reasoning_effort"], thinkingMaxTokens)
+	for model, effort := range map[string]string{GeminiModel: "medium", "gemini-3.8-flash": "none"} {
+		if _, err := c.Complete(context.Background(), ep, model, "p", 1200); err != nil {
+			t.Fatal(err)
+		}
+		if sent["max_tokens"] != float64(thinkingMaxTokens) || sent["reasoning_effort"] != effort {
+			t.Errorf("%s: max_tokens %v, reasoning_effort %v; want %d and %s", model, sent["max_tokens"], sent["reasoning_effort"], thinkingMaxTokens, effort)
+		}
 	}
 	models, err := c.Models(context.Background(), ep)
 	if err != nil || !slices.Equal(models, []string{"gemini-3.8-flash", "gemini-4-hydrogen"}) {

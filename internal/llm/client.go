@@ -100,7 +100,8 @@ type Client struct {
 // none of them. A value taken is not always thinking turned off: Gemini 2.5 Pro,
 // Gemini 3 and Gemini 4 think whatever they are asked (gemini-4-hydrogen
 // takes "none" and still thinks for about 1,000 tokens on a 400-word
-// chunk), so their requests leave room for it (thinksAnyway).
+// chunk), so their requests leave room for it (thinksAnyway); Gemini's
+// default model is asked at "medium" (modelEfforts).
 var efforts = []string{"none", "minimal", "low", ""}
 
 // modelEfforts are models asked to think at a set reasoning_effort instead
@@ -109,6 +110,7 @@ var efforts = []string{"none", "minimal", "low", ""}
 // least thinkingMaxTokens and ThinkingTimeout.
 var modelEfforts = map[string]string{
 	OpenAIModel: "medium",
+	GeminiModel: "medium",
 }
 
 // thinkingMaxTokens is the least output cap of a request to a model that
