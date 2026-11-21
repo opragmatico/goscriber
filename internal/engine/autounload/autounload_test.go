@@ -13,9 +13,9 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/opragmatico/goscriber/internal/engine"
+	"github.com/opragmatico/goscriber/engine"
+	"github.com/opragmatico/goscriber/engine/fake"
 	"github.com/opragmatico/goscriber/internal/engine/autounload"
-	"github.com/opragmatico/goscriber/internal/engine/fake"
 )
 
 const timeout = 30 * time.Second

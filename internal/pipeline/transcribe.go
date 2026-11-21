@@ -7,7 +7,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/opragmatico/goscriber/internal/engine"
+	"github.com/opragmatico/goscriber/engine"
 )
 
 // Retranscription is audio transcribed outside a dictation: a saved

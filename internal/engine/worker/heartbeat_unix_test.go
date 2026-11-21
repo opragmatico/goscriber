@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/opragmatico/goscriber/internal/engine"
+	"github.com/opragmatico/goscriber/engine"
 	"github.com/opragmatico/goscriber/internal/notice"
 )
 

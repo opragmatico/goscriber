@@ -14,7 +14,7 @@ sudo apt-get install -y build-essential cmake ninja-build git pkg-config
 
 make deps            # builds .deps/nemo-speech: about a minute the first time, a second after that
 make engine-version  # prints 0.3.0 through CGo
-make test-engine     # vets and tests internal/engine/nemo against the SDK
+make test-engine     # vets and tests engine/nemo against the SDK
 ```
 
 ## Prerequisites
@@ -59,7 +59,7 @@ The install records a build stamp in `share/goscriber/build-stamp`: the pinned c
 
 ## Linking from Go
 
-`internal/engine/nemo` declares `#cgo pkg-config: nemo-speech-asr`. The generated file gives:
+`engine/nemo` declares `#cgo pkg-config: nemo-speech-asr`. The generated file gives:
 
 ```text
 Cflags: -I<prefix>/include -DGOSCRIBER_NEMO_GPU_<BACKEND>=1
@@ -72,10 +72,11 @@ The rpath lets development binaries and `go test` run straight from the tree, wi
 
 - `make` targets export `PKG_CONFIG_PATH` with `.deps/nemo-speech/lib/pkgconfig` first.
 - Plain `go` commands need it exported: `export PKG_CONFIG_PATH="$PWD/.deps/nemo-speech/lib/pkgconfig"`.
+- Another Go module that imports `engine/nemo` needs it exported too, pointing at a Goscriber checkout where `make deps` ran, and builds with `-tags nemo` (the package documentation has the recipe). Its binaries find the libraries through the same rpath, so that checkout's `.deps` must stay where it is; a program that ships needs the libraries bundled, as below.
 
-**Build tag.** The files that need the SDK also carry the `nemo` build tag (`//go:build cgo && nemo`), so `go build ./...`, `go test ./...` and the `check` CI job keep working on machines without the SDK. Build or test them with `-tags nemo`, as `make test-engine` does. `make build` passes it when `.deps/nemo-speech` has the SDK, so `./goscriber` links the engine for `goscriber transcribe` (`cmd/goscriber/engine.go`); without the SDK it builds an engine-less binary. The tag stays until the engine is wired into the app: until then only `cmd/goscriber` and `internal/engine/nemo` link the SDK, and dropping the tag would make every `go test ./...` need `make deps` first.
+**Build tag.** The files that need the SDK also carry the `nemo` build tag (`//go:build cgo && nemo`), so `go build ./...`, `go test ./...` and the `check` CI job keep working on machines without the SDK. Build or test them with `-tags nemo`, as `make test-engine` does. `make build` passes it when `.deps/nemo-speech` has the SDK, so `./goscriber` links the engine for `goscriber transcribe` (`cmd/goscriber/engine.go`); without the SDK it builds an engine-less binary. The tag stays until the engine is wired into the app: until then only `cmd/goscriber` and `engine/nemo` link the SDK, and dropping the tag would make every `go test ./...` need `make deps` first.
 
-**Version.** `nemo_speech_asr_version()` returns `"nemo-speech-asr 0.3.0"`; `nemo.Version()` returns `"0.3.0"`. `make engine-version` prints it, and `TestVersionMatchesSDK` checks that the library the test binary loads is the one the pkg-config file describes. `Engine.Load` refuses a runtime that is not compatible with the version the binding was written for (`sdkVersion` in `internal/engine/nemo/version.go`): the same major version and, while that is 0, the same minor version.
+**Version.** `nemo_speech_asr_version()` returns `"nemo-speech-asr 0.3.0"`; `nemo.Version()` returns `"0.3.0"`. `make engine-version` prints it, and `TestVersionMatchesSDK` checks that the library the test binary loads is the one the pkg-config file describes. `Engine.Load` refuses a runtime that is not compatible with the version the binding was written for (`sdkVersion` in `engine/nemo/version.go`): the same major version and, while that is 0, the same minor version.
 
 ## Decision: shared libraries, not static linking
 
@@ -120,7 +121,7 @@ make deps          # the stamp names the commit, so this rebuilds
 make test-engine
 ```
 
-Then update `sdkVersion` in `internal/engine/nemo/version.go` and the version this page and the README mention, and run the model tests below. The binding also reads a few GGUF metadata keys the converter writes (`internal/engine/nemo/model.go`); they are not part of the C ABI, so check they still exist. The CI cache key follows the new commit on its own.
+Then update `sdkVersion` in `engine/nemo/version.go` and the version this page and the README mention, and run the model tests below. The binding also reads a few GGUF metadata keys the converter writes (`engine/nemo/model.go`); they are not part of the C ABI, so check they still exist. The CI cache key follows the new commit on its own.
 
 ## Streaming
 
@@ -173,4 +174,4 @@ The `engine` job in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) ru
 
 1. It restores `.deps/nemo-speech` from a cache keyed by the runner image, the architecture and a hash of `scripts/build-nemo-speech.sh --stamp`.
 2. On a miss it installs Ninja and runs `make deps` with `-DGGML_NATIVE=OFF`, because the cache may be restored on a runner with a different CPU model, then saves the SDK. On a hit, `make deps` only confirms the stamp.
-3. It lints, vets and tests `internal/engine/nemo` with `-tags nemo`, then checks that the version `make engine-version` prints through CGo matches the SDK's.
+3. It lints, vets and tests `engine/nemo` with `-tags nemo`, then checks that the version `make engine-version` prints through CGo matches the SDK's.

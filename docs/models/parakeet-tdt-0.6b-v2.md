@@ -134,7 +134,7 @@ Goscriber's binding rejects it before the library sees it (`not a NeMo-Speech.cp
 ```bash
 make deps
 export PKG_CONFIG_PATH="$PWD/.deps/nemo-speech/lib/pkgconfig"
-go build -tags nemo -o bin/nemo-eval ./internal/engine/nemo/cmd/nemo-eval
+go build -tags nemo -o bin/nemo-eval ./engine/nemo/cmd/nemo-eval
 
 # LibriSpeech from https://www.openslr.org/12, converted to 16 kHz mono WAV, with a NeMo manifest per set
 bin/nemo-eval -model parakeet-tdt-0.6b-v2.q8_0.gguf -manifest test-clean.jsonl > q8-clean.jsonl
@@ -145,4 +145,4 @@ bin/nemo-eval -model parakeet-tdt-0.6b-v2.q8_0.gguf -stream                     
 /usr/bin/time -l bin/nemo-eval -model parakeet-tdt-0.6b-v2.q8_0.gguf -runs 5 clip.wav  # latency, footprint
 ```
 
-`nemo-eval` decodes through `internal/engine/nemo`, the binding the app uses. Upstream's `nemo-speech` CLI calls the same library, but Goscriber's SDK build leaves it out. The NeMo cross-check used `nemo_toolkit[asr]` 3.0.0 in a separate environment, with `ASRModel.restore_from` on the `.nemo` and `transcribe` on the CPU.
+`nemo-eval` decodes through `engine/nemo`, the binding the app uses. Upstream's `nemo-speech` CLI calls the same library, but Goscriber's SDK build leaves it out. The NeMo cross-check used `nemo_toolkit[asr]` 3.0.0 in a separate environment, with `ASRModel.restore_from` on the `.nemo` and `transcribe` on the CPU.

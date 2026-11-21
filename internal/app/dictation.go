@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/opragmatico/goscriber/engine"
 	"github.com/opragmatico/goscriber/internal/audio"
 	"github.com/opragmatico/goscriber/internal/config"
-	"github.com/opragmatico/goscriber/internal/engine"
 	"github.com/opragmatico/goscriber/internal/engine/autounload"
 	"github.com/opragmatico/goscriber/internal/engine/warmup"
 	"github.com/opragmatico/goscriber/internal/engine/worker"

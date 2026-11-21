@@ -9,7 +9,7 @@ import (
 	"math"
 	"unsafe"
 
-	"github.com/opragmatico/goscriber/internal/engine"
+	"github.com/opragmatico/goscriber/engine"
 )
 
 // The wire protocol between the supervisor and its worker.

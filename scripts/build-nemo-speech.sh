@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build the pinned NeMo-Speech.cpp ASR SDK and install it into .deps/nemo-speech,
-# where the CGo binding (internal/engine/nemo) finds it through pkg-config.
+# where the CGo binding (engine/nemo) finds it through pkg-config.
 # `make deps` runs this script; docs/engine-sdk.md explains the choices.
 #
 # The pin is the commit of the third_party/nemo-speech submodule. When an SDK
