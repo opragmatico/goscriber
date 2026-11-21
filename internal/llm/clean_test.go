@@ -256,6 +256,90 @@ func TestProviderChunking(t *testing.T) {
 	}
 }
 
+// shortAnswers answers a bracketed transcript in capitals, but only its
+// first keep words of it when it has more than over; fail, when set, is
+// the answer from the request numbered failAt (counting from 1).
+func shortAnswers(over, keep int, failAt int) func(req map[string]any) (int, string) {
+	n := 0
+	return func(req map[string]any) (int, string) {
+		n++
+		if n == failAt {
+			return 500, `{"error":"boom"}`
+		}
+		p := userText(req)
+		words := strings.Fields(p[strings.Index(p, "[")+1 : strings.LastIndex(p, "]")])
+		if len(words) > over {
+			words = words[:keep]
+		}
+		return 200, reply(strings.ToUpper(strings.Join(words, " ")), "stop")
+	}
+}
+
+// A chunk whose answer stops short gets its rest sent again, after the
+// answer's last words as context, and the answers are joined.
+func TestCleanContinuesAShortAnswer(t *testing.T) {
+	f := newFakeServer(t, shortAnswers(150, 150, 0))
+	var c Client
+	text := talkOf(60) // 300 words
+	words := strings.Fields(text)
+	job := Job{Endpoint: f.endpoint(), Model: "m", Prompt: "After <${context}>\n[${output}]", ContextWords: 3}
+	res := c.Clean(context.Background(), job, text)
+	if res.Chunks != 1 || res.Failed != 0 || res.Continued != 1 {
+		t.Fatalf("Clean: %d chunks, %d failed, %d continued; want 1, 0, 1", res.Chunks, res.Failed, res.Continued)
+	}
+	want := strings.ToUpper(strings.Join(words[:150], " ") + "\n\n" + strings.Join(words[150:], " "))
+	if res.Text != want {
+		t.Errorf("Text = %q, want %q", res.Text, want)
+	}
+	sent := f.sent()
+	if len(sent) != 2 {
+		t.Fatalf("%d requests, want 2", len(sent))
+	}
+	if p := userText(sent[1]); !strings.HasPrefix(p, "After <SENTENCE NUMBER 29.>\n[this is sentence number 30.") {
+		t.Errorf("the rest's prompt: %q", p)
+	}
+}
+
+// A chunk that keeps stopping short gets maxContinuations more requests,
+// and the rest still left goes in as transcribed; a rest whose request
+// fails goes in as transcribed too, keeping what was cleaned.
+func TestCleanContinuationLimits(t *testing.T) {
+	text := talkOf(60) // 300 words
+	words := strings.Fields(text)
+
+	f := newFakeServer(t, shortAnswers(0, 30, 0))
+	var c Client
+	res := c.Clean(context.Background(), Job{Endpoint: f.endpoint(), Model: "m", Prompt: "[${output}]"}, text)
+	var want []string
+	for i := range maxContinuations + 1 {
+		want = append(want, strings.ToUpper(strings.Join(words[30*i:30*(i+1)], " ")))
+	}
+	want = append(want, strings.Join(words[30*(maxContinuations+1):], " "))
+	if res.Text != strings.Join(want, "\n\n") || res.Continued != maxContinuations || res.Failed != 0 {
+		t.Errorf("always short: %d continued, %d failed, text %q", res.Continued, res.Failed, res.Text)
+	}
+	if n := len(f.sent()); n != maxContinuations+1 {
+		t.Errorf("%d requests, want %d", n, maxContinuations+1)
+	}
+
+	f = newFakeServer(t, shortAnswers(150, 150, 2))
+	res = c.Clean(context.Background(), Job{Endpoint: f.endpoint(), Model: "m", Prompt: "[${output}]"}, text)
+	if want := strings.ToUpper(strings.Join(words[:150], " ")) + "\n\n" + strings.Join(words[150:], " "); res.Text != want || res.Failed != 0 {
+		t.Errorf("failed rest: %d failed, text %q", res.Failed, res.Text)
+	}
+
+	// An answer that leaves out a few words at the end, or matches too
+	// little to judge, is taken as it is.
+	f = newFakeServer(t, shortAnswers(0, len(words)-40, 0))
+	if res = c.Clean(context.Background(), Job{Endpoint: f.endpoint(), Model: "m", Prompt: "[${output}]"}, text); res.Continued != 0 {
+		t.Errorf("40 words short: %d continued, want 0", res.Continued)
+	}
+	f = newFakeServer(t, shortAnswers(0, alignedAtLeast-5, 0))
+	if res = c.Clean(context.Background(), Job{Endpoint: f.endpoint(), Model: "m", Prompt: "[${output}]"}, text); res.Continued != 0 {
+		t.Errorf("an answer too short to judge: %d continued, want 0", res.Continued)
+	}
+}
+
 // A chunk that fails, stops at the cap or comes back empty keeps its own
 // text; the others are cleaned.
 func TestCleanFailedChunkKeepsItsText(t *testing.T) {

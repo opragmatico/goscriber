@@ -54,7 +54,7 @@ func (s *Stage) Process(ctx context.Context, text string, info pipeline.SessionI
 		return "", ctx.Err()
 	}
 	s.log().Info("transcript post-processed", "session", info.Session, "model", job.Model,
-		"chunks", res.Chunks, "failed", res.Failed, "took", time.Since(start).Round(time.Millisecond))
+		"chunks", res.Chunks, "failed", res.Failed, "continued", res.Continued, "took", time.Since(start).Round(time.Millisecond))
 	if res.Failed == 0 {
 		return res.Text, nil
 	}

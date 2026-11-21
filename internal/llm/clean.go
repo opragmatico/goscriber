@@ -125,9 +125,12 @@ type Job struct {
 type Result struct {
 	// Text is the transcript, cleaned except where a chunk failed.
 	Text string
-	// Chunks is how many requests the transcript took, and Failed how many
-	// of them failed, whose text is as it was.
+	// Chunks is how many chunks the transcript was cut into, and Failed how
+	// many of them failed, whose text is as it was.
 	Chunks, Failed int
+	// Continued is how many more requests went to chunks whose answer
+	// stopped short, for the rest of them.
+	Continued int
 	// Err is why the first failed chunk failed, or nil.
 	Err error
 }
@@ -158,10 +161,11 @@ func progressFrom(ctx context.Context) Progress {
 // Clean has the model clean transcript, in chunks of at most job.ChunkWords
 // words cut at sentence ends, one request each, in order, each after the
 // previous chunk's last job.ContextWords words, as they were transcribed,
-// for context. The cleaned chunks are joined with a blank line. A chunk
-// whose request fails, is cut off at its output cap or comes back empty
-// keeps its own text, and the others still count. Once ctx is done the
-// chunks left keep theirs.
+// for context; a chunk whose answer stops short gets more (cleanChunk).
+// The cleaned chunks are joined with a blank line. A chunk whose request
+// fails, is cut off at its output cap or comes back empty keeps its own
+// text, and the others still count. Once ctx is done the chunks left keep
+// theirs.
 func (c *Client) Clean(ctx context.Context, job Job, transcript string) Result {
 	size := job.ChunkWords
 	if size <= 0 {
@@ -178,16 +182,12 @@ func (c *Client) Clean(ctx context.Context, job Job, transcript string) Result {
 			out[i] = chunk
 			continue
 		}
-		vars := job.Vars
-		vars.Context = ""
+		before := ""
 		if i > 0 && job.ContextWords > 0 {
-			vars.Context = lastWords(chunks[i-1], job.ContextWords)
+			before = lastWords(chunks[i-1], job.ContextWords)
 		}
-		answer, err := c.Complete(ctx, job.Endpoint, job.Model, Render(job.Prompt, chunk, vars), maxTokens(len(strings.Fields(chunk))))
-		answer = tidyAnswer(answer)
-		if err == nil && answer == "" {
-			err = ErrEmptyAnswer
-		}
+		answer, extra, err := c.cleanChunk(ctx, job, chunk, before)
+		res.Continued += extra
 		if err != nil {
 			res.fail(err)
 			out[i] = chunk
@@ -198,6 +198,63 @@ func (c *Client) Clean(ctx context.Context, job Job, transcript string) Result {
 	progress(len(chunks), len(chunks))
 	res.Text = strings.Join(out, "\n\n")
 	return res
+}
+
+// Sending the rest of a chunk whose answer stopped short.
+const (
+	// shortBy is how many of a chunk's words its answer may leave
+	// unaccounted for at the end before the rest is sent again. Leaving
+	// out fillers shrinks a text all along, not at its end: on whole
+	// answers from Claude, Gemini, OpenAI and Groq the alignment left at
+	// most one word.
+	shortBy = 50
+	// alignedAtLeast is how many of a chunk's words an answer must account
+	// for before what it leaves out is taken for a stop: an answer that
+	// matches less is not one the alignment can judge.
+	alignedAtLeast = 20
+	// maxContinuations is how many more requests a chunk's rest gets.
+	maxContinuations = 3
+)
+
+// cleanChunk has the model clean chunk, after the context before. An
+// answer that accounts for only the start of the chunk (covered), which
+// models were seen to send with no sign of having stopped (Claude after
+// 1,059 words of a 3,999-word chunk, gpt-oss-120b after 1,875 of 2,920),
+// gets the rest of the chunk sent again, after its last job.ContextWords
+// words as context, up to maxContinuations times. The answers are joined with a
+// blank line; a rest still left, or whose request failed, goes in as
+// transcribed. It fails only when the first request does; extra is how many
+// more requests it sent.
+func (c *Client) cleanChunk(ctx context.Context, job Job, chunk, before string) (text string, extra int, err error) {
+	rest := chunk
+	var parts []string
+	for {
+		vars := job.Vars
+		vars.Context = before
+		answer, err := c.Complete(ctx, job.Endpoint, job.Model, Render(job.Prompt, rest, vars), maxTokens(len(strings.Fields(rest))))
+		answer = tidyAnswer(answer)
+		if err == nil && answer == "" {
+			err = ErrEmptyAnswer
+		}
+		if err != nil {
+			if len(parts) == 0 {
+				return "", 0, err
+			}
+			return strings.Join(append(parts, rest), "\n\n"), extra, nil
+		}
+		parts = append(parts, answer)
+		fields := strings.Fields(rest)
+		done := covered(rest, answer)
+		if done < alignedAtLeast || len(fields)-done <= shortBy {
+			return strings.Join(parts, "\n\n"), extra, nil
+		}
+		rest = strings.Join(fields[done:], " ")
+		if extra == maxContinuations {
+			return strings.Join(append(parts, rest), "\n\n"), extra, nil
+		}
+		extra++
+		before = lastWords(answer, job.ContextWords)
+	}
 }
 
 func (r *Result) fail(err error) {
