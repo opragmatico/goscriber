@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go/v2"
 	"github.com/anthropics/anthropic-sdk-go/v2/option"
@@ -45,7 +46,7 @@ func claudeRequest(model, prompt string, maxTokens int, extras bool) anthropic.B
 		Model: model,
 		// Thinking cannot be turned off on current models, only down
 		// (effort "low"), so the cap leaves it room.
-		MaxTokens: int64(max(maxTokens, thinkingMaxTokens)),
+		MaxTokens: int64(maxTokens + thinkingMaxTokens),
 		Messages:  []anthropic.BetaMessageParam{anthropic.NewBetaUserMessage(anthropic.NewBetaTextBlock(prompt))},
 	}
 	if extras {
@@ -67,9 +68,10 @@ func (c *Client) claudeComplete(ctx context.Context, ep Endpoint, model, prompt 
 	}
 	key := effortKey(ep, model)
 	extras := c.effortFor(key) == 0
-	msg, err := c.claudeNew(ctx, ep, claudeRequest(model, prompt, maxTokens, extras))
+	timeout := c.requestTimeout(maxTokens, false)
+	msg, err := c.claudeNew(ctx, ep, claudeRequest(model, prompt, maxTokens, extras), timeout)
 	if extras && rejected(err) {
-		msg, err = c.claudeNew(ctx, ep, claudeRequest(model, prompt, maxTokens, false))
+		msg, err = c.claudeNew(ctx, ep, claudeRequest(model, prompt, maxTokens, false), timeout)
 		if !rejected(err) {
 			c.rememberEffort(key, 1)
 		}
@@ -92,12 +94,15 @@ func (c *Client) claudeComplete(ctx context.Context, ep Endpoint, model, prompt 
 	return text.String(), nil
 }
 
-func (c *Client) claudeNew(ctx context.Context, ep Endpoint, req anthropic.BetaMessageNewParams) (*anthropic.BetaMessage, error) {
-	ctx, cancel := context.WithTimeout(ctx, c.timeout())
+func (c *Client) claudeNew(ctx context.Context, ep Endpoint, req anthropic.BetaMessageNewParams, timeout time.Duration) (*anthropic.BetaMessage, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cl := c.claude(ep)
-	msg, err := cl.Beta.Messages.New(ctx, req)
-	return msg, c.claudeError(ctx, err)
+	// With a timeout of its own the SDK does not refuse, as needing
+	// streaming, a request whose max_tokens it guesses could take more
+	// than 10 minutes, as a 4,000-word chunk's does.
+	msg, err := cl.Beta.Messages.New(ctx, req, option.WithRequestTimeout(timeout))
+	return msg, c.claudeError(ctx, err, timeout)
 }
 
 // claudeModels is Models for Claude.
@@ -115,7 +120,7 @@ func (c *Client) claudeModels(ctx context.Context, ep Endpoint) ([]string, error
 			ids = append(ids, id)
 		}
 	}
-	if err := c.claudeError(ctx, pager.Err()); err != nil {
+	if err := c.claudeError(ctx, pager.Err(), c.timeout()); err != nil {
 		return nil, err
 	}
 	slices.Sort(ids)
@@ -125,7 +130,7 @@ func (c *Client) claudeModels(ctx context.Context, ep Endpoint) ([]string, error
 // claudeError turns the SDK's errors into the client's own: an HTTP error
 // status into *StatusError, and a request that ran past the timeout into
 // the same error Chat Completions gives.
-func (c *Client) claudeError(ctx context.Context, err error) error {
+func (c *Client) claudeError(ctx context.Context, err error, timeout time.Duration) error {
 	if err == nil {
 		return nil
 	}
@@ -133,7 +138,7 @@ func (c *Client) claudeError(ctx context.Context, err error) error {
 		return &StatusError{Status: apiErr.StatusCode, Message: apiErr.Message}
 	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) && errors.Is(err, context.DeadlineExceeded) {
-		return fmt.Errorf("no answer within %s: %w", c.timeout(), context.DeadlineExceeded)
+		return fmt.Errorf("no answer within %s: %w", timeout, context.DeadlineExceeded)
 	}
 	return err
 }

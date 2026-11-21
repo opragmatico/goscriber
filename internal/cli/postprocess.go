@@ -50,15 +50,14 @@ func newPostProcessor(env Env, s config.Settings, fl transcribeFlags) (*postProc
 			fmt.Fprintf(env.Stderr, "goscriber: sending the language model no API key: %v\n", err)
 		}
 	}
-	return &postProcessor{
-		client: &llm.Client{},
-		job: llm.Job{
-			Endpoint: p.Endpoint(baseURL, key),
-			Model:    model,
-			Prompt:   s.LLMPrompt,
-			Vars:     llm.Vars{Words: append(slices.Clone(s.CustomWords), fl.words...)},
-		},
-	}, nil
+	job := llm.Job{
+		Endpoint: p.Endpoint(baseURL, key),
+		Model:    model,
+		Prompt:   s.LLMPrompt,
+		Vars:     llm.Vars{Words: append(slices.Clone(s.CustomWords), fl.words...)},
+	}
+	job.ChunkWords, job.ContextWords = p.Chunking()
+	return &postProcessor{client: &llm.Client{}, job: job}, nil
 }
 
 // check asks the provider for its models before any audio is decoded, so a

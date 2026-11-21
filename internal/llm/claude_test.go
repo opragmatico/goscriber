@@ -97,7 +97,7 @@ func TestClaudeComplete(t *testing.T) {
 	}
 	reqs, headers := f.sent()
 	req := reqs[0]
-	if req["model"] != "claude-opus-5-5" || req["max_tokens"] != float64(thinkingMaxTokens) {
+	if req["model"] != "claude-opus-5-5" || req["max_tokens"] != float64(1200+thinkingMaxTokens) {
 		t.Errorf("model %v, max_tokens %v", req["model"], req["max_tokens"])
 	}
 	msgs, _ := req["messages"].([]any)
@@ -121,6 +121,23 @@ func TestClaudeComplete(t *testing.T) {
 	reqs, headers = f.sent()
 	if _, ok := reqs[1]["fallbacks"]; ok || headers[1].Get("Anthropic-Beta") != "" {
 		t.Errorf("claude-haiku-5-5 was sent fallbacks: %v", reqs[1]["fallbacks"])
+	}
+}
+
+// A 4,000-word chunk's request goes out, with the cap of its words and
+// room to think: the SDK would refuse its max_tokens without a request
+// timeout of its own.
+func TestClaudeHostedChunk(t *testing.T) {
+	f := newFakeClaude(t, func(map[string]any, http.Header) (int, string) {
+		return 200, claudeReply("Cleaned.", "end_turn")
+	})
+	var c Client
+	if _, err := c.Complete(context.Background(), f.endpoint("sk-ant-test"), ClaudeModel, "p", maxTokens(HostedChunkWords)); err != nil {
+		t.Fatal(err)
+	}
+	reqs, _ := f.sent()
+	if want := float64(maxTokens(HostedChunkWords) + thinkingMaxTokens); reqs[0]["max_tokens"] != want {
+		t.Errorf("max_tokens %v, want %v", reqs[0]["max_tokens"], want)
 	}
 }
 

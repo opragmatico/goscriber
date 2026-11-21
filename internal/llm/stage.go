@@ -87,12 +87,14 @@ func (s *Stage) Job(set config.Settings) (Job, error) {
 			s.log().Warn("the API key could not be read from the keychain; sending none", "err", err)
 		}
 	}
-	return Job{
+	job := Job{
 		Endpoint: p.Endpoint(baseURL, key),
 		Model:    model,
 		Prompt:   set.LLMPrompt,
 		Vars:     Vars{Words: set.CustomWords},
-	}, nil
+	}
+	job.ChunkWords, job.ContextWords = p.Chunking()
+	return job, nil
 }
 
 // LanguageName is a transcript language code, such as "pt-BR", by name,

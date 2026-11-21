@@ -30,15 +30,17 @@ type Endpoint struct {
 // url joins the base URL and an endpoint path such as "/models".
 func (e Endpoint) url(path string) string { return strings.TrimRight(e.BaseURL, "/") + path }
 
-// RequestTimeout is how long a request may take, the retry without
-// reasoning_effort apart, before it counts as failed. It leaves room for
+// RequestTimeout is how long a request for a chunk of up to ChunkWords
+// words may take, the retry without reasoning_effort apart, before it
+// counts as failed; a longer chunk gets as many times more as its output
+// cap is a full one's (requestTimeout). It leaves room for
 // Ollama to load a model it unloaded (3.6 s for gemma4:26b on an M4 Max)
 // and for a 400-word chunk (69 s for 13 of them).
 const RequestTimeout = 30 * time.Second
 
-// ThinkingTimeout is how long a request to a model that thinks at a set
-// effort (modelEfforts) may take: thinking at "medium" comes before the
-// answer, and GPT-6.1 Sol writes at about 40 tokens a second.
+// ThinkingTimeout is RequestTimeout for a model that thinks at a set
+// effort (modelEfforts): thinking at "medium" comes before the answer, and
+// GPT-6.1 Sol writes at about 40 tokens a second.
 const ThinkingTimeout = 2 * time.Minute
 
 // maxResponse caps how much of a response is read.
@@ -106,16 +108,17 @@ var efforts = []string{"none", "minimal", "low", ""}
 
 // modelEfforts are models asked to think at a set reasoning_effort instead
 // of as little as they allow: they skip the step-down through efforts, and
-// their requests leave room for the thinking, with an output cap of at
-// least thinkingMaxTokens and ThinkingTimeout.
+// their requests leave room for the thinking, with thinkingMaxTokens more
+// output and ThinkingTimeout.
 var modelEfforts = map[string]string{
 	OpenAIModel: "medium",
 	GeminiModel: "medium",
 }
 
-// thinkingMaxTokens is the least output cap of a request to a model that
-// thinks: the thinking counts toward the cap, so it leaves room for it on
-// top of the answer; the request timeout still bounds a model that runs on.
+// thinkingMaxTokens is how much a request to a model that thinks adds to
+// its output cap: the thinking counts toward the cap, so this leaves room
+// for it on top of the answer; the request timeout still bounds a model
+// that runs on.
 const thinkingMaxTokens = 16000
 
 func (c *Client) http() *http.Client {
@@ -132,12 +135,21 @@ func (c *Client) timeout() time.Duration {
 	return RequestTimeout
 }
 
-// thinkingTimeout bounds a request to a model in modelEfforts.
-func (c *Client) thinkingTimeout() time.Duration {
+// requestTimeout bounds a request whose answer may be maxTokens long
+// (before any room for thinking): RequestTimeout, or ThinkingTimeout for a
+// model that thinks at a set effort, once per full chunk's worth of output
+// cap, so a 4,000-word chunk gets ten times what a 400-word one does.
+// Client.Timeout, when set, is used as it is.
+func (c *Client) requestTimeout(maxTokens int, thinking bool) time.Duration {
 	if c.Timeout > 0 {
 		return c.Timeout
 	}
-	return ThinkingTimeout
+	base := RequestTimeout
+	if thinking {
+		base = ThinkingTimeout
+	}
+	full := TokensPerWord * ChunkWords
+	return base * time.Duration(max(1, (maxTokens+full-1)/full))
 }
 
 func effortKey(ep Endpoint, model string) string {
@@ -202,8 +214,9 @@ func (c *Client) Complete(ctx context.Context, ep Endpoint, model, prompt string
 		Messages: []message{{Role: "user", Content: prompt}},
 	}
 	effort, thinks := modelEfforts[model]
+	timeout := c.requestTimeout(maxTokens, thinks)
 	if thinks || thinksAnyway(ep.BaseURL) {
-		maxTokens = max(maxTokens, thinkingMaxTokens)
+		maxTokens += thinkingMaxTokens
 	}
 	// OpenAI's own API takes max_completion_tokens from every chat model,
 	// and only that from its reasoning models; max_tokens is what the rest
@@ -215,7 +228,7 @@ func (c *Client) Complete(ctx context.Context, ep Endpoint, model, prompt string
 	}
 	if thinks {
 		req.ReasoningEffort = effort
-		return c.chat(ctx, ep, req, c.thinkingTimeout())
+		return c.chat(ctx, ep, req, timeout)
 	}
 	key := effortKey(ep, model)
 	start := c.effortFor(key)
@@ -223,7 +236,7 @@ func (c *Client) Complete(ctx context.Context, ep Endpoint, model, prompt string
 	var err error
 	for i := start; i < len(efforts); i++ {
 		req.ReasoningEffort = efforts[i]
-		answer, err = c.chat(ctx, ep, req, c.timeout())
+		answer, err = c.chat(ctx, ep, req, timeout)
 		if !rejected(err) {
 			if i != start {
 				c.rememberEffort(key, i)

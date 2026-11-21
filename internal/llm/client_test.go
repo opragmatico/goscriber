@@ -153,7 +153,7 @@ func TestCompleteOpenAICap(t *testing.T) {
 }
 
 // OpenAI's default model is asked to think at "medium", with no step-down,
-// and room for the thinking: a cap of thinkingMaxTokens and
+// and room for the thinking: thinkingMaxTokens more output and
 // ThinkingTimeout. A server that rejects the effort fails the request.
 func TestCompleteModelEffort(t *testing.T) {
 	var status int
@@ -170,8 +170,8 @@ func TestCompleteModelEffort(t *testing.T) {
 		t.Fatalf("Complete = %q, %v", got, err)
 	}
 	req := f.sent()[0]
-	if req["reasoning_effort"] != "medium" || req["max_completion_tokens"] != float64(thinkingMaxTokens) {
-		t.Errorf("reasoning_effort %v, max_completion_tokens %v; want medium and %d", req["reasoning_effort"], req["max_completion_tokens"], thinkingMaxTokens)
+	if req["reasoning_effort"] != "medium" || req["max_completion_tokens"] != float64(1200+thinkingMaxTokens) {
+		t.Errorf("reasoning_effort %v, max_completion_tokens %v; want medium and %d", req["reasoning_effort"], req["max_completion_tokens"], 1200+thinkingMaxTokens)
 	}
 
 	status = 400
@@ -181,9 +181,30 @@ func TestCompleteModelEffort(t *testing.T) {
 	if n := len(f.sent()); n != 2 {
 		t.Errorf("%d requests, want one per completion: no step-down", n)
 	}
+}
 
-	if got := (&Client{}).thinkingTimeout(); got != ThinkingTimeout {
-		t.Errorf("thinking timeout %v, want %v", got, ThinkingTimeout)
+// A request's timeout is RequestTimeout, or ThinkingTimeout for a model
+// that thinks at a set effort, once per full 400-word chunk's worth of
+// output cap; Client.Timeout overrides it.
+func TestRequestTimeout(t *testing.T) {
+	var c Client
+	for _, tc := range []struct {
+		maxTokens int
+		thinking  bool
+		want      time.Duration
+	}{
+		{1200, false, RequestTimeout},
+		{1201, false, 2 * RequestTimeout},
+		{maxTokens(HostedChunkWords), false, 10 * RequestTimeout},
+		{1200, true, ThinkingTimeout},
+		{maxTokens(HostedChunkWords), true, 10 * ThinkingTimeout},
+	} {
+		if got := c.requestTimeout(tc.maxTokens, tc.thinking); got != tc.want {
+			t.Errorf("requestTimeout(%d, %v) = %v, want %v", tc.maxTokens, tc.thinking, got, tc.want)
+		}
+	}
+	if got := (&Client{Timeout: time.Second}).requestTimeout(12000, true); got != time.Second {
+		t.Errorf("with Client.Timeout: %v", got)
 	}
 }
 
@@ -213,8 +234,8 @@ func TestGemini(t *testing.T) {
 		if _, err := c.Complete(context.Background(), ep, model, "p", 1200); err != nil {
 			t.Fatal(err)
 		}
-		if sent["max_tokens"] != float64(thinkingMaxTokens) || sent["reasoning_effort"] != effort {
-			t.Errorf("%s: max_tokens %v, reasoning_effort %v; want %d and %s", model, sent["max_tokens"], sent["reasoning_effort"], thinkingMaxTokens, effort)
+		if sent["max_tokens"] != float64(1200+thinkingMaxTokens) || sent["reasoning_effort"] != effort {
+			t.Errorf("%s: max_tokens %v, reasoning_effort %v; want %d and %s", model, sent["max_tokens"], sent["reasoning_effort"], 1200+thinkingMaxTokens, effort)
 		}
 	}
 	models, err := c.Models(context.Background(), ep)

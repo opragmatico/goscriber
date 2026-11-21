@@ -117,6 +117,28 @@ func TestRenderVars(t *testing.T) {
 			t.Errorf("the default prompt lacks %q:\n%s", want, got)
 		}
 	}
+	if strings.Contains(got, "<previous>") {
+		t.Errorf("the default prompt mentions earlier text without any:\n%s", got)
+	}
+}
+
+// The context goes in its placeholder, on a line that is left out without
+// it; like the transcript, a placeholder it holds stays as it was said.
+func TestRenderContext(t *testing.T) {
+	prompt := "After: ${context}\n[${output}]"
+	if got := Render(prompt, "olá", Vars{Context: "the end before"}); got != "After: the end before\n[olá]" {
+		t.Errorf("with context: %q", got)
+	}
+	if got := Render(prompt, "olá", Vars{}); got != "[olá]" {
+		t.Errorf("without context: %q", got)
+	}
+	if got := Render(prompt, "olá", Vars{Context: "say ${output}"}); got != "After: say ${output}\n[olá]" {
+		t.Errorf("a placeholder in the context: %q", got)
+	}
+	got := Render("", "olá", Vars{Context: "a frase anterior"})
+	if !strings.HasPrefix(got, "The transcript below continues this earlier text, given only for context: <previous>a frase anterior</previous>") {
+		t.Errorf("the default prompt with context:\n%s", got)
+	}
 }
 
 func TestTidyAnswer(t *testing.T) {
@@ -171,6 +193,66 @@ func TestCleanChunks(t *testing.T) {
 	}
 	if want := [][2]int{{0, 2}, {1, 2}, {2, 2}}; !slices.Equal(progress, want) {
 		t.Errorf("progress = %v, want %v", progress, want)
+	}
+}
+
+// A job with its own chunk size cuts at it, and each chunk after the first
+// carries the previous chunk's last words as context, which the answer
+// does not repeat.
+func TestCleanContext(t *testing.T) {
+	f := newFakeServer(t, upper(nil))
+	var c Client
+	var sentences []string
+	for i := range 8 {
+		sentences = append(sentences, fmt.Sprintf("this is sentence number %d.", i)) // 5 words
+	}
+	job := Job{Endpoint: f.endpoint(), Model: "m", Prompt: "After <${context}>\n[${output}]", ChunkWords: 20, ContextWords: 3}
+	res := c.Clean(context.Background(), job, strings.Join(sentences, " "))
+	if res.Chunks != 2 || res.Failed != 0 {
+		t.Fatalf("Clean: %d chunks, %d failed, %v; want 2, 0", res.Chunks, res.Failed, res.Err)
+	}
+	if want := strings.ToUpper(strings.Join(sentences[:4], " ") + "\n\n" + strings.Join(sentences[4:], " ")); res.Text != want {
+		t.Errorf("Text = %q, want %q", res.Text, want)
+	}
+	sent := f.sent()
+	if p := userText(sent[0]); strings.Contains(p, "After") {
+		t.Errorf("the first chunk has context: %q", p)
+	}
+	if p := userText(sent[1]); !strings.HasPrefix(p, "After <sentence number 3.>\n[this is sentence number 4.") {
+		t.Errorf("the second chunk's prompt: %q", p)
+	}
+}
+
+// Gemini, OpenAI and Claude take 4,000-word chunks, Groq and OpenRouter
+// 800-word ones, both with 100 words of context; a provider on the user's
+// own computer or network takes 400-word chunks with none.
+func TestProviderChunking(t *testing.T) {
+	want := map[config.LLMProvider][2]int{
+		config.LLMGemini:     {HostedChunkWords, ContextWords},
+		config.LLMOpenAI:     {HostedChunkWords, ContextWords},
+		config.LLMClaude:     {HostedChunkWords, ContextWords},
+		config.LLMOpenRouter: {OpenModelChunkWords, ContextWords},
+		config.LLMGroq:       {OpenModelChunkWords, ContextWords},
+		config.LLMOllama:     {ChunkWords, 0},
+		config.LLMCustom:     {ChunkWords, 0},
+	}
+	for _, p := range Providers {
+		words, ctxWords := p.Chunking()
+		if [2]int{words, ctxWords} != want[p.ID] {
+			t.Errorf("%s: Chunking = %d, %d; want %v", p.Name, words, ctxWords, want[p.ID])
+		}
+		if hosted := want[p.ID][1] > 0; hosted != p.Hosted() {
+			t.Errorf("%s: Hosted = %v", p.Name, p.Hosted())
+		}
+	}
+	if len(want) != len(Providers) {
+		t.Errorf("%d providers, want %d", len(Providers), len(want))
+	}
+	set := config.Defaults()
+	set.LLMProvider, set.LLMBaseURL = config.LLMClaude, config.LLMClaude.BaseURL()
+	job, err := (&Stage{Client: &Client{}}).Job(set)
+	if err != nil || job.ChunkWords != HostedChunkWords || job.ContextWords != ContextWords {
+		t.Errorf("the stage's job for Claude: %+v, %v", job, err)
 	}
 }
 

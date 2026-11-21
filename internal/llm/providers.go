@@ -44,6 +44,9 @@ type Provider struct {
 	// Model is the model used while none is chosen, "" for none; a provider
 	// on this computer gets the one suggested for its memory instead.
 	Model string
+	// ChunkWords is the most words a chunk of a long transcript holds; 0
+	// is ChunkWords.
+	ChunkWords int
 }
 
 // The models the hosted providers post-process with while none is chosen:
@@ -63,22 +66,25 @@ var Providers = []Provider{
 	{
 		ID: config.LLMGemini, Name: "Gemini", BaseURL: config.LLMGemini.BaseURL(), Key: KeyRequired,
 		KeyHelp: "Create one in Google AI Studio, under Get API key.", Model: GeminiModel,
+		ChunkWords: HostedChunkWords,
 	},
 	{
 		ID: config.LLMOpenAI, Name: "OpenAI", BaseURL: config.LLMOpenAI.BaseURL(), Key: KeyRequired,
 		KeyHelp: "Create one on the OpenAI Platform, under API keys.", Model: OpenAIModel,
+		ChunkWords: HostedChunkWords,
 	},
 	{
 		ID: config.LLMClaude, Name: "Claude", BaseURL: config.LLMClaude.BaseURL(), Key: KeyRequired,
 		KeyHelp: "Create one in the Claude Console, under API keys.", API: Messages, Model: ClaudeModel,
+		ChunkWords: HostedChunkWords,
 	},
 	{
 		ID: config.LLMOpenRouter, Name: "OpenRouter", BaseURL: config.LLMOpenRouter.BaseURL(), Key: KeyRequired,
-		KeyHelp: "Create one on OpenRouter, under Keys.",
+		KeyHelp: "Create one on OpenRouter, under Keys.", ChunkWords: OpenModelChunkWords,
 	},
 	{
 		ID: config.LLMGroq, Name: "Groq", BaseURL: config.LLMGroq.BaseURL(), Key: KeyRequired,
-		KeyHelp: "Create one in the GroqCloud console, under API Keys.",
+		KeyHelp: "Create one in the GroqCloud console, under API Keys.", ChunkWords: OpenModelChunkWords,
 	},
 	{ID: config.LLMOllama, Name: "Ollama", BaseURL: config.LLMOllama.BaseURL(), EditableURL: true},
 	{ID: config.LLMCustom, Name: "Other (OpenAI-compatible)", EditableURL: true, Key: KeyOptional},
@@ -105,6 +111,26 @@ func (p Provider) URL(s config.Settings) string {
 		return strings.TrimSpace(s.LLMBaseURL)
 	}
 	return p.BaseURL
+}
+
+// Hosted reports whether the provider is a service on the internet, at its
+// own address, rather than a server on the user's computer or network.
+func (p Provider) Hosted() bool { return !p.EditableURL }
+
+// Chunking is how the provider's requests cut a long transcript: at most
+// words words per chunk (its ChunkWords), each after the previous chunk's
+// last context words. A hosted provider gets ContextWords of context; one
+// on the user's own computer or network none, as its smaller models were
+// measured with.
+func (p Provider) Chunking() (words, context int) {
+	words = p.ChunkWords
+	if words <= 0 {
+		words = ChunkWords
+	}
+	if p.Hosted() {
+		context = ContextWords
+	}
+	return words, context
 }
 
 // Endpoint is the provider's API at baseURL, with key.
