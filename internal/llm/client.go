@@ -93,12 +93,14 @@ type Client struct {
 }
 
 // efforts are the values of reasoning_effort tried in turn, least thinking
-// first, until a server takes one: "none" turns thinking off on Ollama,
-// OpenAI's newer models and Gemini 2.5; "minimal" is the least that
-// Gemini 3 and later, and OpenAI's first reasoning models, allow; "low" is
-// for models that, like GPT-6.1 Sol, take nothing less and would think at
-// "medium" without the field; "" leaves the field out, for servers that
-// know none of them.
+// first, until a server takes one, for a model not in modelEfforts: "none"
+// turns thinking off on Ollama and Gemini 2.5 Flash; "minimal" and "low"
+// are for models that reject "none", such as gpt-oss-120b on Groq, which
+// takes "low" at the least; "" leaves the field out, for servers that know
+// none of them. A value taken is not always thinking turned off: Gemini 2.5 Pro,
+// Gemini 3 and Gemini 4 think whatever they are asked (gemini-4-hydrogen
+// takes "none" and still thinks for about 1,000 tokens on a 400-word
+// chunk), so their requests leave room for it (thinksAnyway).
 var efforts = []string{"none", "minimal", "low", ""}
 
 // modelEfforts are models asked to think at a set reasoning_effort instead
@@ -198,7 +200,7 @@ func (c *Client) Complete(ctx context.Context, ep Endpoint, model, prompt string
 		Messages: []message{{Role: "user", Content: prompt}},
 	}
 	effort, thinks := modelEfforts[model]
-	if thinks {
+	if thinks || thinksAnyway(ep.BaseURL) {
 		maxTokens = max(maxTokens, thinkingMaxTokens)
 	}
 	// OpenAI's own API takes max_completion_tokens from every chat model,
@@ -264,8 +266,14 @@ func (c *Client) Models(ctx context.Context, ep Endpoint) ([]string, error) {
 	}
 	ids := make([]string, 0, len(resp.Data))
 	for _, m := range resp.Data {
-		if m.ID != "" {
-			ids = append(ids, m.ID)
+		id := m.ID
+		if isGemini(ep.BaseURL) {
+			// Gemini lists "models/gemini-4-hydrogen", and takes the model
+			// with or without the prefix.
+			id = strings.TrimPrefix(id, "models/")
+		}
+		if id != "" {
+			ids = append(ids, id)
 		}
 	}
 	slices.Sort(ids)
@@ -357,9 +365,19 @@ func ParseBaseURL(s string) (*url.URL, error) {
 }
 
 // isOpenAI reports whether baseURL is OpenAI's own API.
-func isOpenAI(baseURL string) bool {
+func isOpenAI(baseURL string) bool { return hostIs(baseURL, "api.openai.com") }
+
+// isGemini reports whether baseURL is Gemini's API.
+func isGemini(baseURL string) bool { return hostIs(baseURL, "generativelanguage.googleapis.com") }
+
+// thinksAnyway reports whether the models at baseURL think however little
+// reasoning_effort asks for, so a request's output cap must leave room for
+// the thinking, which counts toward it: Gemini's, from 2.5 Pro on.
+func thinksAnyway(baseURL string) bool { return isGemini(baseURL) }
+
+func hostIs(baseURL, host string) bool {
 	u, err := ParseBaseURL(baseURL)
-	return err == nil && strings.EqualFold(u.Hostname(), "api.openai.com")
+	return err == nil && strings.EqualFold(u.Hostname(), host)
 }
 
 // IsLocal reports whether baseURL is a server on this computer, such as

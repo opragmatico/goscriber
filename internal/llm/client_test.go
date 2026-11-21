@@ -187,6 +187,39 @@ func TestCompleteModelEffort(t *testing.T) {
 	}
 }
 
+// Gemini's models think however little reasoning_effort asks for, so its
+// requests leave room for the thinking; its model list loses the
+// "models/" prefix, which its API does not need.
+func TestGemini(t *testing.T) {
+	var sent map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1beta/openai/models":
+			_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"models/gemini-4-hydrogen"},{"id":"models/gemini-3.8-flash"}]}`))
+		case "/v1beta/openai/chat/completions":
+			_ = json.NewDecoder(r.Body).Decode(&sent)
+			_, _ = w.Write([]byte(reply("ok", "stop")))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	target, _ := url.Parse(srv.URL)
+	c := Client{HTTP: &http.Client{Transport: redirect{target}}}
+	ep := Endpoint{BaseURL: config.LLMGemini.BaseURL(), APIKey: "k"}
+
+	if _, err := c.Complete(context.Background(), ep, GeminiModel, "p", 1200); err != nil {
+		t.Fatal(err)
+	}
+	if sent["max_tokens"] != float64(thinkingMaxTokens) || sent["reasoning_effort"] != "none" {
+		t.Errorf("max_tokens %v, reasoning_effort %v; want %d and none", sent["max_tokens"], sent["reasoning_effort"], thinkingMaxTokens)
+	}
+	models, err := c.Models(context.Background(), ep)
+	if err != nil || !slices.Equal(models, []string{"gemini-3.8-flash", "gemini-4-hydrogen"}) {
+		t.Errorf("Models = %v, %v", models, err)
+	}
+}
+
 // redirect sends every request to target, whatever its URL says.
 type redirect struct{ target *url.URL }
 
