@@ -4,13 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
-	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
-	"strings"
 	"sync"
 	"testing"
 )
@@ -52,10 +49,6 @@ func newFakeClaude(t *testing.T, answer func(req map[string]any, h http.Header) 
 			f.headers = append(f.headers, r.Header.Clone())
 			f.mu.Unlock()
 			status, body := answer(req, r.Header)
-			if status == http.StatusOK && req["stream"] == true {
-				w.Header().Set("Content-Type", "text/event-stream")
-				body = claudeEvents(t, body)
-			}
 			w.WriteHeader(status)
 			_, _ = io.WriteString(w, body)
 		default:
@@ -77,43 +70,6 @@ func (f *fakeClaude) sent() ([]map[string]any, []http.Header) {
 }
 
 // claudeReply is a message whose text is text, stopped for stop.
-// claudeEvents streams the message reply holds as the Messages API does:
-// message_start without content or stop reason, each block started empty
-// and filled by a delta, then message_delta with the stop reason.
-func claudeEvents(t *testing.T, reply string) string {
-	t.Helper()
-	var msg map[string]any
-	if err := json.Unmarshal([]byte(reply), &msg); err != nil {
-		t.Fatalf("reply: %v", err)
-	}
-	var b strings.Builder
-	event := func(name string, data map[string]any) {
-		d, _ := json.Marshal(data)
-		fmt.Fprintf(&b, "event: %s\ndata: %s\n\n", name, d)
-	}
-	content, _ := msg["content"].([]any)
-	start := maps.Clone(msg)
-	start["content"], start["stop_reason"] = []any{}, nil
-	event("message_start", map[string]any{"type": "message_start", "message": start})
-	for i, c := range content {
-		block := c.(map[string]any)
-		switch block["type"] {
-		case "text":
-			event("content_block_start", map[string]any{"type": "content_block_start", "index": i, "content_block": map[string]any{"type": "text", "text": ""}})
-			event("content_block_delta", map[string]any{"type": "content_block_delta", "index": i, "delta": map[string]any{"type": "text_delta", "text": block["text"]}})
-		default:
-			event("content_block_start", map[string]any{"type": "content_block_start", "index": i, "content_block": block})
-		}
-		event("content_block_stop", map[string]any{"type": "content_block_stop", "index": i})
-	}
-	event("message_delta", map[string]any{
-		"type": "message_delta", "delta": map[string]any{"stop_reason": msg["stop_reason"], "stop_sequence": nil},
-		"usage": map[string]any{"output_tokens": 5},
-	})
-	event("message_stop", map[string]any{"type": "message_stop"})
-	return b.String()
-}
-
 func claudeReply(text, stop string) string {
 	b, _ := json.Marshal(map[string]any{
 		"id": "msg_1", "type": "message", "role": "assistant", "model": "claude-opus-5-5",
@@ -141,8 +97,8 @@ func TestClaudeComplete(t *testing.T) {
 	}
 	reqs, headers := f.sent()
 	req := reqs[0]
-	if req["model"] != "claude-opus-5-5" || req["max_tokens"] != float64(1200+thinkingMaxTokens) || req["stream"] != true {
-		t.Errorf("model %v, max_tokens %v, stream %v; want the answer streamed", req["model"], req["max_tokens"], req["stream"])
+	if req["model"] != "claude-opus-5-5" || req["max_tokens"] != float64(1200+thinkingMaxTokens) {
+		t.Errorf("model %v, max_tokens %v", req["model"], req["max_tokens"])
 	}
 	msgs, _ := req["messages"].([]any)
 	if len(msgs) != 1 || msgs[0].(map[string]any)["role"] != "user" {

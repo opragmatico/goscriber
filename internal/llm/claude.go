@@ -94,28 +94,15 @@ func (c *Client) claudeComplete(ctx context.Context, ep Endpoint, model, prompt 
 	return text.String(), nil
 }
 
-// claudeNew sends req and returns the message it gets back, streamed and
-// put together event by event. Streaming is what Anthropic asks of a
-// request that may run long: the SDK refuses to send one without it whose
-// max_tokens could take more than 10 minutes, as a 4,000-word chunk's
-// could, and an answer streamed keeps the connection busy however long the
-// model writes.
 func (c *Client) claudeNew(ctx context.Context, ep Endpoint, req anthropic.BetaMessageNewParams, timeout time.Duration) (*anthropic.BetaMessage, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cl := c.claude(ep)
-	stream := cl.Beta.Messages.NewStreaming(ctx, req)
-	defer stream.Close()
-	var msg anthropic.BetaMessage
-	for stream.Next() {
-		if err := msg.Accumulate(stream.Current()); err != nil {
-			return nil, err
-		}
-	}
-	if err := stream.Err(); err != nil {
-		return nil, c.claudeError(ctx, err, timeout)
-	}
-	return &msg, nil
+	// With a timeout of its own the SDK does not refuse, as needing
+	// streaming, a request whose max_tokens it guesses could take more
+	// than 10 minutes, as a 4,000-word chunk's does.
+	msg, err := cl.Beta.Messages.New(ctx, req, option.WithRequestTimeout(timeout))
+	return msg, c.claudeError(ctx, err, timeout)
 }
 
 // claudeModels is Models for Claude.

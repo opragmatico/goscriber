@@ -39,7 +39,7 @@ Goscriber speaks OpenAI's Chat Completions to every provider but Claude, which i
 
 ## Claude
 
-Claude goes through Anthropic's official Go SDK (`anthropic-sdk-go`), not an OpenAI-compatible endpoint: `POST /v1/messages` with the key the SDK sends, one user message, and the models from `GET /v1/models`. The answer is streamed and put together as it arrives, as Anthropic asks of requests that may run long: the SDK refuses to send one without streaming whose `max_tokens` could take more than 10 minutes, as a 4,000-word chunk's could.
+Claude goes through Anthropic's official Go SDK (`anthropic-sdk-go`), not an OpenAI-compatible endpoint: `POST /v1/messages` with the key the SDK sends, one user message, and the models from `GET /v1/models`.
 
 - **Thinking** cannot be turned off on current Claude models, only down: requests ask for `output_config.effort: "low"` and leave `thinking` to the model. `max_tokens` gets 16,000 on top of the answer's cap, because thinking counts toward it; the timeout still bounds a model that runs on, and an answer that stops at `max_tokens` fails as above.
 - **Refusals.** For the models that take them (Fable 5.1 and 5.2, Mythos 5.1 and 5.2, Opus 5 and 5.5, Sonnet 5.5) requests carry server-side fallbacks (`fallbacks: "default"`, beta `server-side-fallback-2026-07-01`), so a request one model declines is answered by another in the same call. A `refusal` that still comes back fails the chunk, which keeps its text.
